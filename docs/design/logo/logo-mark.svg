@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="LongTalk 長談 標誌">
+<style>
+.k{stroke:#0E7490;fill:none;stroke-width:6.5;stroke-linecap:round;stroke-linejoin:round}
+.t{fill:#0E7490}
+@media (prefers-color-scheme:dark){.k{stroke:#2DD4BF}.t{fill:#2DD4BF}}
+</style>
+<!-- 兩個對話泡泡交織成 ∞：說不完的話 -->
+<path class="k" d="M32 32C32 21 20.5 17 14 24.5S12 44 20 44c5.5 0 9.5-4.5 12-12 2.5-7.5 6.5-12 12-12 8 0 11 12 6 19.5S32 43 32 32z"/>
+<!-- 左泡泡尾巴 -->
+<path class="t" d="M17 43.5 11 52l10.5-5.5z"/>
+<!-- 右泡泡尾巴 -->
+<path class="t" d="M47 20.5 53 12l-10.5 5.5z"/>
+</svg>

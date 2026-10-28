@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>長談 視覺稿</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Manrope:wght@500;700;800&display=swap">
+<style>
+/* 版面概念：上方是審稿用的工具列（畫面、深淺色），下方一個「裝置框」放目前畫面。顏色全部對應 DESIGN.md §2。 */
+:root{
+  --bg:#F6F7F9;--surface:#FFFFFF;--surface2:#EEF1F5;--fg:#0F172A;--muted:#5B6474;--line:#D9DEE7;
+  --primary:#0E7490;--primary-soft:#DFF5F7;--on-primary:#FFFFFF;--speaking:#22C55E;--danger:#DC2626;--warn:#D97706;
+  --tile-a:#1E293B;--tile-b:#0F172A;--room-bg:#0B1220;--room-surface:#111A2E;--room-surface2:#18233B;--room-fg:#E6EAF2;--room-muted:#9AA6BC;--room-line:#263350;--room-primary:#2DD4BF;
+  --sans:'Noto Sans TC','PingFang TC','Microsoft JhengHei',system-ui,sans-serif;--latin:'Manrope','Noto Sans TC',sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0B1220;--surface:#111A2E;--surface2:#18233B;--fg:#E6EAF2;--muted:#9AA6BC;--line:#263350;
+  --primary:#2DD4BF;--primary-soft:#153B43;--on-primary:#06231F;--speaking:#4ADE80;--danger:#F87171;--warn:#FBBF24;color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0B1220;--surface:#111A2E;--surface2:#18233B;--fg:#E6EAF2;--muted:#9AA6BC;--line:#263350;
+  --primary:#2DD4BF;--primary-soft:#153B43;--on-primary:#06231F;--speaking:#4ADE80;--danger:#F87171;--warn:#FBBF24;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.6;
+  padding-block:0 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1,h2,h3{margin:0;text-wrap:balance}
+.review{max-width:1180px;margin:0 auto}
+.review-head{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-block:20px 12px}
+.review-head h1{font-size:18px;font-weight:700}
+.review-head .sub{color:var(--muted);font-size:13px}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+.tabs button,.theme button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:999px;padding:6px 12px;cursor:pointer}
+.tabs button[aria-selected="true"]{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}
+.tabs button:focus-visible,.theme button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.note{font-size:13px;color:var(--muted);margin:0 0 12px}
+.screen[hidden]{display:none}
+/* 裝置框 */
+.device{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--surface);box-shadow:0 20px 50px rgba(2,8,23,.12)}
+.device.room{background:var(--room-bg);color:var(--room-fg)}
+.chrome{height:34px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--surface2);font-size:12px;color:var(--muted)}
+.room .chrome{background:var(--room-surface);border-color:var(--room-line);color:var(--room-muted)}
+.chrome i{width:10px;height:10px;border-radius:50%;background:var(--line);display:inline-block}
+.chrome .url{margin-left:8px;font-family:var(--latin)}
+/* ── 首頁 ── */
+.home{min-height:560px;display:grid;grid-template-rows:auto 1fr auto}
+.home-top{display:flex;align-items:center;justify-content:space-between;padding:18px 28px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:900;font-size:18px;letter-spacing:2px}
+.brand small{font-family:var(--latin);font-weight:700;letter-spacing:.5px;color:var(--primary);font-size:14px}
+.home-top .acts{display:flex;gap:8px;font-size:13px;color:var(--muted)}
+.home-top .acts span{padding:6px 10px;border:1px solid var(--line);border-radius:999px}
+.hero{display:grid;place-items:center;text-align:center;padding:24px 20px;gap:18px}
+.hero h2{font-size:clamp(28px,4vw,42px);font-weight:900;letter-spacing:1px}
+.hero p{margin:0;color:var(--muted);max-width:34em}
+.cta{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
+.btn{font:inherit;font-weight:700;border-radius:12px;padding:12px 20px;border:1px solid var(--line);background:var(--surface);color:var(--fg)}
+.btn.primary{background:var(--primary);color:var(--on-primary);border-color:var(--primary)}
+.join{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:12px;padding:6px 6px 6px 14px;background:var(--surface2);color:var(--muted);min-width:0}
+.join b{font-weight:500;font-family:var(--latin)}
+.join span{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 12px;color:var(--fg);font-weight:700}
+.perks{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;padding:0 28px 28px}
+.perk{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--surface)}
+.perk b{display:block;margin-bottom:4px}
+.perk span{font-size:13px;color:var(--muted)}
+/* ── 預先加入 ── */
+.prejoin{display:grid;grid-template-columns:1.4fr 1fr;gap:28px;padding:32px;min-height:520px;align-items:center}
+.preview{aspect-ratio:16/9;max-width:100%;border-radius:16px;background:linear-gradient(145deg,#2A3B5C,#0F172A);position:relative;overflow:hidden;color:#E6EAF2}
+.preview .face{position:absolute;inset:auto 0 0 0;height:70%;background:radial-gradient(ellipse at 50% 30%,rgba(45,212,191,.35),transparent 60%)}
+.preview .mirror{position:absolute;top:12px;left:12px;font-size:12px;background:rgba(0,0,0,.4);padding:4px 8px;border-radius:999px}
+.preview .ctl{position:absolute;bottom:12px;left:0;right:0;display:flex;justify-content:center;gap:10px}
+.pill{display:inline-flex;align-items:center;gap:6px;height:40px;padding:0 14px;border-radius:999px;background:rgba(17,26,46,.85);color:#E6EAF2;font-size:13px;border:1px solid rgba(255,255,255,.12)}
+.pill.off{background:rgba(220,38,38,.9)}
+.form{display:grid;gap:14px}
+.form h2{font-size:22px}
+.form .roomname{color:var(--muted);font-size:13px}
+.field{display:grid;gap:6px;font-size:13px;color:var(--muted)}
+.field div{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface2);color:var(--fg);font-size:15px}
+.hint{display:flex;gap:8px;align-items:center;font-size:13px;padding:8px 12px;border-radius:10px;background:var(--primary-soft);color:var(--fg)}
+.hint::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--danger)}
+/* ── 會議室 ── */
+.meeting{display:grid;grid-template-columns:1fr 300px;grid-template-rows:44px 1fr 68px;min-height:600px}
+.topbar{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid var(--room-line);font-size:13px;color:var(--room-muted)}
+.topbar b{color:var(--room-fg);font-weight:700}
+.topbar .time{font-family:var(--latin);font-variant-numeric:tabular-nums;color:var(--room-fg)}
+.topbar .rec{margin-left:auto;display:inline-flex;align-items:center;gap:6px;color:#FCA5A5}
+.topbar .rec::before{content:"";width:8px;height:8px;border-radius:50%;background:#EF4444;box-shadow:0 0 0 3px rgba(239,68,68,.25)}
+.stage{padding:12px;min-width:0}
+.grid{display:grid;gap:8px;height:100%;grid-template-columns:repeat(3,1fr);grid-auto-rows:minmax(150px,1fr)}
+.tile{position:relative;border-radius:12px;overflow:hidden;background:linear-gradient(160deg,var(--tile-a),var(--tile-b));min-height:140px;display:grid;place-items:center;color:#E6EAF2}
+.tile.video::before{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at 50% 35%,rgba(255,255,255,.18),transparent 60%),linear-gradient(160deg,var(--c1),var(--c2))}
+.tile.speaking{box-shadow:inset 0 0 0 2px var(--speaking)}
+.tile .avatar{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:24px;background:var(--c1);position:relative}
+.name{position:absolute;left:8px;bottom:8px;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 8px;border-radius:8px;background:rgba(0,0,0,.45);backdrop-filter:blur(4px)}
+.name .sig{display:inline-flex;gap:1px;align-items:flex-end;height:10px}
+.name .sig i{width:3px;background:#4ADE80;display:inline-block}
+.name .sig i:nth-child(1){height:4px}.name .sig i:nth-child(2){height:7px}.name .sig i:nth-child(3){height:10px}
+.name .sig.poor i{background:#FBBF24}.name .sig.poor i:nth-child(3){background:#475569}
+.name .mute{color:#F87171;font-weight:800}
+.badge{position:absolute;top:8px;right:8px;font-size:12px;padding:3px 7px;border-radius:999px;background:rgba(0,0,0,.45)}
+.badge.hand{background:#FBBF24;color:#1F1300;font-weight:700}
+.badge.pin{background:rgba(45,212,191,.9);color:#06231F;font-weight:700}
+.side{border-left:1px solid var(--room-line);display:grid;grid-template-rows:auto 1fr auto;background:var(--room-surface);min-width:0}
+.side .seg{display:flex;gap:4px;padding:10px;border-bottom:1px solid var(--room-line)}
+.side .seg span{flex:1;text-align:center;font-size:13px;padding:6px;border-radius:8px;color:var(--room-muted)}
+.side .seg span.on{background:var(--room-surface2);color:var(--room-fg);font-weight:700}
+.msgs{padding:12px;display:grid;gap:10px;align-content:start;font-size:13px;overflow:hidden}
+.msg b{display:block;font-size:12px;color:var(--room-muted);font-weight:500}
+.msg p{margin:2px 0 0;background:var(--room-surface2);padding:8px 10px;border-radius:10px;display:inline-block;max-width:100%}
+.msg.me{text-align:right}.msg.me p{background:#153B43}
+.msg a{color:var(--room-primary)}
+.compose{margin:10px;border:1px solid var(--room-line);border-radius:10px;padding:9px 12px;color:var(--room-muted);font-size:13px}
+.toolbar{grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:6px;border-top:1px solid var(--room-line);padding:0 12px;background:var(--room-surface)}
+.tool{display:grid;place-items:center;gap:2px;min-width:64px;height:54px;border-radius:10px;font-size:11px;color:var(--room-muted);background:transparent}
+.tool i{width:22px;height:22px;border-radius:6px;background:var(--room-surface2);display:block;position:relative}
+.tool.on i{background:#263350}
+.tool.off i{background:var(--danger)}
+.tool.off i::after{content:"";position:absolute;left:3px;right:3px;top:50%;height:2px;background:#fff;transform:rotate(-45deg)}
+.tool .n{position:absolute;margin:-30px 0 0 26px;background:var(--room-primary);color:#06231F;font-size:10px;font-weight:800;border-radius:999px;padding:0 5px}
+.tool.leave{background:var(--danger);color:#fff;margin-left:14px;min-width:72px}
+.tool.leave i{background:transparent}
+.tool.sep{min-width:1px;width:1px;height:28px;background:var(--room-line);padding:0}
+/* 分享版面 */
+.meeting.share .grid{grid-template-columns:1fr 200px;grid-template-rows:1fr}
+.sharebox{position:relative;border-radius:12px;overflow:hidden;background:#FFFFFF;color:#0F172A;display:grid;grid-template-rows:auto 1fr;border:1px solid var(--room-line)}
+.sharebox .doc{padding:28px 32px;font-size:13px;line-height:1.7;background:repeating-linear-gradient(transparent 0 27px,rgba(15,23,42,.05) 27px 28px)}
+.sharebox .doc h3{font-size:18px;margin-bottom:8px}
+.sharebox .doc p{margin:0 0 8px;max-width:50em}
+.sharetag{position:absolute;left:10px;top:10px;font-size:12px;padding:4px 10px;border-radius:999px;background:var(--room-primary);color:#06231F;font-weight:700}
+.anno{position:absolute;top:10px;left:50%;transform:translateX(-50%);display:flex;gap:4px;padding:6px;border-radius:12px;background:rgba(17,26,46,.92);border:1px solid var(--room-line)}
+.anno span{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:12px;color:var(--room-fg);background:var(--room-surface2)}
+.anno span.on{background:var(--room-primary);color:#06231F;font-weight:800}
+.anno .sw{width:18px;height:18px;border-radius:50%;margin:6px;border:2px solid #fff}
+.ink{position:absolute;inset:0;pointer-events:none}
+.strip{display:grid;grid-auto-rows:minmax(100px,1fr);gap:8px;min-width:0}
+.strip .tile{min-height:100px}
+.strip .avatar{width:44px;height:44px;font-size:18px}
+/* 手機 */
+.phone-wrap{display:flex;gap:28px;flex-wrap:wrap;justify-content:center;padding:20px 0}
+.phone{width:min(360px,100%);aspect-ratio:9/19;max-width:100%;border-radius:36px;border:8px solid #1F2937;background:var(--room-bg);color:var(--room-fg);overflow:hidden;display:grid;grid-template-rows:auto 1fr auto;position:relative}
+.phone .ptop{display:flex;justify-content:space-between;align-items:center;padding:14px 16px 8px;font-size:12px;color:var(--room-muted)}
+.phone .ptop b{color:var(--room-fg)}
+.phone .ptop .leave{background:var(--danger);color:#fff;padding:4px 10px;border-radius:999px;font-weight:700}
+.pgrid{display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:1fr;gap:6px;padding:0 8px;min-height:0}
+.pgrid .tile{min-height:0}
+.pgrid .avatar{width:48px;height:48px;font-size:20px}
+.dots{display:flex;justify-content:center;gap:5px;padding:8px}
+.dots i{width:6px;height:6px;border-radius:50%;background:var(--room-line)}.dots i.on{background:var(--room-primary)}
+.ptool{display:flex;justify-content:space-around;padding:10px 8px 18px;border-top:1px solid var(--room-line);background:var(--room-surface)}
+.ptool .tool{min-width:48px;height:48px;font-size:10px}
+.phone.light{background:var(--bg);color:var(--fg)}
+.phone.light .ptop{color:var(--muted)}.phone.light .ptop b{color:var(--fg)}
+.pj{display:grid;gap:12px;padding:8px 16px;align-content:start}
+.pj .preview{aspect-ratio:3/4}
+.pj .btn.primary{text-align:center}
+/* 標註 */
+.legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:14px;font-size:13px;color:var(--muted)}
+.legend div{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface)}
+.legend b{color:var(--fg)}
+@media (max-width:900px){
+  .meeting{grid-template-columns:1fr}.side{display:none}
+  .grid{grid-template-columns:repeat(2,1fr)}
+  .meeting.share .grid{grid-template-columns:1fr;grid-template-rows:1fr auto}.strip{grid-auto-flow:column;grid-auto-columns:120px;overflow-x:auto}
+  .prejoin{grid-template-columns:1fr}
+  .tool{min-width:52px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="review">
+  <div class="review-head">
+    <div>
+      <h1>長談 · LongTalk 視覺稿 v1</h1>
+      <div class="sub">五個畫面 · 規格見 <code>docs/DESIGN.md</code> · 2026-10-28</div>
+    </div>
+    <div class="tabs" role="tablist" aria-label="畫面">
+      <button role="tab" aria-selected="true" data-tab="home">首頁</button>
+      <button role="tab" aria-selected="false" data-tab="prejoin">預先加入</button>
+      <button role="tab" aria-selected="false" data-tab="meeting">會議室</button>
+      <button role="tab" aria-selected="false" data-tab="share">分享＋標註</button>
+      <button role="tab" aria-selected="false" data-tab="phone">手機</button>
+    </div>
+    <div class="theme"><button id="theme-btn" type="button">深／淺色</button></div>
+  </div>
+
+  <!-- 首頁 -->
+  <section class="screen" id="tab-home" role="tabpanel">
+    <p class="note">首頁跟隨系統深淺色。一個網址就是一間房；主按鈕只有一個。</p>
+    <div class="device">
+      <div class="chrome"><i></i><i></i><i></i><span class="url">longtalk.app</span></div>
+      <div class="home">
+        <div class="home-top">
+          <div class="brand"><svg width="30" height="30" viewBox="0 0 64 64" aria-hidden="true"><path d="M32 32C32 21 20.5 17 14 24.5S12 44 20 44c5.5 0 9.5-4.5 12-12 2.5-7.5 6.5-12 12-12 8 0 11 12 6 19.5S32 43 32 32z" fill="none" stroke="var(--primary)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 43.5 11 52l10.5-5.5z" fill="var(--primary)"/><path d="M47 20.5 53 12l-10.5 5.5z" fill="var(--primary)"/></svg>長談 <small>LongTalk</small></div>
+          <div class="acts"><span>中文</span><span>深淺色</span><span>登入</span></div>
+        </div>
+        <div class="hero">
+          <h2>開著就不會斷的會議室</h2>
+          <p>貼一個連結，朋友點了就進來。不用裝 App、不用註冊、沒有 40 分鐘限制。</p>
+          <div class="cta">
+            <button class="btn primary" type="button">開一間房</button>
+            <div class="join"><b>longtalk.app/r/</b><span>加入</span></div>
+          </div>
+        </div>
+        <div class="perks">
+          <div class="perk"><b>沒有時間限制</b><span>聊到天亮也不會被切斷。房間在最後一個人離開後才關。</span></div>
+          <div class="perk"><b>免安裝、免註冊</b><span>瀏覽器打開就能用。手機也行。</span></div>
+          <div class="perk"><b>螢幕分享與畫筆</b><span>分享整個螢幕、視窗或分頁；在上面直接畫（M2）。</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 預先加入 -->
+  <section class="screen" id="tab-prejoin" role="tabpanel" hidden>
+    <p class="note">進房前先看到自己、調好裝置。名字會記住。右側會顯示「此房正在錄影」或等候室狀態。</p>
+    <div class="device">
+      <div class="chrome"><i></i><i></i><i></i><span class="url">longtalk.app/r/k7pq2x9m4a</span></div>
+      <div class="prejoin">
+        <div class="preview">
+          <div class="face"></div>
+          <span class="mirror">鏡像預覽</span>
+          <div class="ctl"><span class="pill">🎤 麥克風 ▾</span><span class="pill">📷 鏡頭 ▾</span><span class="pill">🔊 喇叭 ▾</span></div>
+        </div>
+        <div class="form">
+          <div>
+            <h2>週五聊天</h2>
+            <div class="roomname">Gene 的房間 · 目前 3 人在裡面</div>
+          </div>
+          <label class="field">你的名字<div>小潔</div></label>
+          <div class="hint">此房正在錄影。進去表示你知道這件事。</div>
+          <button class="btn primary" type="button">加入</button>
+          <div class="roomname">進房後麥克風開、鏡頭開 · 可在上方調整</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 會議室 -->
+  <section class="screen" id="tab-meeting" role="tabpanel" hidden>
+    <p class="note">會議室預設深色。格狀 1–8 格自動排列；講話者綠外框；名牌有靜音與訊號格；右側聊天／參與者可收合。</p>
+    <div class="device room">
+      <div class="chrome"><i></i><i></i><i></i><span class="url">longtalk.app/r/k7pq2x9m4a</span></div>
+      <div class="meeting">
+        <div class="topbar"><b>週五聊天</b><span class="time">02:47:13</span><span>複製連結</span><span class="rec">Gene 正在錄影</span></div>
+        <div class="stage">
+          <div class="grid">
+            <div class="tile video speaking" style="--c1:#1D4ED8;--c2:#0F172A"><span class="name">Gene <span class="sig"><i></i><i></i><i></i></span></span><span class="badge">你</span></div>
+            <div class="tile video" style="--c1:#7C3AED;--c2:#0F172A"><span class="name">小潔 <span class="sig"><i></i><i></i><i></i></span></span><span class="badge hand">✋ 舉手</span></div>
+            <div class="tile" style="--c1:#0E7490"><div class="avatar">明</div><span class="name">阿明 <b class="mute">🎤/</b> <span class="sig poor"><i></i><i></i><i></i></span></span></div>
+            <div class="tile video" style="--c1:#B45309;--c2:#0F172A"><span class="name">子安 <span class="sig"><i></i><i></i><i></i></span></span><span class="badge pin">📌 釘選</span></div>
+            <div class="tile" style="--c1:#BE185D"><div class="avatar">W</div><span class="name">Wei <b class="mute">🎤/</b></span></div>
+            <div class="tile" style="--c1:#475569"><div class="avatar">佑</div><span class="name">佑佑 · 重新連線中</span></div>
+          </div>
+        </div>
+        <aside class="side">
+          <div class="seg"><span class="on">聊天</span><span>參與者 6</span></div>
+          <div class="msgs">
+            <div class="msg"><b>小潔 · 21:04</b><p>這個版面比 Zoom 好看欸</p></div>
+            <div class="msg"><b>阿明 · 21:05</b><p>我這邊網路差，先關鏡頭</p></div>
+            <div class="msg me"><b>你 · 21:06</b><p>連結在這 <a href="#">longtalk.app/r/k7pq2x9m4a</a></p></div>
+            <div class="msg"><b>子安 · 21:07</b><p>已經 2 小時 47 分了，Zoom 早就把我們踢出去四次</p></div>
+          </div>
+          <div class="compose">傳訊息給所有人…</div>
+        </aside>
+        <div class="toolbar">
+          <div class="tool on"><i></i>麥克風</div>
+          <div class="tool off"><i></i>鏡頭</div>
+          <div class="tool"><i></i>分享</div>
+          <div class="tool"><i></i>反應</div>
+          <div class="tool"><i></i><span class="n">3</span>聊天</div>
+          <div class="tool"><i></i>參與者</div>
+          <div class="tool"><i></i>更多</div>
+          <div class="tool leave"><i></i>離開</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 分享＋標註 -->
+  <section class="screen" id="tab-share" role="tabpanel" hidden>
+    <p class="note">有人分享時分享畫面是主角，人縮成右側一列。上方浮出的標註工具列是 M2；筆跡是向量，疊在每個人的分享格上，不重新編碼影像。</p>
+    <div class="device room">
+      <div class="chrome"><i></i><i></i><i></i><span class="url">longtalk.app/r/k7pq2x9m4a</span></div>
+      <div class="meeting share">
+        <div class="topbar"><b>週五聊天</b><span class="time">00:38:52</span><span>複製連結</span></div>
+        <div class="stage">
+          <div class="grid">
+            <div class="sharebox">
+              <div class="doc">
+                <h3>行程 11/15（六）</h3>
+                <p>09:00 台北車站集合 → 10:30 到宜蘭 → 午餐在羅東夜市附近 → 下午礁溪泡湯 → 18:00 回程</p>
+                <p>要帶：泳衣、毛巾、悠遊卡。阿明負責租車，小潔負責訂餐廳。</p>
+                <p>預算：每人大約 1,500 元，含車資與門票。</p>
+              </div>
+              <span class="sharetag">子安 的畫面</span>
+              <div class="anno"><span class="on">✎</span><span>▬</span><span>↗</span><span>▭</span><span>T</span><span>◌</span><i class="sw" style="background:#F43F5E"></i><span>清除</span></div>
+              <svg class="ink" viewBox="0 0 800 400" preserveAspectRatio="none" aria-hidden="true">
+                <ellipse cx="600" cy="152" rx="120" ry="22" fill="none" stroke="#F43F5E" stroke-width="3"/>
+                <path d="M120 236 L 330 236" stroke="#FBBF24" stroke-width="12" opacity=".55"/>
+                <path d="M520 300 L 640 262" stroke="#2DD4BF" stroke-width="3" fill="none"/><path d="M640 262 l-14 2 6 12z" fill="#2DD4BF"/>
+                <text x="648" y="300" font-size="13" fill="#2DD4BF" font-family="Noto Sans TC">小潔：泡湯那段改 15:00？</text>
+              </svg>
+            </div>
+            <div class="strip">
+              <div class="tile video speaking" style="--c1:#B45309;--c2:#0F172A"><span class="name">子安</span></div>
+              <div class="tile video" style="--c1:#1D4ED8;--c2:#0F172A"><span class="name">Gene</span></div>
+              <div class="tile video" style="--c1:#7C3AED;--c2:#0F172A"><span class="name">小潔</span></div>
+              <div class="tile" style="--c1:#0E7490"><div class="avatar">明</div><span class="name">阿明 <b class="mute">🎤/</b></span></div>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="tool on"><i></i>麥克風</div>
+          <div class="tool on"><i></i>鏡頭</div>
+          <div class="tool"><i></i>分享</div>
+          <div class="tool on"><i></i>標註</div>
+          <div class="tool"><i></i>聊天</div>
+          <div class="tool"><i></i>參與者</div>
+          <div class="tool"><i></i>更多</div>
+          <div class="tool leave"><i></i>離開</div>
+        </div>
+      </div>
+    </div>
+    <div class="legend">
+      <div><b>文字模式</b>：分享文件時 1080p、低幀率，字看得清楚；分享影片時提示切換「動態」。</div>
+      <div><b>三條停止路徑</b>：工具列、頂部提示條、瀏覽器原生停止鈕，都會正確收尾。</div>
+      <div><b>標註權限</b>：主持人可設全員／只分享者／關閉；分享者可清除任何人的筆跡。</div>
+    </div>
+  </section>
+
+  <!-- 手機 -->
+  <section class="screen" id="tab-phone" role="tabpanel" hidden>
+    <p class="note">手機是一等公民：直式單欄、4 格一頁左右滑、五鍵工具列單手可及、離開在右上。iOS 瀏覽器不能分享螢幕，按鈕會隱藏。</p>
+    <div class="phone-wrap">
+      <div class="phone light">
+        <div class="ptop"><b>週五聊天</b><span>準備加入</span></div>
+        <div class="pj">
+          <div class="preview"><div class="face"></div><span class="mirror">鏡像預覽</span><div class="ctl"><span class="pill">🎤</span><span class="pill off">📷</span></div></div>
+          <label class="field">你的名字<div>阿明</div></label>
+          <div class="btn primary">加入</div>
+        </div>
+        <div></div>
+      </div>
+      <div class="phone">
+        <div class="ptop"><b>週五聊天 · 01:12:40</b><span class="leave">離開</span></div>
+        <div class="pgrid">
+          <div class="tile video speaking" style="--c1:#1D4ED8;--c2:#0F172A"><span class="name">Gene</span></div>
+          <div class="tile video" style="--c1:#7C3AED;--c2:#0F172A"><span class="name">小潔</span></div>
+          <div class="tile" style="--c1:#0E7490"><div class="avatar">明</div><span class="name">阿明 · 你</span></div>
+          <div class="tile video" style="--c1:#B45309;--c2:#0F172A"><span class="name">子安</span></div>
+        </div>
+        <div>
+          <div class="dots"><i class="on"></i><i></i></div>
+          <div class="ptool">
+            <div class="tool on"><i></i>麥克風</div>
+            <div class="tool off"><i></i>鏡頭</div>
+            <div class="tool"><i></i>反應</div>
+            <div class="tool"><i></i>聊天</div>
+            <div class="tool"><i></i>更多</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+<script>
+(function(){
+  var tabs=document.querySelectorAll('.tabs [role=tab]');
+  function show(id){
+    tabs.forEach(function(t){t.setAttribute('aria-selected',String(t.dataset.tab===id));});
+    document.querySelectorAll('.screen').forEach(function(s){s.hidden=(s.id!=='tab-'+id);});
+    try{localStorage.setItem('lt-mock-tab',id)}catch(e){}
+  }
+  tabs.forEach(function(t){t.addEventListener('click',function(){show(t.dataset.tab)})});
+  var saved=null;try{saved=localStorage.getItem('lt-mock-tab')}catch(e){}
+  if(saved&&document.getElementById('tab-'+saved))show(saved);
+  var root=document.documentElement;
+  document.getElementById('theme-btn').addEventListener('click',function(){
+    var dark=root.getAttribute('data-theme')==='dark'||(!root.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme: dark)').matches);
+    root.setAttribute('data-theme',dark?'light':'dark');
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 96" width="360" height="96" role="img" aria-label="LongTalk 長談">
+<style>
+.k{stroke:#0E7490;fill:none;stroke-width:6.5;stroke-linecap:round;stroke-linejoin:round}
+.t{fill:#0E7490}
+.n1{font:700 34px 'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif;fill:#0F172A;letter-spacing:4px}
+.n2{font:500 17px 'Inter','Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif;fill:#0E7490;letter-spacing:1px}
+.n3{font:400 12px 'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif;fill:#5B6474}
+@media (prefers-color-scheme:dark){.k{stroke:#2DD4BF}.t{fill:#2DD4BF}.n1{fill:#E6EAF2}.n2{fill:#2DD4BF}.n3{fill:#9AA6BC}}
+</style>
+<g transform="translate(8 16)">
+<path class="k" d="M32 32C32 21 20.5 17 14 24.5S12 44 20 44c5.5 0 9.5-4.5 12-12 2.5-7.5 6.5-12 12-12 8 0 11 12 6 19.5S32 43 32 32z"/>
+<path class="t" d="M17 43.5 11 52l10.5-5.5z"/>
+<path class="t" d="M47 20.5 53 12l-10.5 5.5z"/>
+</g>
+<text class="n1" x="88" y="50">長談</text>
+<text class="n2" x="172" y="48">LongTalk</text>
+<text class="n3" x="88" y="76">開著就不會斷的會議室</text>
+</svg>

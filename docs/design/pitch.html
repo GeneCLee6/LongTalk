@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>長談 LongTalk</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Manrope:wght@500;700;800&display=swap">
+<style>
+/* 版面概念：一欄長頁，開場是一個「永遠在走的計時器」；之後每一節是一個問題與一個答案。冷灰底、藍綠主色、琥珀只用在「40:00」這件事上。 */
+:root{
+  --bg:#F3F6F8;--surface:#FFFFFF;--surface2:#E8EEF2;--fg:#0F172A;--muted:#5B6474;--line:#D5DDE5;
+  --primary:#0E7490;--primary-soft:#DDF4F6;--on-primary:#FFFFFF;--amber:#B45309;--amber-soft:#FEF3C7;--danger:#DC2626;
+  --room:#0B1220;--room2:#111A2E;--room-line:#263350;--room-fg:#E6EAF2;--room-muted:#9AA6BC;--teal:#2DD4BF;--green:#4ADE80;
+  --sans:'Noto Sans TC','PingFang TC','Microsoft JhengHei',system-ui,sans-serif;--latin:'Manrope','Noto Sans TC',sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0B1220;--surface:#111A2E;--surface2:#18233B;--fg:#E6EAF2;--muted:#9AA6BC;--line:#263350;
+  --primary:#2DD4BF;--primary-soft:#153B43;--on-primary:#06231F;--amber:#FBBF24;--amber-soft:#3A2A05;--danger:#F87171;color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0B1220;--surface:#111A2E;--surface2:#18233B;--fg:#E6EAF2;--muted:#9AA6BC;--line:#263350;
+  --primary:#2DD4BF;--primary-soft:#153B43;--on-primary:#06231F;--amber:#FBBF24;--amber-soft:#3A2A05;--danger:#F87171;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:16px;line-height:1.75;
+  padding-block:0 80px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1,h2,h3{margin:0;text-wrap:balance;line-height:1.25}
+p{margin:0}
+a{color:var(--primary)}
+.wrap{max-width:960px;margin:0 auto}
+section{padding-block:56px;border-top:1px solid var(--line)}
+section:first-of-type{border-top:0}
+.eyebrow{font-family:var(--latin);font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--primary);margin-bottom:10px}
+h2{font-size:clamp(24px,3.4vw,34px);font-weight:900;margin-bottom:18px}
+.lead{font-size:18px;color:var(--muted);max-width:36em}
+/* hero */
+.hero{display:grid;gap:28px;padding-block:48px 56px}
+.brand{display:flex;align-items:center;gap:12px}
+.brand .name{font-weight:900;font-size:22px;letter-spacing:3px}
+.brand .en{font-family:var(--latin);font-weight:700;color:var(--primary);letter-spacing:.5px}
+.hero h1{font-size:clamp(34px,6vw,60px);font-weight:900;letter-spacing:1px;max-width:14em}
+.hero .lead{font-size:19px}
+.timer{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:100%}
+.clock{border-radius:18px;padding:22px 24px;display:grid;gap:6px;min-width:0}
+.clock .lbl{font-size:13px;font-weight:700;letter-spacing:.06em}
+.clock .num{font-family:var(--latin);font-weight:800;font-size:clamp(34px,6vw,56px);font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1.1}
+.clock .cap{font-size:13px}
+.clock.zoom{background:var(--amber-soft);color:var(--amber)}
+.clock.zoom .num{text-decoration:line-through;text-decoration-thickness:4px;text-decoration-color:var(--danger)}
+.clock.us{background:var(--room);color:var(--room-fg);border:1px solid var(--room-line)}
+.clock.us .lbl{color:var(--teal)}
+.clock.us .cap{color:var(--room-muted)}
+.clock.us .num{color:#fff}
+/* problem */
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px 22px;min-width:0}
+.card h3{font-size:17px;font-weight:700;margin-bottom:6px}
+.card p{color:var(--muted);font-size:15px}
+/* core */
+.core{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.core .card{border-top:4px solid var(--primary)}
+.core .k{font-family:var(--latin);font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--primary);margin-bottom:6px}
+.later{margin-top:22px;display:flex;flex-wrap:wrap;gap:8px}
+.chip{font-size:13px;padding:6px 12px;border-radius:999px;background:var(--surface2);color:var(--fg);border:1px solid var(--line)}
+.chip b{color:var(--primary);font-family:var(--latin);margin-right:4px}
+/* table */
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
+th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:700;background:var(--surface2);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.us,th.us{background:var(--primary-soft);font-weight:700}
+.no{color:var(--muted)}
+.pay{color:var(--amber);font-weight:600}
+.tbl-note{font-size:13px;color:var(--muted);margin-top:10px}
+/* how */
+.flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:10px;align-items:center;margin:18px 0 22px}
+.node{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;text-align:center;min-width:0}
+.node b{display:block;font-size:15px}
+.node span{font-size:13px;color:var(--muted)}
+.node.cf{border-color:var(--primary);background:var(--primary-soft)}
+.arrow{font-family:var(--latin);color:var(--muted);font-weight:700}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.fact{border-left:3px solid var(--primary);padding:4px 0 4px 14px}
+.fact b{display:block;font-size:15px}
+.fact span{font-size:14px;color:var(--muted)}
+/* preview */
+.room{border-radius:16px;overflow:hidden;background:var(--room);color:var(--room-fg);border:1px solid var(--room-line);display:grid;grid-template-rows:40px 1fr 60px;min-height:380px}
+.room .top{display:flex;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid var(--room-line);font-size:13px;color:var(--room-muted)}
+.room .top b{color:var(--room-fg)}
+.room .top .t{font-family:var(--latin);font-variant-numeric:tabular-nums;color:var(--room-fg)}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:12px}
+.tile{position:relative;aspect-ratio:16/10;max-width:100%;border-radius:12px;background:linear-gradient(160deg,var(--c1,#1E293B),#0F172A);display:grid;place-items:center;overflow:hidden}
+.tile.speaking{box-shadow:inset 0 0 0 2px var(--green)}
+.tile .av{width:52px;height:52px;border-radius:50%;background:var(--c1);display:grid;place-items:center;font-weight:800;font-size:20px;color:#fff}
+.tile .nm{position:absolute;left:8px;bottom:8px;font-size:12px;padding:3px 8px;border-radius:8px;background:rgba(0,0,0,.45);color:#fff}
+.room .bar{display:flex;justify-content:center;gap:6px;align-items:center;border-top:1px solid var(--room-line);background:var(--room2)}
+.room .bar span{font-size:11px;color:var(--room-muted);display:grid;justify-items:center;gap:3px;min-width:56px}
+.room .bar i{width:20px;height:20px;border-radius:6px;background:#18233B;display:block}
+.room .bar i.off{background:var(--danger)}
+.room .bar .lv{background:var(--danger);color:#fff;border-radius:8px;padding:6px 12px;font-weight:700;margin-left:12px}
+.preview-note{font-size:13px;color:var(--muted);margin-top:10px}
+/* roadmap */
+.ms{display:grid;gap:12px}
+.m{display:grid;grid-template-columns:72px 1fr;gap:16px;align-items:start;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+.m .id{font-family:var(--latin);font-weight:800;font-size:22px;color:var(--primary)}
+.m .id small{display:block;font-family:var(--sans);font-size:12px;color:var(--muted);font-weight:500}
+.m h3{font-size:17px;margin-bottom:4px}
+.m p{color:var(--muted);font-size:14px}
+.m .done{font-size:13px;margin-top:8px;padding:6px 10px;border-radius:8px;background:var(--surface2);display:inline-block}
+/* status */
+.status{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.st{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.st b{display:block;font-family:var(--latin);font-size:26px;font-weight:800;color:var(--primary)}
+.st span{font-size:13px;color:var(--muted)}
+.foot{font-size:13px;color:var(--muted);margin-top:24px}
+@media (max-width:640px){
+  .timer{grid-template-columns:1fr}
+  .flow{grid-template-columns:1fr}.arrow{text-align:center;transform:rotate(90deg)}
+  .grid{grid-template-columns:repeat(2,1fr)}
+  .m{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<section class="hero">
+  <div class="brand">
+    <svg width="40" height="40" viewBox="0 0 64 64" aria-hidden="true"><path d="M32 32C32 21 20.5 17 14 24.5S12 44 20 44c5.5 0 9.5-4.5 12-12 2.5-7.5 6.5-12 12-12 8 0 11 12 6 19.5S32 43 32 32z" fill="none" stroke="var(--primary)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 43.5 11 52l10.5-5.5z" fill="var(--primary)"/><path d="M47 20.5 53 12l-10.5 5.5z" fill="var(--primary)"/></svg>
+    <span class="name">長談</span><span class="en">LongTalk</span>
+  </div>
+  <h1>開著就不會斷的會議室。</h1>
+  <p class="lead">給朋友用的線上會議室：貼一個連結就能進來，有麥克風、視訊、螢幕分享、聊天。沒有 40 分鐘限制、不用裝 App、不用註冊。</p>
+  <div class="timer" aria-label="計時器對照">
+    <div class="clock zoom"><span class="lbl">ZOOM 免費版</span><span class="num">40:00</span><span class="cap">時間到，全員被踢出。重開、重貼連結、重等人進來。</span></div>
+    <div class="clock us"><span class="lbl">長談</span><span class="num" id="clock">02:47:13</span><span class="cap">計時器只會一直走。房間在最後一個人離開後才關。</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Problem</div>
+  <h2>為什麼要自己做一間</h2>
+  <div class="cols">
+    <div class="card"><h3>Zoom 在第 40 分鐘切斷你</h3><p>免費版的團體會議（含 1 對 1）40 分鐘就結束。跟朋友聊到一半被踢出去，是這個專案存在的唯一理由。</p></div>
+    <div class="card"><h3>替代品各有一個坎</h3><p>Google Meet 三人以上 60 分鐘；Discord 要帳號、要加伺服器；Jitsi 無限時但品質看運氣、介面不熟；自架要養一台主機。</p></div>
+    <div class="card"><h3>朋友只需要那 5%</h3><p>連結進來、聽得到、看得到、能分享螢幕、不要斷。Zoom 95% 的功能用不到，但這 5% 一定要穩。</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">What</div>
+  <h2>先把三件事做到比 Zoom 好</h2>
+  <p class="lead" style="margin-bottom:20px">M0 只有 12 項功能，全部圍繞「進得來、聽得到、不會斷」。</p>
+  <div class="core">
+    <div class="card"><div class="k">01 · AUDIO / VIDEO</div><h3>麥克風與視訊</h3><p>2–8 人透過 SFU 互通；噪音抑制、回音消除；頻寬不夠先降畫面、最後才動聲音。</p></div>
+    <div class="card"><div class="k">02 · SCREEN</div><h3>螢幕分享</h3><p>整個螢幕、視窗或分頁，含分頁音訊。文字模式讓文件看得清楚；分享中全員看得到提示。</p></div>
+    <div class="card"><div class="k">03 · ∞</div><h3>不限時、不會斷</h3><p>房間就是一個 Durable Object，沒有理由設時限。斷網自動重連，8 秒內接回同一個座位。</p></div>
+  </div>
+  <div class="later">
+    <span class="chip"><b>M1</b>主持人控制、等候室、固定連結、PWA、本機錄影</span>
+    <span class="chip"><b>M2</b>分享畫面上的畫筆、白板、雲端錄影、AI 摘要、25 人</span>
+    <span class="chip"><b>M3</b>遠端控制、50 人、成本儀表板</span>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Competition</div>
+  <h2>和現有選項比</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th></th><th>Zoom 免費</th><th>Google Meet</th><th>Jitsi Meet</th><th>Discord</th><th class="us">長談</th></tr></thead>
+      <tbody>
+        <tr><td>團體會議時限</td><td class="pay">40 分</td><td class="pay">60 分</td><td>無</td><td>無</td><td class="us">無</td></tr>
+        <tr><td>訪客免帳號、免安裝</td><td>部分</td><td class="no">要 Google 帳號</td><td>是</td><td class="no">要帳號</td><td class="us">是</td></tr>
+        <tr><td>螢幕分享</td><td>有</td><td>有</td><td>有</td><td>有</td><td class="us">M0</td></tr>
+        <tr><td>分享畫面上畫筆</td><td>桌面 App</td><td class="no">無</td><td class="no">無</td><td class="no">無</td><td class="us">M2，瀏覽器內</td></tr>
+        <tr><td>雲端錄影</td><td class="pay">付費</td><td class="pay">付費</td><td>Dropbox</td><td class="no">無</td><td class="us">M2，自己的空間</td></tr>
+        <tr><td>AI 摘要</td><td class="pay">付費</td><td class="pay">付費</td><td class="no">無</td><td class="no">無</td><td class="us">M2，自備金鑰</td></tr>
+        <tr><td>遠端控制</td><td>桌面 App</td><td class="no">無</td><td class="no">無</td><td class="no">無</td><td class="us">M3，控制端在瀏覽器</td></tr>
+        <tr><td>人數上限</td><td>100</td><td>100</td><td>依伺服器</td><td>25 視訊</td><td class="us">8 → 25 → 50</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="tbl-note">不打的地方：百人以上、webinar、電話撥入、企業 SSO。那是 Zoom 的護城河，和朋友開會無關。方案與限制以 2026-10 公開資料為準。</p>
+</section>
+
+<section>
+  <div class="eyebrow">How</div>
+  <h2>怎麼做到免費又穩</h2>
+  <p class="lead">不自己養媒體伺服器。瀏覽器 WebRTC 接 Cloudflare 的 SFU，房間狀態放每房一個 Durable Object，整套都在免費額度內。</p>
+  <div class="flow">
+    <div class="node"><b>瀏覽器 A</b><span>WebRTC · 發布自己的軌</span></div>
+    <div class="arrow">⇄</div>
+    <div class="node cf"><b>Cloudflare</b><span>Realtime SFU 轉送媒體<br>Durable Object 管房間<br>TURN 後備 · R2 存檔</span></div>
+    <div class="arrow">⇄</div>
+    <div class="node"><b>瀏覽器 B</b><span>訂閱別人的軌</span></div>
+  </div>
+  <div class="facts">
+    <div class="fact"><b>伺服器不碰內容</b><span>媒體 DTLS-SRTP 加密轉送；伺服器只知道誰在房裡、誰有哪些軌。</span></div>
+    <div class="fact"><b>一場 4 人 2 小時 ≈ 16 GB</b><span>以免費流量額度估算每月約 60 場；超額有自動降級順序。</span></div>
+    <div class="fact"><b>供應商可換</b><span>媒體層包成一個介面；Cloudflare 條件變了就換 LiveKit，其他程式不動。</span></div>
+    <div class="fact"><b>沿用既有經驗</b><span>和淡江牌桌同一套 React、TypeScript、Workers、Durable Objects 與文件方法。</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Preview</div>
+  <h2>長什麼樣</h2>
+  <div class="room" aria-label="會議室畫面示意">
+    <div class="top"><b>週五聊天</b><span class="t">02:47:13</span><span>複製連結</span></div>
+    <div class="grid">
+      <div class="tile speaking" style="--c1:#1D4ED8"><span class="nm">Gene · 你</span></div>
+      <div class="tile" style="--c1:#7C3AED"><span class="nm">小潔 ✋</span></div>
+      <div class="tile" style="--c1:#0E7490"><div class="av">明</div><span class="nm">阿明 🎤/</span></div>
+      <div class="tile" style="--c1:#B45309"><span class="nm">子安 📌</span></div>
+      <div class="tile" style="--c1:#BE185D"><div class="av">W</div><span class="nm">Wei 🎤/</span></div>
+      <div class="tile" style="--c1:#475569"><div class="av">佑</div><span class="nm">佑佑 · 重新連線中</span></div>
+    </div>
+    <div class="bar"><span><i></i>麥克風</span><span><i class="off"></i>鏡頭</span><span><i></i>分享</span><span><i></i>反應</span><span><i></i>聊天</span><span><i></i>參與者</span><span><i></i>更多</span><span class="lv">離開</span></div>
+  </div>
+  <p class="preview-note">心智模型照 Zoom（底部工具列、格狀版面、右側聊天），外觀是自己的。完整五個畫面在 <code>docs/design/mockup.html</code>。</p>
+</section>
+
+<section>
+  <div class="eyebrow">Roadmap</div>
+  <h2>四個里程碑</h2>
+  <div class="ms">
+    <div class="m"><div class="id">M0<small>能聊</small></div><div><h3>連結進房、SFU 音訊視訊、螢幕分享、聊天、重連、手機可加入</h3><p>12 項功能，Phase A–D 共 15 批。</p><span class="done">完成條件：和三個朋友開一場超過 60 分鐘的會議不中斷</span></div></div>
+    <div class="m"><div class="id">M1<small>好用</small></div><div><h3>主持人控制、等候室、固定連結與日曆、版面與釘選、噪音抑制、PWA、本機錄影</h3><p>對齊 Zoom 免費版的核心體驗，Phase F–I 共 20 批。</p><span class="done">完成條件：連續一個月用它取代 Zoom</span></div></div>
+    <div class="m"><div class="id">M2<small>超越</small></div><div><h3>分享畫面上的畫筆與白板、雲端錄影、逐字稿與 AI 摘要、25 人、分組討論室</h3><p>Zoom 要付費或要裝 App 的地方，Phase J–L 共 14 批。</p><span class="done">完成條件：一場會議從頭到尾用標註與摘要</span></div></div>
+    <div class="m"><div class="id">M3<small>遠端控制</small></div><div><h3>桌面端代理實作遠端控制、50 人、成本儀表板、開放給朋友圈以外</h3><p>風險最高的功能最後做，先寫威脅模型，Phase N–O 共 9 批。</p><span class="done">完成條件：遠端幫朋友修一次電腦</span></div></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Status</div>
+  <h2>現在在哪</h2>
+  <div class="status">
+    <div class="st"><b>11</b><span>個 epic</span></div>
+    <div class="st"><b>74</b><span>條驗收條件</span></div>
+    <div class="st"><b>130</b><span>個 task，一個 ≈ 一個 PR</span></div>
+    <div class="st"><b>58</b><span>批，一批 ≈ 一個 AI session</span></div>
+  </div>
+  <p class="foot">2026-10-28 規劃完成，下一批是 A1（repo 與部署），關鍵的一批是 A2（媒體層驗證）。產品名稱「長談 · LongTalk」待拍板。文件：docs/PRD、docs/ROADMAP.md、docs/ARCHITECTURE.md。</p>
+</section>
+
+</div>
+<script>
+(function(){
+  var el=document.getElementById('clock');if(!el)return;
+  var reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var s=2*3600+47*60+13;
+  function pad(n){return (n<10?'0':'')+n}
+  function draw(){el.textContent=pad(Math.floor(s/3600))+':'+pad(Math.floor(s%3600/60))+':'+pad(s%60)}
+  draw();
+  if(!reduce)setInterval(function(){s++;draw()},1000);
+})();
+</script>
+</body>
+</html>
