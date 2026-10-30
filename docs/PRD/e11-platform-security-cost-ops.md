@@ -59,8 +59,8 @@ depends_on: []
 
 ### M0
 
-- [x] `e11-t01` repo 骨架：Vite／React／TS、`worker/`、`shared/`、wrangler、Vitest、oxlint、`CLAUDE.md`／`RULES.md` · AC-11.1 · #PR_A1
-- [x] `e11-t02` CI（lint、typecheck、test、build、budget）、PR 預覽 Worker 與 production 部署、`DEPLOY.md` · AC-11.1, AC-11.2 · #PR_A1
+- [x] `e11-t01` repo 骨架：Vite／React／TS、`worker/`、`shared/`、wrangler、Vitest、oxlint、`CLAUDE.md`／`RULES.md` · AC-11.1 · #2
+- [x] `e11-t02` CI（lint、typecheck、test、build、budget）、PR 預覽 Worker 與 production 部署、`DEPLOY.md` · AC-11.1, AC-11.2 · #2
 - [ ] `e11-t03` 最小遙測：事件 API、Analytics Engine、錯誤回報、`/admin` 骨架 · AC-11.3 · M · ← e11-t02
 - [ ] `e11-t04` `BROWSER-SUPPORT.md` 初版與 `capabilities.ts` · AC-11.6 · S · ← e11-t01
 
