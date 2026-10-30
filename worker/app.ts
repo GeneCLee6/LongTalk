@@ -1,8 +1,9 @@
 import type { HealthResponse } from '../shared/health.ts'
 import type { RoomDO } from './room.ts'
 import { handleRooms } from './rooms.ts'
+import { handleSfu, type SfuEnv } from './sfu.ts'
 
-export interface Env {
+export interface Env extends SfuEnv {
   ASSETS: Fetcher
   ROOM: DurableObjectNamespace<RoomDO>
   // Set at deploy time (wrangler deploy --var APP_VERSION:<commit>)
@@ -21,6 +22,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
   if (url.pathname === '/api/rooms' || url.pathname.startsWith('/api/rooms/')) {
     return handleRooms(request, env, url)
   }
+  if (url.pathname.startsWith('/api/sfu/')) return handleSfu(request, env)
   if (url.pathname.startsWith('/api/')) {
     return Response.json({ error: 'not_found' }, { status: 404 })
   }

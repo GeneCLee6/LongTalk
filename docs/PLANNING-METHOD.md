@@ -53,7 +53,7 @@
 
 | 文件 | 原因 | 什麼時候寫 |
 | --- | --- | --- |
-| `adr-media-transport.md` | SFU 供應商選擇（Cloudflare Realtime vs LiveKit）是最大外部風險 | ROADMAP A1 之前（`e2-t01`） |
+| `adr-001-media-layer.md` | SFU 供應商選擇（Cloudflare Realtime vs LiveKit）是最大外部風險 | ROADMAP A1 之前（`e2-t01`） |
 | `f-recording-consent.md` | 錄影、逐字稿、AI 摘要的同意與保存，牽涉法律 | M2 K 期開始前 |
 | `f-remote-control-security.md` | 遠端控制威脅模型 | M3 M 期開始前（`e9-t01`） |
 

@@ -66,7 +66,7 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 
 ### M0
 
-- [ ] `e2-t01` ADR `docs/adr-media-transport.md`：Cloudflare Realtime vs LiveKit vs 自架，決定與切換條件；`MediaTransport` 介面定稿 · AC-2.2 · S
+- [x] `e2-t01` ADR `docs/adr-001-media-layer.md`：Cloudflare Realtime vs LiveKit vs 自架，決定與切換條件；`MediaTransport` 介面定稿（＋`FakeTransport`、Worker 代理 `/api/sfu/*`、`/dev/realtime` 兩瀏覽器 spike；兩台裝置實測待 secret 設定後補） · AC-2.2 · #4
 - [x] `e2-t02` RoomDO 訊號骨架：WebSocket 升級、成員表、心跳、`snapshot`／`patch` 差異推送、`shared/protocol.ts` · AC-2.1 · #3
 - [ ] `e2-t03` `CloudflareRealtimeTransport`：Worker 代理 session 建立、`publish` mic／cam、track id 回報 RoomDO · AC-2.2 · M · ← e2-t01, e2-t02
 - [ ] `e2-t04` 訂閱：依 RoomDO 軌清單 pull 別人的軌、renegotiation、`useRoomMedia` 的 desired／actual 對齊 · AC-2.2 · M · ← e2-t03
@@ -102,7 +102,7 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 
 ## 未決問題
 
-- [ ] **Q:** Realtime 的錄製能力是否足夠（影響 E8 雲端錄影）？
-      **A:** _(在 `e2-t01` spike 時順便確認)_
+- [x] **Q:** Realtime 的錄製能力是否足夠（影響 E8 雲端錄影）？
+      **A:** 不夠：SFU 沒有內建錄影；WebSocket adapter 只能送 PCM 音訊與 JPEG 幀，適合逐字稿、不適合錄視訊。雲端錄影在 `e8-t04` 比較自架合成與 RealtimeKit 錄影（`adr-001-media-layer.md`）。
 - [ ] **Q:** 音訊要不要走 SFU 的音訊層選擇（例如只轉送最大聲的 3 路）？
       **A:** _(M2 再看，8 人以內不需要)_

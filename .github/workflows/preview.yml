@@ -72,6 +72,19 @@ jobs:
           npx wrangler deploy --name "$WORKER" --var "APP_VERSION:$HEAD_SHA" --message "PR #$PR $HEAD_SHA" | tee deploy.log
           echo "url=$(grep -o 'https://[^ ]*workers.dev' deploy.log | head -1)" >> "$GITHUB_OUTPUT"
 
+      - name: Give the preview the Realtime SFU app (optional)
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          REALTIME_APP_ID: ${{ secrets.REALTIME_APP_ID }}
+          REALTIME_APP_SECRET: ${{ secrets.REALTIME_APP_SECRET }}
+        run: |
+          if [ -z "$REALTIME_APP_ID" ] || [ -z "$REALTIME_APP_SECRET" ]; then
+            echo "::notice::REALTIME_APP_ID / REALTIME_APP_SECRET are not set; /api/sfu answers 503 on this preview (DEPLOY.md §5)"
+            exit 0
+          fi
+          printf '%s' "$REALTIME_APP_ID" | npx wrangler secret put REALTIME_APP_ID --name "$WORKER"
+          printf '%s' "$REALTIME_APP_SECRET" | npx wrangler secret put REALTIME_APP_SECRET --name "$WORKER"
+
       - name: Smoke test
         if: steps.creds.outputs.ready == 'true'
         env:

@@ -73,4 +73,41 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 
 - `wrangler.jsonc` 的 `migrations` **只能往後加**；已部署的 migration 不要改、不要刪。新增 DO class 就加一個新 tag（`v2`…）。
 - `env.preview` **不會繼承**頂層的綁定：每個 DO、KV、R2、D1 綁定都要在 `env.preview` 重寫一次；R2／D1 要給預覽自己的資源，不要指到正式站的。
-- secret（SFU App token、TURN key、AI 金鑰）只用 `wrangler secret put` 放在 Worker，**不進前端、不進 repo**（CLAUDE.md 規則 3）。A2 起會在這裡列出要設定的 secret。
+- secret（SFU App token、TURN key、AI 金鑰）只用 `wrangler secret put` 放在 Worker，**不進前端、不進 repo**（CLAUDE.md 規則 3）。要設定的 secret 見 §5。
+
+## 5. Secrets 與 Realtime 互通測試（A2）
+
+### 要設定的 secret
+
+| 名稱 | 放哪裡 | 從哪裡拿 | 誰用 |
+| --- | --- | --- | --- |
+| `REALTIME_APP_ID` | Worker secret | Cloudflare 儀表板 → Realtime → SFU → 建立 app → **App ID** | `worker/sfu.ts`（A2 起） |
+| `REALTIME_APP_SECRET` | Worker secret | 同一個 app 的 **App Secret**（API token；只顯示一次） | `worker/sfu.ts`（A2 起） |
+| `REALTIME_TURN_KEY_ID` | Worker secret | 儀表板 → Realtime → TURN → 建立 key → **Turn Token ID** | `e2-t07`（B 期，尚未使用） |
+| `REALTIME_TURN_KEY_API_TOKEN` | Worker secret | 同一個 TURN key 的 **API token** | `e2-t07`（B 期，尚未使用） |
+
+App ID 不算機密，但和 App Secret 放在一起管理比較不會漏。**沒設定時 `/api/sfu/*` 回 503 `sfu_not_configured`**，其餘功能照常。
+
+```sh
+# 正式站（secret 會保留到之後每次部署）
+npx wrangler secret put REALTIME_APP_ID
+npx wrangler secret put REALTIME_APP_SECRET
+
+# 本機：寫進 .dev.vars（不進 git）
+REALTIME_APP_ID=...
+REALTIME_APP_SECRET=...
+```
+
+PR 預覽的 Worker 每個 PR 都是新的：在 GitHub 也設定同名的 `REALTIME_APP_ID`、`REALTIME_APP_SECRET`（`gh secret set …`），`preview.yml` 部署後會把它們寫進該 PR 的 Worker；沒設定就跳過（notice）。建議預覽與正式站用**不同的 Realtime app**，流量分開看。
+
+### 跑 spike：兩個瀏覽器透過 Realtime 互通
+
+頁面 `/dev/realtime`（`src/pages/RealtimeSpikePage.tsx`，獨立 chunk，不算進首頁與會議室的 JS 預算）。沒有房間與訊號（那是 A3／B1），兩邊手動交換 session id：
+
+1. 兩台裝置打開同一個部署的 `https://…/dev/realtime`（手機的鏡頭權限需要 HTTPS，所以用 PR 預覽或正式站；同一台電腦可以用 `npm run dev` 的 `http://localhost:5173/dev/realtime` 開兩個分頁先試）。
+2. 兩邊各按「開始發布（麥克風＋鏡頭）」，允許權限。畫面顯示「我的 session id」與已發布的軌（`mic-…`、`cam-…`）。
+3. 把 A 的 session id 傳給 B（聊天軟體即可），B 貼到「對方的 session id」按「接收」；反過來 B 給 A 再做一次。
+4. 通過的條件：兩邊都看到並聽到對方；狀態「connected」；顯示 RTT。把兩台裝置、瀏覽器、網路（例如 Wi-Fi 與 4G）與結果寫進 PR。
+5. 結束按「結束」（關閉 PeerConnection，SFU 端的軌跟著停）。
+
+常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「找不到對方的軌」＝ session id 貼錯或對方還沒發布；一直停在 connecting ＝ 網路擋 UDP，等 `e2-t07` 的 TURN。
