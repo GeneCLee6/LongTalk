@@ -129,7 +129,7 @@ describe('SFU proxy', () => {
   it('is reachable through the Worker router', async () => {
     const env = {
       ASSETS: { fetch: vi.fn() } as unknown as Fetcher,
-      ROOM: {} as DurableObjectNamespace,
+      ROOM: {} as Env['ROOM'],
     } satisfies Env
     const res = await handleRequest(req('POST', '/api/sfu/sessions'), env)
     expect(res.status).toBe(503)
