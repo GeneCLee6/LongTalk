@@ -1,73 +1,180 @@
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import styled from 'styled-components'
+import { parseRoomInput } from '../../shared/room-id.ts'
 import { createRoom } from '../api/rooms.ts'
+import { Button } from '../components/Button.tsx'
+import { TextInput } from '../components/Field.tsx'
+import { Logo } from '../components/Logo.tsx'
 import { strings } from '../strings.ts'
-import { color, font } from '../styles/tokens.ts'
+import { breakpoint, color, font, fontSize, radius, space } from '../styles/tokens.ts'
 
+/** The home page (DESIGN.md §4.1): one primary action, a join box, three reasons. Follows the system scheme. */
 export function HomePage() {
   const navigate = useNavigate()
   const [creating, setCreating] = useState(false)
-  const [failed, setFailed] = useState(false)
+  const [createFailed, setCreateFailed] = useState(false)
+  const [joinInput, setJoinInput] = useState('')
+  const [joinInvalid, setJoinInvalid] = useState(false)
 
   async function onCreate() {
     setCreating(true)
-    setFailed(false)
+    setCreateFailed(false)
     try {
       const roomId = await createRoom()
       navigate(`/r/${roomId}`)
     } catch {
-      setFailed(true)
+      setCreateFailed(true)
       setCreating(false)
     }
   }
 
+  function onJoin(event: FormEvent) {
+    event.preventDefault()
+    const roomId = parseRoomInput(joinInput)
+    if (roomId) navigate(`/r/${roomId}`)
+    else setJoinInvalid(true)
+  }
+
   return (
-    <Main>
-      <h1>{strings.appName}</h1>
-      <p>{strings.tagline}</p>
-      <PrimaryButton type="button" onClick={onCreate} disabled={creating}>
-        {creating ? strings.home.creatingRoom : strings.home.createRoom}
-      </PrimaryButton>
-      {failed && <Muted role="alert">{strings.home.createRoomFailed}</Muted>}
-    </Main>
+    <Page>
+      <Top>
+        <Logo size={30} />
+      </Top>
+      <Hero>
+        <h1>{strings.tagline}</h1>
+        <Intro>{strings.home.intro}</Intro>
+        <Actions>
+          <Button onClick={onCreate} disabled={creating}>
+            {creating ? strings.home.creatingRoom : strings.home.createRoom}
+          </Button>
+          <JoinForm onSubmit={onJoin} noValidate>
+            <TextInput
+              aria-label={strings.home.joinLabel}
+              aria-invalid={joinInvalid}
+              aria-describedby={joinInvalid ? 'join-error' : undefined}
+              placeholder={strings.home.joinPlaceholder}
+              value={joinInput}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => {
+                setJoinInput(event.target.value)
+                setJoinInvalid(false)
+              }}
+            />
+            <Button type="submit" variant="secondary" disabled={joinInput.trim() === ''}>
+              {strings.home.join}
+            </Button>
+          </JoinForm>
+        </Actions>
+        {createFailed && <Notice role="alert">{strings.home.createRoomFailed}</Notice>}
+        {joinInvalid && (
+          <Notice id="join-error" role="alert">
+            {strings.home.joinInvalid}
+          </Notice>
+        )}
+      </Hero>
+      <Perks>
+        {strings.home.perks.map((perk) => (
+          <li key={perk.title}>
+            <b>{perk.title}</b>
+            <span>{perk.body}</span>
+          </li>
+        ))}
+      </Perks>
+    </Page>
   )
 }
 
-const Main = styled.main`
+const Page = styled.main`
   min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  font-family: ${font.ui};
+  background: ${color.bg};
+  color: ${color.fg};
+`
+
+const Top = styled.header`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: ${space(4)} ${space(7)};
+
+  @media (max-width: ${breakpoint.phone}) {
+    padding: ${space(4)};
+  }
+`
+
+const Hero = styled.section`
   display: grid;
   place-content: center;
   justify-items: center;
+  gap: ${space(4)};
+  padding: ${space(6)} ${space(5)};
   text-align: center;
-  font-family: ${font.ui};
-  background: ${color.bg};
-  color: ${color.text};
 
   h1 {
-    color: ${color.brand};
-    margin: 0 0 8px;
+    margin: 0;
+    font-size: ${fontSize.titleWide};
+    font-weight: 900;
+    letter-spacing: 1px;
+  }
+
+  @media (max-width: ${breakpoint.phone}) {
+    h1 {
+      font-size: ${fontSize.title};
+    }
   }
 `
 
-// A2 (e4-t01) replaces this with the base Button component
-const PrimaryButton = styled.button`
-  margin-top: 16px;
-  padding: 12px 24px;
-  border: 0;
-  border-radius: 8px;
-  font: inherit;
-  font-weight: 600;
-  background: ${color.brand};
-  color: ${color.bg};
-  cursor: pointer;
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: progress;
-  }
+const Intro = styled.p`
+  max-width: 34em;
+  margin: 0;
+  color: ${color.muted};
 `
 
-const Muted = styled.p`
-  color: ${color.textMuted};
+const Actions = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: ${space(3)};
+  width: min(560px, 100%);
+`
+
+const JoinForm = styled.form`
+  display: flex;
+  flex: 1 1 280px;
+  gap: ${space(2)};
+`
+
+const Notice = styled.p`
+  margin: 0;
+  color: ${color.danger};
+`
+
+const Perks = styled.ul`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: ${space(3)};
+  margin: 0;
+  padding: 0 ${space(7)} ${space(7)};
+  list-style: none;
+
+  li {
+    display: grid;
+    gap: ${space(1)};
+    padding: ${space(3.5)} ${space(4)};
+    border: 1px solid ${color.line};
+    border-radius: ${radius.tile};
+    background: ${color.surface};
+  }
+  span {
+    font-size: ${fontSize.small};
+    color: ${color.muted};
+  }
+
+  @media (max-width: ${breakpoint.phone}) {
+    padding: 0 ${space(4)} ${space(4)};
+  }
 `

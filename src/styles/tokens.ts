@@ -21,6 +21,8 @@ const light = {
   warn: '#D97706',
   tileFrom: '#1E293B',
   tileTo: '#0F172A',
+  // Controls laid over video (pre-join preview, later the tiles)
+  overlay: 'rgba(11, 18, 32, 0.72)',
   // Hover and pressed overlays, menu shadow, focus ring
   hover: 'rgba(15, 23, 42, 0.06)',
   pressed: 'rgba(15, 23, 42, 0.12)',
@@ -46,6 +48,7 @@ const dark: Record<ColorToken, string> = {
   warn: '#FBBF24',
   tileFrom: '#1E293B',
   tileTo: '#0F172A',
+  overlay: 'rgba(11, 18, 32, 0.72)',
   hover: 'rgba(230, 234, 242, 0.08)',
   pressed: 'rgba(230, 234, 242, 0.16)',
   shadow: 'rgba(0, 0, 0, 0.5)',
@@ -68,13 +71,7 @@ const vars = Object.fromEntries(tokens.map((token) => [token, `var(${cssVar(toke
 >
 
 /** `color.bg` → `var(--lt-bg)`: use these in styled-components, never colour literals */
-export const color = {
-  ...vars,
-  // A1 names, kept so the home page keeps building until A4 (e4-t02) restyles it
-  brand: vars.primary,
-  text: vars.fg,
-  textMuted: vars.muted,
-} as const
+export const color = vars
 
 export const font = {
   ui: "'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, -apple-system, 'Segoe UI', sans-serif",
@@ -120,6 +117,7 @@ export const motion = {
 } as const
 
 export const layer = {
+  overlay: 10,
   menu: 20,
   toast: 30,
 } as const

@@ -4,23 +4,25 @@ import {
   HEARTBEAT_PONG,
   MAX_CLIENT_MESSAGE_CHARS,
   SWEEP_INTERVAL_MS,
-  type Member,
+  newSessionToken,
   type RoomInfo,
+  type RoomSummary,
   type ServerMessage,
 } from '../shared/protocol.ts'
 import type { Env } from './app.ts'
-import { RoomHost } from './room-host.ts'
+import { RoomHost, type OpenSocket, type SessionRecord } from './room-host.ts'
 
-/** What each hibernatable socket carries, so the members survive the object waking up */
-type Attachment = Member
+/** What each hibernatable socket carries, so the connections survive the object waking up */
+type Attachment = OpenSocket
 
 const ROOM_KEY = 'room'
 const REV_KEY = 'rev'
+const SESSIONS_KEY = 'sessions'
 
 /**
  * One room in its own Durable Object (`idFromName(<room id>)`, ARCHITECTURE.md §2). Only the glue
- * to Cloudflare: storage, the sweep alarm and the WebSockets (hibernation API, one per member,
- * tagged with the member id). What the room does is `RoomHost` (room-host.ts).
+ * to Cloudflare: storage, the sweep alarm and the WebSockets (hibernation API, one per
+ * connection, tagged with its connection id). What the room does is `RoomHost` (room-host.ts).
  *
  * The heartbeat `ping` is answered with `pong` by the runtime without waking the object; the
  * sweep alarm reads when each socket last pinged.
@@ -35,9 +37,9 @@ export class RoomDO extends DurableObject<Env> {
     const storage = ctx.storage
     this.host = new RoomHost({
       sockets: {
-        send: (memberId, message) => this.send(memberId, message),
-        close: (memberId, code, reason) => {
-          for (const ws of ctx.getWebSockets(memberId)) {
+        send: (connId, message) => this.send(connId, message),
+        close: (connId, code, reason) => {
+          for (const ws of ctx.getWebSockets(connId)) {
             try {
               ws.close(code, reason)
             } catch {
@@ -49,27 +51,35 @@ export class RoomDO extends DurableObject<Env> {
       storage: {
         saveRoom: (info) => void storage.put(ROOM_KEY, info),
         saveRev: (rev) => void storage.put(REV_KEY, rev),
+        saveSessions: (sessions) => void storage.put(SESSIONS_KEY, sessions),
       },
       now: Date.now,
       newMemberId: () => crypto.randomUUID(),
+      newToken: newSessionToken,
     })
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG))
     void ctx.blockConcurrencyWhile(async () => {
-      const [info, rev] = await Promise.all([
+      const [info, rev, sessions] = await Promise.all([
         storage.get<RoomInfo>(ROOM_KEY),
         storage.get<number>(REV_KEY),
+        storage.get<SessionRecord[]>(SESSIONS_KEY),
       ])
-      const members = ctx
+      const sockets = ctx
         .getWebSockets()
         .filter((ws) => ws.readyState === WebSocket.OPEN)
         .map((ws) => ws.deserializeAttachment() as Attachment)
-      this.host.restore(info ?? null, rev ?? 0, members)
+      this.host.restore(info ?? null, rev ?? 0, sessions ?? [], sockets)
     })
   }
 
   /** RPC from POST /api/rooms: false when a room with this id already exists */
   async create(id: string): Promise<boolean> {
     return this.host.create({ id, createdAt: Date.now() })
+  }
+
+  /** RPC from GET /api/rooms/<id>: null when there is no such room */
+  async summary(): Promise<RoomSummary | null> {
+    return this.host.summary()
   }
 
   /** Only the WebSocket upgrade, forwarded by the Worker from /api/rooms/<id>/ws */
@@ -86,30 +96,28 @@ export class RoomDO extends DurableObject<Env> {
       server.close(admission.code, admission.reason)
       return new Response(null, { status: 101, webSocket: client })
     }
-    const member = this.host.newMember()
-    this.ctx.acceptWebSocket(server, [member.id])
-    server.serializeAttachment(member satisfies Attachment)
-    this.host.connected(member)
-    if ((await this.ctx.storage.getAlarm()) === null) {
-      await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS)
-    }
+    const attachment: Attachment = { conn: crypto.randomUUID(), openedAt: Date.now() }
+    this.ctx.acceptWebSocket(server, [attachment.conn])
+    server.serializeAttachment(attachment)
+    this.host.opened(attachment.conn)
+    await this.scheduleSweep()
     return new Response(null, { status: 101, webSocket: client })
   }
 
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer) {
-    const { id } = ws.deserializeAttachment() as Attachment
+    const { conn } = ws.deserializeAttachment() as Attachment
     // Binary frames and oversized text are not part of the protocol: answered with an error
     if (typeof data !== 'string' || data.length > MAX_CLIENT_MESSAGE_CHARS) {
-      this.host.message(id, '')
+      this.host.message(conn, '')
       return
     }
     // Normally answered by the auto-response without waking the object
     if (data === HEARTBEAT_PING) ws.send(HEARTBEAT_PONG)
-    this.host.message(id, data)
+    this.host.message(conn, data)
   }
 
   async webSocketClose(ws: WebSocket) {
-    const { id } = ws.deserializeAttachment() as Attachment
+    const { conn } = ws.deserializeAttachment() as Attachment
     this.closing = ws
     try {
       try {
@@ -117,29 +125,40 @@ export class RoomDO extends DurableObject<Env> {
       } catch {
         // Already closed
       }
-      this.host.disconnected(id)
+      this.host.closed(conn)
     } finally {
       this.closing = null
     }
+    // A member who dropped is removed by the sweep once its grace runs out
+    await this.scheduleSweep()
   }
 
   async webSocketError(ws: WebSocket) {
     await this.webSocketClose(ws)
   }
 
-  /** The sweep: drops members whose heartbeat stopped; runs while anyone is connected */
+  /**
+   * The sweep: closes sockets that never joined or whose heartbeat stopped, removes members whose
+   * reconnect grace ran out; runs while anyone is connected or reconnecting.
+   */
   async alarm() {
     for (const ws of this.ctx.getWebSockets()) {
       const at = this.ctx.getWebSocketAutoResponseTimestamp(ws)
-      if (at) this.host.heartbeat((ws.deserializeAttachment() as Attachment).id, at.getTime())
+      if (at) this.host.heartbeat((ws.deserializeAttachment() as Attachment).conn, at.getTime())
     }
     this.host.sweep()
-    if (this.host.memberCount > 0) await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS)
+    if (this.host.active) await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS)
   }
 
-  private send(memberId: string, message: ServerMessage) {
+  private async scheduleSweep() {
+    if (this.host.active && (await this.ctx.storage.getAlarm()) === null) {
+      await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS)
+    }
+  }
+
+  private send(connId: string, message: ServerMessage) {
     const payload = JSON.stringify(message)
-    for (const ws of this.ctx.getWebSockets(memberId)) {
+    for (const ws of this.ctx.getWebSockets(connId)) {
       if (ws === this.closing) continue
       try {
         ws.send(payload)

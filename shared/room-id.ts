@@ -35,3 +35,14 @@ export function newRoomId(random: RandomBytes = cryptoBytes): string {
   }
   return id
 }
+
+/**
+ * The room id in what someone pasted into the home page's join box: a bare id, or any link whose
+ * path has `/r/<id>` (this site's or another deployment's). Null when there is none.
+ */
+export function parseRoomInput(input: string): string | null {
+  const text = input.trim()
+  if (isRoomId(text)) return text
+  const match = /(?:^|\/)r\/([^/?#\s]+)/.exec(text)
+  return match && isRoomId(match[1]) ? match[1] : null
+}
