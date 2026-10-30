@@ -1,0 +1,45 @@
+name: CI
+
+# Runs on every push and on pull requests targeting main: install -> lint -> typecheck -> test ->
+# build -> JS budget (CLAUDE.md rule 6). All must pass before a pull request can merge (AC-11.2).
+# Production deploys run in deploy.yml after this workflow succeeds on main.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (oxlint)
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Unit and component tests (Vitest)
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: JS budget (home ≤ 150 kB, room ≤ 350 kB gzip)
+        # GitHub's bash runs with -o pipefail, so a failed budget fails the step through the pipe
+        run: npm run --silent budget | tee -a "$GITHUB_STEP_SUMMARY"

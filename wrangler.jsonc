@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // One Worker serves the API, the Durable Objects and the React app's static assets (DEPLOY.md §1
+  // says why this and not Pages + a separate Worker)
+  "name": "longtalk",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    // One object per room (ARCHITECTURE.md §2)
+    "bindings": [{ "name": "ROOM", "class_name": "RoomDO" }]
+  },
+  // The free plan only offers SQLite-backed Durable Objects. Migrations only ever add: never edit
+  // or remove one that was deployed (DEPLOY.md §4)
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomDO"] }],
+  // Pull request previews (DEPLOY.md §2): each PR deploys its own Worker, longtalk-pr-<number>,
+  // with `wrangler deploy --name`, so it has its own Durable Object storage and never touches
+  // production's. Bindings are not inherited from the top level: repeat each one here.
+  // Selected at build time with CLOUDFLARE_ENV=preview (the Vite plugin bakes it into dist/).
+  "env": {
+    "preview": {
+      "name": "longtalk-preview",
+      "durable_objects": {
+        "bindings": [{ "name": "ROOM", "class_name": "RoomDO" }]
+      }
+    }
+  }
+}

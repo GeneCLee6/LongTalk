@@ -1,10 +1,10 @@
 # ARCHITECTURE — LongTalk 技術架構（規劃版）
 
-2026-10-28 的規劃；還沒有程式碼。動工後這份改成現況描述，決策的「為什麼」搬到 `docs/adr-*.md`。
+2026-10-28 的規劃；A1（2026-10-30）起骨架已落地（一個 Worker：`/api/*`、`RoomDO`、靜態資產）。動工後這份逐步改成現況描述，決策的「為什麼」搬到 `docs/adr-*.md`。
 
 ## 1. 一句話
 
-**瀏覽器 WebRTC 客戶端 ＋ Cloudflare 全套後端：Pages（前端）、Workers（API）、Durable Objects（每房一個訊號伺服器）、Realtime SFU（媒體轉送）、TURN（NAT 後備）、R2（檔案與錄影）。** 伺服器不碰媒體內容，只負責「誰在哪、誰能做什麼」與轉送封包。
+**瀏覽器 WebRTC 客戶端 ＋ Cloudflare 全套後端：Workers（API ＋ 前端靜態資產，同一個 Worker；為什麼不用 Pages 見 `DEPLOY.md`）、Durable Objects（每房一個訊號伺服器）、Realtime SFU（媒體轉送）、TURN（NAT 後備）、R2（檔案與錄影）。** 伺服器不碰媒體內容，只負責「誰在哪、誰能做什麼」與轉送封包。
 
 ## 2. 元件圖
 
@@ -21,7 +21,7 @@
                      （直連失敗時經 Cloudflare TURN）
 ```
 
-- **前端**：React 19 ＋ TypeScript（strict）＋ Vite ＋ styled-components，和淡江牌桌同一套；部署到 Cloudflare Pages。路由：`/`（首頁）、`/r/:roomId`（會議室）、`/me`（登入者的房間與錄影，M1）。
+- **前端**：React 19 ＋ TypeScript（strict）＋ Vite ＋ styled-components，和淡江牌桌同一套；由同一個 Worker 的靜態資產提供（A1 起；原規劃是 Pages，理由見 `DEPLOY.md`）。路由：`/`（首頁）、`/r/:roomId`（會議室）、`/me`（登入者的房間與錄影，M1）。
 - **Worker**：HTTP API 與 WebSocket 升級；把 `/r/:roomId` 的 WebSocket 轉給該房的 Durable Object。
 - **RoomDO**：單一房間的真相來源。狀態：成員（id、名字、角色、連線狀態、心跳時間）、每位成員的軌道（mic／cam／screen 的 on/off 與 SFU track id）、等候室、鎖房、聊天 200 則、標註與白板（M2）、錄影狀態。用 `alarm()` 做空房關閉與計時。推送只送差異（和牌桌 `views.ts` 同一手法）。
 - **Realtime SFU**：每位成員一個 SFU session；發布自己的軌（push），依 RoomDO 告知的 track id 訂閱別人的軌（pull）。SFU 的 API 呼叫由 Worker 代理（App token 不進瀏覽器）。
@@ -43,7 +43,7 @@
 
 ## 4. 資料流：一個人進房
 
-1. 瀏覽器 `GET /r/abc123` → Pages 回 SPA。
+1. 瀏覽器 `GET /r/abc123` → Worker 的靜態資產回 SPA。
 2. 名字畫面後，`POST /api/rooms/abc123/join`（名字、本機 session token）→ Worker 轉給 RoomDO → 回成員 id、角色、房間快照、TURN 憑證、SFU session 建立所需資訊。
 3. 瀏覽器開 WebSocket 到 RoomDO；之後所有狀態變化走這條。
 4. 瀏覽器建立 SFU session，發布 mic／cam 軌；把 SFU track id 回報 RoomDO（`publish` 訊息）。

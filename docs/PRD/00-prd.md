@@ -116,7 +116,7 @@ LongTalk
 | F9 | 不限時 | 房間存在到最後一人離開後 10 分鐘；沒有任何時間上限 | E1、E2 |
 | F10 | 斷線重連 | 心跳；網路恢復、回到前景時自動重連並恢復媒體；期間畫面標示「重新連線中」 | E2 |
 | F11 | 手機瀏覽器 | iOS Safari、Android Chrome 可加入、聽、看、開鏡頭；手機不能分享螢幕時隱藏按鈕並說明 | E4 |
-| F12 | 部署與監控 | Cloudflare Pages＋Workers＋DO；CI（lint、typecheck、test、build）；錯誤與連線成功率可見 | E11 |
+| F12 | 部署與監控 | Cloudflare Workers（帶靜態資產）＋DO；CI（lint、typecheck、test、build）；錯誤與連線成功率可見 | E11 |
 
 ### 8.2 M1 好用（對齊 Zoom 核心）
 

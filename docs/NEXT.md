@@ -1,11 +1,12 @@
 # NEXT — 接下來怎麼做（給 AI 協作者與自己的交接手冊）
 
-最後更新 2026-10-28。**完整順序在 [`ROADMAP.md`](ROADMAP.md)**（一批一個 PR）；這份只記「現在的位置」與工作方式。每完成一批就更新「現在的位置」；每個 AI session 開頭只需要讀 `CLAUDE.md` 和這一份。
+最後更新 2026-10-30。**完整順序在 [`ROADMAP.md`](ROADMAP.md)**（一批一個 PR）；這份只記「現在的位置」與工作方式。每完成一批就更新「現在的位置」；每個 AI session 開頭只需要讀 `CLAUDE.md` 和這一份。
 
 ## 1. 現在的位置
 
 - **2026-10-28 規劃完成，尚未有程式碼。** 總 PRD `docs/PRD/00-prd.md`、競品分析 `01-competitive-analysis.md`、11 個 epic（130 個 task、74 條 AC）、`ROADMAP.md` Phase A–O（跳過 E、M）、架構 `ARCHITECTURE.md`、設計規格 `DESIGN.md`、視覺稿 `design/mockup.html`、提案頁 `design/pitch.html`、標誌 `design/logo/`。規劃方法的判斷在 `PLANNING-METHOD.md`。
-- **下一批：A1**（repo 骨架、CI、部署）。接著 **A2 是最關鍵的一批**：Cloudflare Realtime 的 spike 決定媒體層；不順就在 ADR 換 LiveKit，之後批次不變。
+- **2026-10-30 A1 完成**（#PR_A1）：Vite＋React＋TS 骨架、一個 Worker（`/api/health`、`RoomDO` 空殼、靜態資產）、Vitest、oxlint、JS 預算腳本、CI、PR 預覽與正式部署 workflow、`RULES.md`、`DEPLOY.md`。**正式部署要先在 GitHub 設定 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`**（`DEPLOY.md` §1）；沒設定前部署 workflow 會跳過，AC-11.1 等第一次部署成功才勾。
+- **下一批：A2 與 A3 可平行**（都只依賴 A1）。**A2 是最關鍵的一批**：Cloudflare Realtime 的 spike 決定媒體層；不順就在 ADR 換 LiveKit，之後批次不變。
 - **等人決定的事**（不卡 A 期）：帳號登入方式（E1）；AI 摘要用哪家模型（E8）。
 
 ## 2. 建議順序（為什麼這樣排）
