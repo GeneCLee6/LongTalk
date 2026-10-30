@@ -69,8 +69,8 @@ M1 開始對齊 Zoom 的主持人功能：鎖房、等候室、靜音他人、�
 
 ### M0
 
-- [ ] `e1-t01` Room 模型與短 id：`shared/protocol.ts` 的 `Room`／`Member`／訊息型別、id 產生器與測試 · AC-1.1 · S
-- [ ] `e1-t02` 建房 API 與首頁「開一間房」按鈕：`POST /api/rooms` → RoomDO 初始化 → 導向 `/r/<id>` · AC-1.1 · S · ← e1-t01, e11-t01
+- [x] `e1-t01` Room 模型與短 id：`shared/protocol.ts` 的 `Room`／`Member`／訊息型別、id 產生器與測試 · AC-1.1 · #3
+- [x] `e1-t02` 建房 API 與首頁「開一間房」按鈕：`POST /api/rooms` → RoomDO 初始化 → 導向 `/r/<id>` · AC-1.1 · #3
 - [ ] `e1-t03` 訪客加入：名字畫面、session token 存 localStorage、`join` 訊息、重新整理接回同一成員 · AC-1.2 · M · ← e1-t02, e2-t02
 - [ ] `e1-t04` 房間生命週期：空房 10 分鐘 alarm 關閉、主持人離線 60 秒接手、統一排程器 · AC-1.3 · M · ← e1-t03
 - [ ] `e1-t05` 房間名稱修改、連結複製與分享（Web Share API 有就用）、房內改名 · AC-1.1, AC-1.2 · S · ← e1-t03

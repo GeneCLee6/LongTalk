@@ -67,7 +67,7 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 ### M0
 
 - [ ] `e2-t01` ADR `docs/adr-media-transport.md`：Cloudflare Realtime vs LiveKit vs 自架，決定與切換條件；`MediaTransport` 介面定稿 · AC-2.2 · S
-- [ ] `e2-t02` RoomDO 訊號骨架：WebSocket 升級、成員表、心跳、`snapshot`／`patch` 差異推送、`shared/protocol.ts` · AC-2.1 · M · ← e11-t01
+- [x] `e2-t02` RoomDO 訊號骨架：WebSocket 升級、成員表、心跳、`snapshot`／`patch` 差異推送、`shared/protocol.ts` · AC-2.1 · #3
 - [ ] `e2-t03` `CloudflareRealtimeTransport`：Worker 代理 session 建立、`publish` mic／cam、track id 回報 RoomDO · AC-2.2 · M · ← e2-t01, e2-t02
 - [ ] `e2-t04` 訂閱：依 RoomDO 軌清單 pull 別人的軌、renegotiation、`useRoomMedia` 的 desired／actual 對齊 · AC-2.2 · M · ← e2-t03
 - [ ] `e2-t05` 麥克風／鏡頭開關與軌狀態同步（mute 走訊號，不重新 publish） · AC-2.3 · S · ← e2-t04

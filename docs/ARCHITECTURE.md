@@ -22,8 +22,9 @@
 ```
 
 - **前端**：React 19 ＋ TypeScript（strict）＋ Vite ＋ styled-components，和淡江牌桌同一套；由同一個 Worker 的靜態資產提供（A1 起；原規劃是 Pages，理由見 `DEPLOY.md`）。路由：`/`（首頁）、`/r/:roomId`（會議室）、`/me`（登入者的房間與錄影，M1）。
-- **Worker**：HTTP API 與 WebSocket 升級；把 `/r/:roomId` 的 WebSocket 轉給該房的 Durable Object。
+- **Worker**：HTTP API 與 WebSocket 升級；把 `/api/rooms/<id>/ws?v=<協定版本>` 的 WebSocket 轉給該房的 Durable Object（`idFromName(<id>)`）。WebSocket 放在 `/api/*` 底下，`run_worker_first` 不必另外列路徑；`/r/:roomId` 只是前端路由。
 - **RoomDO**：單一房間的真相來源。狀態：成員（id、名字、角色、連線狀態、心跳時間）、每位成員的軌道（mic／cam／screen 的 on/off 與 SFU track id）、等候室、鎖房、聊天 200 則、標註與白板（M2）、錄影狀態。用 `alarm()` 做空房關閉與計時。推送只送差異（和牌桌 `views.ts` 同一手法）。
+- **RoomDO 現況（A3）**：`worker/room.ts` 只是接 Cloudflare 的膠水（storage、alarm、hibernation WebSocket，每個 socket 以成員 id 為 tag、attachment 存成員資料，醒來時從 socket 重建成員）；房間邏輯在 `worker/room-host.ts` 的純類別 `RoomHost`，Vitest 直接測。訊息型別在 `shared/protocol.ts`（有版本號，連線帶 `?v=`，版本不合以 4400 關閉）；差異是 `shared/patch.ts` 的 `set`／`del` 路徑操作，每個 patch 帶遞增 `rev`，瀏覽器發現缺號就送 `resync` 拿 `snapshot`。storage 只存房間資訊與 `rev`；成員不寫 storage。房間 id 是 10 碼 base58（去掉 0、O、I、l，約 58.6 bits），由 `POST /api/rooms` 產生並在 RoomDO 初始化；沒建過的 id 連 WebSocket 以 4404 關閉。
 - **Realtime SFU**：每位成員一個 SFU session；發布自己的軌（push），依 RoomDO 告知的 track id 訂閱別人的軌（pull）。SFU 的 API 呼叫由 Worker 代理（App token 不進瀏覽器）。
 - **TURN**：Worker 發短期憑證給瀏覽器；ICE 設定一律含 TURN，只在直連失敗時用到。
 - **R2**：聊天檔案（24 小時）、雲端錄影（有效期）、白板匯出。
@@ -48,7 +49,7 @@
 3. 瀏覽器開 WebSocket 到 RoomDO；之後所有狀態變化走這條。
 4. 瀏覽器建立 SFU session，發布 mic／cam 軌；把 SFU track id 回報 RoomDO（`publish` 訊息）。
 5. RoomDO 廣播「成員 X 有新軌」；其他瀏覽器向 SFU 訂閱該軌。
-6. 心跳每 15 秒；斷線時 RoomDO 保留成員 60 秒並標示「重新連線中」；回來後以同一 session token 接回、重新發布與訂閱。
+6. 心跳每 15 秒（文字 `ping`，由 runtime 自動回 `pong`，不喚醒 DO；每 15 秒的 alarm 讀 `getWebSocketAutoResponseTimestamp` 檢查，45 秒沒心跳就關 socket 並移除成員）；A3 還沒有身分，socket 關閉就移除成員。A4 起：斷線時 RoomDO 保留成員 60 秒並標示「重新連線中」；回來後以同一 session token 接回、重新發布與訂閱。
 7. 最後一人離開 10 分鐘後，`alarm()` 清房間（持久房間除外）。
 
 ## 5. 安全邊界

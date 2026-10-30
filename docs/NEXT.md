@@ -6,7 +6,8 @@
 
 - **2026-10-28 規劃完成，尚未有程式碼。** 總 PRD `docs/PRD/00-prd.md`、競品分析 `01-competitive-analysis.md`、11 個 epic（130 個 task、74 條 AC）、`ROADMAP.md` Phase A–O（跳過 E、M）、架構 `ARCHITECTURE.md`、設計規格 `DESIGN.md`、視覺稿 `design/mockup.html`、提案頁 `design/pitch.html`、標誌 `design/logo/`。規劃方法的判斷在 `PLANNING-METHOD.md`。
 - **2026-10-30 A1 完成**（#2）：Vite＋React＋TS 骨架、一個 Worker（`/api/health`、`RoomDO` 空殼、靜態資產）、Vitest、oxlint、JS 預算腳本、CI、PR 預覽與正式部署 workflow、`RULES.md`、`DEPLOY.md`。**正式部署要先在 GitHub 設定 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`**（`DEPLOY.md` §1）；沒設定前部署 workflow 會跳過，AC-11.1 等第一次部署成功才勾。
-- **下一批：A2 與 A3 可平行**（都只依賴 A1）。**A2 是最關鍵的一批**：Cloudflare Realtime 的 spike 決定媒體層；不順就在 ADR 換 LiveKit，之後批次不變。
+- **2026-10-30 A3 完成**（#3）：`shared/protocol.ts`（v1：`welcome`／`snapshot`／`patch`／`error`、`resync`、文字 `ping`／`pong` 心跳）、`shared/patch.ts` 差異推送、`shared/room-id.ts`（10 碼 base58）、`RoomDO`（hibernation WebSocket、成員、45 秒沒心跳就移除、`worker/room-host.ts` 純類別）、`POST /api/rooms` 與 WebSocket `/api/rooms/<id>/ws?v=1`、首頁「建立會議室」、會議室頁顯示在線人數。AC-2.1 等 `e2-t03` 加上軌清單才勾；AC-1.1 等 `e1-t05`（改名、複製連結）。
+- **下一批：A2 與 A3 可平行**（都只依賴 A1）；A3 已完成，A2 完成後做 A4。**A2 是最關鍵的一批**：Cloudflare Realtime 的 spike 決定媒體層；不順就在 ADR 換 LiveKit，之後批次不變。
 - **等人決定的事**（不卡 A 期）：帳號登入方式（E1）；AI 摘要用哪家模型（E8）。
 
 ## 2. 建議順序（為什麼這樣排）
