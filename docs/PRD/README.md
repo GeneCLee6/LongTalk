@@ -17,14 +17,14 @@ LongTalk 的產品需求都在這個資料夾。三層結構（為什麼是三�
 
 ## Epic 進度
 
-統計日期 2026-10-30（A1、A2、A3 完成）。勾選以各 epic 文件為準，改了勾選順手更新這張表。
+統計日期 2026-10-30（A1–A4 完成）。勾選以各 epic 文件為準，改了勾選順手更新這張表。
 
 | Epic | 名稱 | Task 完成 | AC 完成 | M0 task | M1 task | 狀態 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [E1](e1-rooms-identity-host.md) | 房間、身分與主持人控制 | 2／19 | 0／8 | 5 | 12 | in progress |
+| [E1](e1-rooms-identity-host.md) | 房間、身分與主持人控制 | 3／19 | 0／8 | 5 | 12 | in progress |
 | [E2](e2-media-core-webrtc-sfu.md) | 媒體核心：WebRTC 與 SFU | 2／18 | 0／8 | 10 | 7 | in progress |
 | [E3](e3-screen-share.md) | 螢幕分享 | 0／11 | 0／6 | 5 | 5 | planned |
-| [E4](e4-meeting-ui-experience.md) | 會議室介面與體驗 | 1／19 | 0／10 | 8 | 11 | in progress |
+| [E4](e4-meeting-ui-experience.md) | 會議室介面與體驗 | 3／19 | 0／10 | 8 | 11 | in progress |
 | [E5](e5-chat-reactions-interaction.md) | 聊天、反應與互動 | 0／9 | 0／5 | 2 | 4 | planned |
 | [E6](e6-audio-video-quality.md) | 音訊視訊品質 | 0／8 | 0／6 | 0 | 5 | planned |
 | [E7](e7-annotation-whiteboard.md) | 畫筆標註與白板 | 0／9 | 0／5 | 0 | 0 | planned（M2） |
@@ -32,7 +32,7 @@ LongTalk 的產品需求都在這個資料夾。三層結構（為什麼是三�
 | [E9](e9-remote-control.md) | 遠端控制 | 0／9 | 0／5 | 0 | 0 | planned（M3） |
 | [E10](e10-scale-breakout.md) | 規模：大房間與分組討論室 | 0／7 | 0／5 | 0 | 0 | planned（M2–M3） |
 | [E11](e11-platform-security-cost-ops.md) | 平台、安全、成本與維運 | 2／12 | 0／10 | 4 | 4 | in progress |
-| | **合計** | **7／130** | **0／74** | **34** | **51** | |
+| | **合計** | **10／130** | **0／74** | **34** | **51** | |
 
 里程碑分布：M0 34 個、M1 51 個、M2 29 個、M3 16 個。M2／M3 的 task 刻意只寫一行，動工前那一批再細拆。
 

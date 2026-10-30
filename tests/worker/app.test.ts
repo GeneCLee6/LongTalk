@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { isRoomId } from '../../shared/room-id.ts'
 import { handleRequest, type Env } from '../../worker/app.ts'
 
-/** A fake ROOM namespace: one object per name, with `create` and `fetch` like RoomDO's */
+/** A fake ROOM namespace: one object per name, with `create`, `summary` and `fetch` like RoomDO's */
 function fakeRooms() {
   const created = new Set<string>()
   const fetched: Request[] = []
@@ -19,6 +19,7 @@ function fakeRooms() {
         created.add(id)
         return true
       },
+      summary: async () => (created.has(name) ? { id: name, createdAt: 1, memberCount: 2 } : null),
       fetch: async (request: Request) => {
         fetched.push(request)
         return new Response('upgraded')
@@ -103,13 +104,55 @@ describe('POST /api/rooms', () => {
   })
 })
 
+describe('GET /api/rooms/:id', () => {
+  it("answers the room's summary, or 404 when there is no such room", async () => {
+    const rooms = fakeRooms()
+    rooms.created.add('abcdefghij')
+    const e = env({ ROOM: rooms.namespace })
+    const res = await handleRequest(new Request('https://x/api/rooms/abcdefghij'), e)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(await res.json()).toEqual({ id: 'abcdefghij', createdAt: 1, memberCount: 2 })
+    const missing = await handleRequest(new Request('https://x/api/rooms/bbbbbbbbbb'), e)
+    expect(missing.status).toBe(404)
+    const bad = await handleRequest(new Request('https://x/api/rooms/nope'), e)
+    expect(bad.status).toBe(404)
+  })
+
+  it('only accepts GET', async () => {
+    const res = await handleRequest(
+      new Request('https://x/api/rooms/abcdefghij', { method: 'DELETE' }),
+      env(),
+    )
+    expect(res.status).toBe(405)
+  })
+})
+
 describe('GET /api/rooms/:id/ws', () => {
   it('hands the WebSocket upgrade to the Durable Object of that room', async () => {
     const rooms = fakeRooms()
-    const url = 'https://x/api/rooms/abcdefghij/ws?v=1'
+    const url = 'https://x/api/rooms/abcdefghij/ws?v=2'
     const res = await handleRequest(new Request(url, upgrade), env({ ROOM: rooms.namespace }))
     expect(await res.text()).toBe('upgraded')
     expect(rooms.fetched.map((request) => request.url)).toEqual([url])
+  })
+
+  it('accepts its own origin and refuses a socket opened from another site', async () => {
+    const rooms = fakeRooms()
+    const url = 'https://x/api/rooms/abcdefghij/ws?v=2'
+    const own = await handleRequest(
+      new Request(url, { headers: { Upgrade: 'websocket', Origin: 'https://x' } }),
+      env({ ROOM: rooms.namespace }),
+    )
+    expect(await own.text()).toBe('upgraded')
+    for (const origin of ['https://evil.example', 'http://x', 'https://x.evil.example', 'null']) {
+      const res = await handleRequest(
+        new Request(url, { headers: { Upgrade: 'websocket', Origin: origin } }),
+        env({ ROOM: rooms.namespace }),
+      )
+      expect(res.status, origin).toBe(403)
+    }
+    expect(rooms.fetched).toHaveLength(1)
   })
 
   it('refuses a path that cannot be a room without waking any object', async () => {

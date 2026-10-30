@@ -45,11 +45,11 @@
 ## 4. 資料流：一個人進房
 
 1. 瀏覽器 `GET /r/abc123` → Worker 的靜態資產回 SPA。
-2. 名字畫面後，`POST /api/rooms/abc123/join`（名字、本機 session token）→ Worker 轉給 RoomDO → 回成員 id、角色、房間快照、TURN 憑證、SFU session 建立所需資訊。
-3. 瀏覽器開 WebSocket 到 RoomDO；之後所有狀態變化走這條。
+2. 預先加入頁先 `GET /api/rooms/abc123` 確認房間存在（順便拿人數）才開鏡頭。按「加入」後開 WebSocket `/api/rooms/abc123/ws?v=2`（Worker 檢查 `Origin` 後轉給 RoomDO），第一則訊息是 `join`（名字、這個分頁上次拿到的 session token）→ RoomDO 回 `welcome`：成員 id、session token、房間快照（A4 起）。角色、TURN 憑證、SFU session 資訊在之後的批次加進 `welcome`。
+3. 之後所有狀態變化走這條 WebSocket。
 4. 瀏覽器建立 SFU session，發布 mic／cam 軌；把 SFU track id 回報 RoomDO（`publish` 訊息）。
 5. RoomDO 廣播「成員 X 有新軌」；其他瀏覽器向 SFU 訂閱該軌。
-6. 心跳每 15 秒（文字 `ping`，由 runtime 自動回 `pong`，不喚醒 DO；每 15 秒的 alarm 讀 `getWebSocketAutoResponseTimestamp` 檢查，45 秒沒心跳就關 socket 並移除成員）；A3 還沒有身分，socket 關閉就移除成員。A4 起：斷線時 RoomDO 保留成員 60 秒並標示「重新連線中」；回來後以同一 session token 接回、重新發布與訂閱。
+6. 心跳每 15 秒（文字 `ping`，由 runtime 自動回 `pong`，不喚醒 DO；每 15 秒的 alarm 讀 `getWebSocketAutoResponseTimestamp` 檢查，45 秒沒心跳就關 socket 並移除成員）；A4 起：socket 關閉但沒有先送 `leave`（重新整理、斷網、心跳逾時）時，RoomDO 保留成員 60 秒並標示「重新連線中」；回來後以同一 session token 接回（B1 起重新發布與訂閱），超過 60 秒由 alarm 移除；送 `leave` 立即移除。成員與 session 存在 DO storage。
 7. 最後一人離開 10 分鐘後，`alarm()` 清房間（持久房間除外）。
 
 ## 5. 安全邊界

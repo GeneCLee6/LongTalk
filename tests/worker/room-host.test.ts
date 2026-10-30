@@ -2,14 +2,17 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { applyPatch } from '../../shared/patch.ts'
 import {
   CloseCode,
+  JOIN_TIMEOUT_MS,
   MAX_MEMBERS,
+  MAX_PENDING_SOCKETS,
   PROTOCOL_VERSION,
+  RECONNECT_GRACE_MS,
   STALE_AFTER_MS,
   viewAsJson,
   type RoomView,
   type ServerMessage,
 } from '../../shared/protocol.ts'
-import { RoomHost } from '../../worker/room-host.ts'
+import { RoomHost, type SessionRecord } from '../../worker/room-host.ts'
 
 const V = String(PROTOCOL_VERSION)
 const ROOM = { id: 'abcdefghij', createdAt: 1000 }
@@ -34,16 +37,17 @@ class FakeClient {
   }
 }
 
-function setup(idPrefix = 'm') {
+function setup(prefix = 'm') {
   let clock = 10_000
   let nextId = 0
+  let nextConn = 0
   const clients = new Map<string, FakeClient>()
-  const saved = { room: null as unknown, rev: 0 }
+  const saved = { room: null as unknown, rev: 0, sessions: [] as SessionRecord[] }
   const host = new RoomHost({
     sockets: {
-      send: (id, message) => clients.get(id)?.receive(message),
-      close: (id, code, reason) => {
-        const client = clients.get(id)
+      send: (conn, message) => clients.get(conn)?.receive(message),
+      close: (conn, code, reason) => {
+        const client = clients.get(conn)
         if (client) client.closed = { code, reason }
       },
     },
@@ -54,23 +58,40 @@ function setup(idPrefix = 'm') {
       saveRev: (rev) => {
         saved.rev = rev
       },
+      saveSessions: (sessions) => {
+        saved.sessions = structuredClone(sessions)
+      },
     },
     now: () => clock,
-    newMemberId: () => `${idPrefix}${++nextId}`,
+    newMemberId: () => `${prefix}${++nextId}`,
+    // The same shape as a real token, or parseClientMessage drops it
+    newToken: () => `token-${prefix}${nextId}`.padEnd(43, '_'),
   })
-  /** Connects a browser the way RoomDO does: admit, accept the socket, then `connected` */
-  function join(): { id: string; client: FakeClient } {
+  /** Opens a socket the way RoomDO does: admit, accept, then `opened` */
+  function open(): { conn: string; client: FakeClient } {
     expect(host.admit(V)).toEqual({ ok: true })
-    const member = host.newMember()
+    const conn = `${prefix}c${++nextConn}`
     const client = new FakeClient()
-    clients.set(member.id, client)
-    host.connected(member)
-    return { id: member.id, client }
+    clients.set(conn, client)
+    host.opened(conn)
+    return { conn, client }
+  }
+  /** Opens a socket and joins on it; `id` and `token` are '' when it was not welcomed */
+  function join(name = 'Gene', token: string | null = null) {
+    const socket = open()
+    host.message(socket.conn, JSON.stringify({ t: 'join', name, token }))
+    const welcome = socket.client.received.find((message) => message.t === 'welcome')
+    return {
+      ...socket,
+      id: welcome?.t === 'welcome' ? welcome.you : '',
+      token: welcome?.t === 'welcome' ? welcome.token : '',
+    }
   }
   return {
     host,
     saved,
     clients,
+    open,
     join,
     tick: (ms: number) => {
       clock += ms
@@ -78,6 +99,13 @@ function setup(idPrefix = 'm') {
     now: () => clock,
   }
 }
+
+const member = (id: string, name: string, joinedAt: number, reconnecting = false) => ({
+  id,
+  name,
+  joinedAt,
+  reconnecting,
+})
 
 describe('RoomHost', () => {
   let t: ReturnType<typeof setup>
@@ -87,132 +115,280 @@ describe('RoomHost', () => {
 
   it('is created once and stored', () => {
     expect(t.host.exists).toBe(false)
+    expect(t.host.summary()).toBeNull()
     expect(t.host.create(ROOM)).toBe(true)
     expect(t.host.create({ ...ROOM, createdAt: 2 })).toBe(false)
     expect(t.saved.room).toEqual(ROOM)
     expect(t.host.view()).toEqual({ room: ROOM, members: {} })
+    expect(t.host.summary()).toEqual({ ...ROOM, memberCount: 0 })
   })
 
   it('refuses sockets to a room that was never created, of another version, or when full', () => {
     expect(t.host.admit(V)).toMatchObject({ ok: false, code: CloseCode.roomNotFound })
     t.host.create(ROOM)
     expect(t.host.admit(null)).toMatchObject({ ok: false, code: CloseCode.versionMismatch })
-    expect(t.host.admit('0')).toMatchObject({ ok: false, code: CloseCode.versionMismatch })
-    for (let i = 0; i < MAX_MEMBERS; i++) t.join()
+    expect(t.host.admit('1')).toMatchObject({ ok: false, code: CloseCode.versionMismatch })
+    for (let i = 0; i < MAX_MEMBERS + MAX_PENDING_SOCKETS; i++) t.open()
     expect(t.host.admit(V)).toMatchObject({ ok: false, code: CloseCode.roomFull })
+  })
+
+  it('makes a member only on join, and welcomes it with its session token', () => {
+    t.host.create(ROOM)
+    const socket = t.open()
+    expect(t.host.memberCount).toBe(0)
+    expect(socket.client.received).toEqual([])
+    t.host.message(socket.conn, JSON.stringify({ t: 'join', name: '  小潔  ', token: null }))
+    expect(socket.client.received).toEqual([
+      {
+        t: 'welcome',
+        v: PROTOCOL_VERSION,
+        you: 'm1',
+        token: 'token-m1'.padEnd(43, '_'),
+        rev: 1,
+        state: { room: ROOM, members: { m1: member('m1', '小潔', t.now()) } },
+      },
+    ])
+    expect(t.host.summary()).toMatchObject({ memberCount: 1 })
   })
 
   it('welcomes a newcomer with the whole room and patches everyone else', () => {
     t.host.create(ROOM)
-    const a = t.join()
-    expect(a.client.received).toEqual([
-      {
-        t: 'welcome',
-        v: PROTOCOL_VERSION,
-        you: a.id,
-        rev: 1,
-        state: { room: ROOM, members: { [a.id]: { id: a.id, joinedAt: t.now() } } },
-      },
-    ])
+    const a = t.join('Gene')
     t.tick(5)
-    const b = t.join()
-    // a gets only the new member, not the whole room
+    const b = t.join('小潔')
     expect(a.client.received[1]).toEqual({
       t: 'patch',
       rev: 2,
-      ops: [{ op: 'set', path: ['members', b.id], value: { id: b.id, joinedAt: t.now() } }],
+      ops: [{ op: 'set', path: ['members', b.id], value: member(b.id, '小潔', t.now()) }],
     })
     expect(b.client.received).toHaveLength(1)
     expect(b.client.received[0]).toMatchObject({ t: 'welcome', you: b.id, rev: 2 })
     expect(a.client.view).toEqual(b.client.view)
-    expect(Object.keys(b.client.view!.members)).toEqual([a.id, b.id])
     expect(t.saved.rev).toBe(2)
   })
 
-  it('tells everyone when a member leaves, and ignores a second close', () => {
+  it('never puts a session token in the view or a patch', () => {
     t.host.create(ROOM)
-    const a = t.join()
-    const b = t.join()
-    t.host.disconnected(b.id)
-    t.host.disconnected(b.id)
-    expect(a.client.received.at(-1)).toEqual({
-      t: 'patch',
-      rev: 3,
-      ops: [{ op: 'del', path: ['members', b.id] }],
-    })
-    expect(a.client.view).toEqual(t.host.view())
-    expect(t.host.memberCount).toBe(1)
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    const others = JSON.stringify([...a.client.received.slice(1), t.host.view()])
+    expect(others).not.toContain(a.token)
+    expect(others).not.toContain(b.token)
   })
 
-  it('keeps every member in step through joins and leaves', () => {
+  it('accepts only join before joining, and join only once', () => {
     t.host.create(ROOM)
-    const all = Array.from({ length: 5 }, () => t.join())
-    t.host.disconnected(all[1].id)
-    t.host.disconnected(all[3].id)
-    const late = t.join()
-    for (const { id, client } of [...all.filter((_, i) => i !== 1 && i !== 3), late]) {
-      expect(client.view, id).toEqual(t.host.view())
-    }
+    const socket = t.open()
+    t.host.message(socket.conn, '{"t":"resync"}')
+    t.host.message(socket.conn, '{"t":"join","name":"   "}')
+    expect(socket.client.received).toEqual([
+      { t: 'error', code: 'bad_message' },
+      { t: 'error', code: 'bad_message' },
+    ])
+    const a = t.join()
+    t.host.message(a.conn, '{"t":"join","name":"again","token":null}')
+    expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+    expect(t.host.memberCount).toBe(1)
   })
 
   it('answers resync with a snapshot and a bad message with an error', () => {
     t.host.create(ROOM)
     const a = t.join()
-    t.host.message(a.id, '{"t":"resync"}')
+    t.host.message(a.conn, '{"t":"resync"}')
     expect(a.client.received.at(-1)).toEqual({ t: 'snapshot', rev: 1, state: t.host.view() })
-    t.host.message(a.id, '{"t":"nope"}')
+    t.host.message(a.conn, '{"t":"nope"}')
     expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
     const count = a.client.received.length
-    t.host.message(a.id, 'ping')
+    t.host.message(a.conn, 'ping')
     t.host.message('ghost', '{"t":"resync"}')
     expect(a.client.received).toHaveLength(count)
   })
 
-  it('drops members whose heartbeat stopped and closes their sockets', () => {
+  it('keeps a dropped member as reconnecting and gives it back to the same token', () => {
     t.host.create(ROOM)
-    const a = t.join()
-    const b = t.join()
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    const joinedAt = t.now()
+    t.host.closed(b.conn)
+    t.host.closed(b.conn)
+    expect(a.client.received.at(-1)).toEqual({
+      t: 'patch',
+      rev: 3,
+      ops: [{ op: 'set', path: ['members', b.id, 'reconnecting'], value: true }],
+    })
+    expect(t.host.memberCount).toBe(2)
+    // The page reloads within the grace window: same member and token; the name may change
+    t.tick(RECONNECT_GRACE_MS - 1000)
+    const again = t.join('小潔 Chen', b.token)
+    expect(again.id).toBe(b.id)
+    expect(again.token).toBe(b.token)
+    expect(a.client.view!.members[b.id]).toEqual(member(b.id, '小潔 Chen', joinedAt))
+    expect(Object.keys(a.client.view!.members)).toEqual([a.id, b.id])
+    expect(again.client.view).toEqual(a.client.view)
+  })
+
+  it('removes a reconnecting member once the grace window is over', () => {
+    t.host.create(ROOM)
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.closed(b.conn)
+    t.tick(RECONNECT_GRACE_MS)
+    t.host.heartbeat(a.conn, t.now())
+    expect(t.host.sweep()).toBe(0)
+    t.tick(1)
+    expect(t.host.sweep()).toBe(1)
+    expect(Object.keys(a.client.view!.members)).toEqual([a.id])
+    // Its token now makes a new member
+    const late = t.join('小潔', b.token)
+    expect(late.id).not.toBe(b.id)
+    expect(late.token).not.toBe(b.token)
+  })
+
+  it('removes a member that leaves on purpose at once, and forgets its token', () => {
+    t.host.create(ROOM)
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.message(b.conn, '{"t":"leave"}')
+    expect(b.client.closed).toEqual({ code: 1000, reason: 'left' })
+    expect(a.client.received.at(-1)).toEqual({
+      t: 'patch',
+      rev: 3,
+      ops: [{ op: 'del', path: ['members', b.id] }],
+    })
+    // The close that follows the leave changes nothing
+    t.host.closed(b.conn)
+    expect(a.client.received.at(-1)).toMatchObject({ rev: 3 })
+    expect(t.join('小潔', b.token).id).not.toBe(b.id)
+  })
+
+  it('moves a session to the newest socket and closes the old one', () => {
+    t.host.create(ROOM)
+    const a = t.join('Gene')
+    const tab = t.join('Gene', a.token)
+    expect(tab.id).toBe(a.id)
+    expect(a.client.closed).toEqual({ code: CloseCode.replaced, reason: 'session taken over' })
+    expect(t.host.memberCount).toBe(1)
+    // The old socket's late close does not mark the member as reconnecting
+    t.host.closed(a.conn)
+    expect(t.host.view().members[a.id].reconnecting).toBe(false)
+  })
+
+  it('lets a known member back into a full room, but not a new one', () => {
+    t.host.create(ROOM)
+    const all = Array.from({ length: MAX_MEMBERS }, (_, i) => t.join(`p${i}`))
+    t.host.closed(all[0].conn)
+    const stranger = t.join('stranger')
+    expect(stranger.id).toBe('')
+    expect(stranger.client.closed).toMatchObject({ code: CloseCode.roomFull })
+    expect(t.join('p0', all[0].token).id).toBe(all[0].id)
+  })
+
+  it('keeps every member in step through joins, drops and leaves', () => {
+    t.host.create(ROOM)
+    const all = Array.from({ length: 5 }, (_, i) => t.join(`p${i}`))
+    t.host.closed(all[1].conn)
+    t.host.message(all[3].conn, '{"t":"leave"}')
+    const late = t.join('late')
+    const back = t.join('p1', all[1].token)
+    for (const { conn, client } of [all[0], all[2], all[4], late, back]) {
+      expect(client.view, conn).toEqual(t.host.view())
+    }
+  })
+
+  it('closes sockets that never join', () => {
+    t.host.create(ROOM)
+    const idle = t.open()
+    t.tick(JOIN_TIMEOUT_MS + 1)
+    expect(t.host.sweep()).toBe(1)
+    expect(idle.client.closed).toEqual({ code: CloseCode.stale, reason: 'no join' })
+    expect(t.host.active).toBe(false)
+  })
+
+  it('closes silent sockets and lets their members reconnect', () => {
+    t.host.create(ROOM)
+    const a = t.join('Gene')
+    const b = t.join('小潔')
     t.tick(STALE_AFTER_MS - 1000)
-    t.host.heartbeat(a.id, t.now())
+    t.host.heartbeat(a.conn, t.now())
     t.tick(2000)
     expect(t.host.sweep()).toBe(1)
     expect(b.client.closed).toEqual({ code: CloseCode.stale, reason: 'heartbeat timeout' })
     expect(a.client.closed).toBeNull()
-    expect(Object.keys(a.client.view!.members)).toEqual([a.id])
+    expect(a.client.view!.members[b.id].reconnecting).toBe(true)
     // A message counts as a heartbeat too
     t.tick(STALE_AFTER_MS - 1000)
-    t.host.message(a.id, 'ping')
+    t.host.message(a.conn, 'ping')
     t.tick(2000)
     expect(t.host.sweep()).toBe(0)
+    expect(t.join('小潔', b.token).id).toBe(b.id)
   })
 
   it('never moves a heartbeat backwards', () => {
     t.host.create(ROOM)
     const a = t.join()
     t.tick(STALE_AFTER_MS)
-    t.host.heartbeat(a.id, t.now())
-    t.host.heartbeat(a.id, 0)
+    t.host.heartbeat(a.conn, t.now())
+    t.host.heartbeat(a.conn, 0)
     t.tick(1000)
     expect(t.host.sweep()).toBe(0)
   })
 
-  it('comes back from hibernation with the same view and rev', () => {
+  it('stores the sessions on every change', () => {
     t.host.create(ROOM)
-    const a = t.join()
-    t.join()
+    const a = t.join('Gene')
+    expect(t.saved.sessions).toEqual([
+      { token: a.token, member: member(a.id, 'Gene', t.now()), conn: a.conn, awaySince: null },
+    ])
+    t.tick(10)
+    t.host.closed(a.conn)
+    expect(t.saved.sessions).toEqual([
+      {
+        token: a.token,
+        member: member(a.id, 'Gene', t.now() - 10, true),
+        conn: null,
+        awaySince: t.now(),
+      },
+    ])
+  })
+
+  it('comes back from hibernation with the same view, rev and sessions', () => {
+    t.host.create(ROOM)
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.closed(b.conn)
     const view = t.host.view()
     const woken = setup('w')
-    woken.host.restore(ROOM, t.saved.rev, Object.values(view.members))
+    woken.host.restore(ROOM, t.saved.rev, t.saved.sessions, [{ conn: a.conn, openedAt: 0 }])
     expect(woken.host.view()).toEqual(view)
+    woken.clients.set(a.conn, a.client)
     // The next change continues the same numbering, so a's copy stays valid
-    woken.clients.set(a.id, a.client)
-    const c = woken.join()
+    const back = woken.join('小潔', b.token)
+    expect(back.id).toBe(b.id)
+    expect(back.client.received[0]).toMatchObject({ rev: 4 })
     expect(a.client.view).toEqual(woken.host.view())
-    expect(c.client.received[0]).toMatchObject({ rev: 3 })
+    expect(a.client.view!.members[b.id].reconnecting).toBe(false)
+  })
+
+  it('marks a stored member whose socket is gone as reconnecting when it wakes up', () => {
+    t.host.create(ROOM)
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    const woken = setup('w')
+    woken.clients.set(a.conn, a.client)
+    woken.host.restore(ROOM, t.saved.rev, t.saved.sessions, [{ conn: a.conn, openedAt: 0 }])
+    expect(a.client.received.at(-1)).toEqual({
+      t: 'patch',
+      rev: 3,
+      ops: [{ op: 'set', path: ['members', b.id, 'reconnecting'], value: true }],
+    })
+    woken.tick(RECONNECT_GRACE_MS + 1)
+    woken.host.heartbeat(a.conn, woken.now())
+    expect(woken.host.sweep()).toBe(1)
+    expect(Object.keys(a.client.view!.members)).toEqual([a.id])
   })
 
   it('restores a room that was never created as not existing', () => {
-    t.host.restore(null, 0, [])
+    t.host.restore(null, 0, [], [])
     expect(t.host.exists).toBe(false)
     expect(t.host.admit(V)).toMatchObject({ code: CloseCode.roomNotFound })
   })

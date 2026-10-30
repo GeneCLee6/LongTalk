@@ -11,7 +11,8 @@ import {
   type RoomView,
 } from '../../shared/protocol.ts'
 
-export type RoomStatus = 'connecting' | 'open' | 'closed' | 'notFound' | 'full' | 'outdated'
+export type RoomStatus =
+  'connecting' | 'open' | 'closed' | 'notFound' | 'full' | 'outdated' | 'replaced'
 
 export interface RoomConnectionState {
   status: RoomStatus
@@ -30,10 +31,18 @@ export interface SocketLike {
   onclose: ((event: CloseEvent) => void) | null
 }
 
+/** Who joins: the name from the pre-join screen and the token from last time, if any */
+export interface JoinAs {
+  name: string
+  token: string | null
+}
+
 export interface RoomConnectionOptions {
   createSocket?: (url: string) => SocketLike
   /** Defaults to the page's origin with ws: or wss: */
   origin?: string
+  /** Called with the session token every welcome carries, to remember it across a reload */
+  onToken?: (token: string) => void
 }
 
 const OPEN = 1
@@ -46,30 +55,39 @@ function statusForClose(code: number): RoomStatus {
       return 'full'
     case CloseCode.versionMismatch:
       return 'outdated'
+    case CloseCode.replaced:
+      return 'replaced'
     default:
       return 'closed'
   }
 }
 
 /**
- * The browser's end of the room's WebSocket (shared/protocol.ts): keeps the room view up to date
- * from `welcome`, `patch` and `snapshot`, asks for a `snapshot` when a patch is missing, and
- * sends the heartbeat. Reconnecting is e2-t08 (B3); a closed connection stays closed.
+ * The browser's end of the room's WebSocket (shared/protocol.ts): joins with a name and the
+ * session token, keeps the room view up to date from `welcome`, `patch` and `snapshot`, asks for
+ * a `snapshot` when a patch is missing, and sends the heartbeat. Reconnecting on its own is
+ * e2-t08 (B3); a closed connection stays closed, and a page reload joins again with the token.
  */
 export class RoomConnection {
   private readonly url: string
   private readonly createSocket: (url: string) => SocketLike
+  private readonly onToken: (token: string) => void
+  private readonly name: string
+  private token: string | null
   private socket: SocketLike | null = null
   private heartbeat: ReturnType<typeof setInterval> | null = null
   private rev = -1
   private state: RoomConnectionState = { status: 'connecting', you: null, view: null }
   private readonly listeners = new Set<() => void>()
 
-  constructor(roomId: string, options: RoomConnectionOptions = {}) {
+  constructor(roomId: string, join: JoinAs, options: RoomConnectionOptions = {}) {
     const origin =
       options.origin ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`
     this.url = origin + roomSocketPath(roomId)
     this.createSocket = options.createSocket ?? ((url) => new WebSocket(url))
+    this.onToken = options.onToken ?? (() => {})
+    this.name = join.name
+    this.token = join.token
   }
 
   getState = (): RoomConnectionState => this.state
@@ -86,6 +104,7 @@ export class RoomConnection {
     const socket = this.createSocket(this.url)
     this.socket = socket
     socket.onopen = () => {
+      this.send({ t: 'join', name: this.name, token: this.token })
       this.heartbeat = setInterval(() => {
         if (socket.readyState === OPEN) socket.send(HEARTBEAT_PING)
       }, HEARTBEAT_INTERVAL_MS)
@@ -95,17 +114,23 @@ export class RoomConnection {
     }
     socket.onclose = (event) => {
       this.stopHeartbeat()
+      this.socket = null
       this.update({ ...this.state, status: statusForClose(event.code) })
     }
   }
 
-  stop(): void {
+  /**
+   * Closes the socket. With `leave`, tells the room first so the member is removed at once;
+   * without, the room keeps the member as reconnecting for a while (a page reload does this).
+   */
+  stop({ leave = false }: { leave?: boolean } = {}): void {
     this.stopHeartbeat()
     const socket = this.socket
     if (!socket) return
     this.socket = null
+    if (leave && socket.readyState === OPEN) socket.send(JSON.stringify({ t: 'leave' }))
     socket.onopen = socket.onmessage = socket.onclose = null
-    socket.close(1000, 'left')
+    socket.close(1000, leave ? 'left' : 'closed')
   }
 
   private receive(raw: string): void {
@@ -115,6 +140,8 @@ export class RoomConnection {
     switch (message.t) {
       case 'welcome':
         this.rev = message.rev
+        this.token = message.token
+        this.onToken(message.token)
         this.update({ status: 'open', you: message.you, view: message.state })
         return
       case 'snapshot':

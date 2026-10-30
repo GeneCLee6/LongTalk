@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { ROOM_ID_ALPHABET, ROOM_ID_LENGTH, isRoomId, newRoomId } from '../../shared/room-id.ts'
+import {
+  ROOM_ID_ALPHABET,
+  ROOM_ID_LENGTH,
+  isRoomId,
+  newRoomId,
+  parseRoomInput,
+} from '../../shared/room-id.ts'
 
 describe('room ids', () => {
   it('are 10 characters from a 58-character alphabet (about 59 bits)', () => {
@@ -51,5 +57,29 @@ describe('room ids', () => {
       expect(isRoomId(value)).toBe(false)
     }
     expect(isRoomId('abcdefghij')).toBe(true)
+  })
+
+  it('are found in what people paste into the join box', () => {
+    for (const input of [
+      'k7pq2x9m4a',
+      '  k7pq2x9m4a\n',
+      'https://longtalk.app/r/k7pq2x9m4a',
+      'https://pr-12.longtalk.workers.dev/r/k7pq2x9m4a?x=1#y',
+      'longtalk.app/r/k7pq2x9m4a/',
+      '/r/k7pq2x9m4a',
+      'r/k7pq2x9m4a',
+    ]) {
+      expect(parseRoomInput(input), input).toBe('k7pq2x9m4a')
+    }
+    for (const input of [
+      '',
+      'hello',
+      'k7pq2x9m4',
+      'k7pq2x9m40',
+      'https://x/room/k7pq2x9m4a',
+      'xr/k7pq2x9m4a',
+    ]) {
+      expect(parseRoomInput(input), input).toBeNull()
+    }
   })
 })
