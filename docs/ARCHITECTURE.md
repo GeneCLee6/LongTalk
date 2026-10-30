@@ -40,7 +40,7 @@
 | LiveKit Cloud | 功能最齊（simulcast、錄製 egress、SDK） | 免費額度較小、第二家供應商、帳號與計費另一套 | 後備；`MediaTransport` 介面保留可切換 |
 | 自架 LiveKit／mediasoup | 完全掌控、無限流量 | 要一台有公網 IP 的主機、要維運、要自己做 TURN | 不採用，除非流量超過免費額度且付費更貴 |
 
-**規則**：所有媒體相關的呼叫經過 `src/media/MediaTransport.ts` 介面（`connect`、`publish`、`subscribe`、`unpublish`、`setPreferredLayer`、`getStats`、`close`）。`CloudflareRealtimeTransport` 是第一個實作；介面的測試用假實作跑。
+**規則**：所有媒體相關的呼叫經過 `src/media/MediaTransport.ts` 介面（`connect`、`publish`、`unpublish`、`subscribe`、`unsubscribe`、`setPreferredLayer`、`getStats`、`on`、`close`）。`CloudflareRealtimeTransport` 是第一個實作；介面的測試用 `FakeTransport` 跑。**A2 定稿：決定、Realtime 實際端點、介面與切換條件見 [`adr-001-media-layer.md`](adr-001-media-layer.md)。**
 
 ## 4. 資料流：一個人進房
 

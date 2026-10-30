@@ -8,7 +8,8 @@ import { color, font } from '../styles/tokens.ts'
 
 export default function RoomPage() {
   const { roomId = '' } = useParams()
-  return <Main>{isRoomId(roomId) ? <Room roomId={roomId} /> : <NotFound />}</Main>
+  // The room is dark whatever the system scheme (DESIGN.md §1.2)
+  return <Main data-theme="dark">{isRoomId(roomId) ? <Room roomId={roomId} /> : <NotFound />}</Main>
 }
 
 function Room({ roomId }: { roomId: string }) {
@@ -54,7 +55,7 @@ const Main = styled.main`
   text-align: center;
   font-family: ${font.ui};
   background: ${color.bg};
-  color: ${color.text};
+  color: ${color.fg};
 
   a {
     color: ${color.brand};

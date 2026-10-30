@@ -75,7 +75,7 @@ depends_on: [E2]
 
 ### M0
 
-- [ ] `e4-t01` 設計 token（深淺色、字體、圓角、間距）、`GlobalStyle`、基礎元件（Button、IconButton、Menu、Toast）、`strings.ts` 骨架 · AC-4.8 · M · ← e11-t01
+- [x] `e4-t01` 設計 token（深淺色、字體、圓角、間距）、`GlobalStyle`、基礎元件（Button、IconButton、Menu、Toast）、`strings.ts` 骨架 · AC-4.8 · #4
 - [ ] `e4-t02` 首頁：建房、加入（解析連結或代碼）、標誌占位、效能預算腳本 · AC-4.1 · S · ← e4-t01, e1-t02
 - [ ] `e4-t03` 預先加入（簡版）：名字、鏡頭預覽、麥克風音量表、裝置選單、進房開關 · AC-4.2 · M · ← e4-t01, e2-t06
 - [ ] `e4-t04` 會議室殼與 `layout.ts` 格狀 1–8（純函式＋測試）、`Tile` 元件 · AC-4.3 · M · ← e4-t01, e2-t04
