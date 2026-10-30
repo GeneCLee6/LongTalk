@@ -54,7 +54,7 @@ depends_on: [E2]
 ## 設計方向
 
 - `src/ui/layout.ts`：純函式，輸入（成員數、分享數、釘選、聚光燈、容器尺寸、模式）輸出每格位置；有單元測試。
-- `tokens.ts` 色票：主色「長談藍綠」（見 `DESIGN.md`）；深色為會議室預設（視訊畫面在深底上好看），淺色給首頁與設定。
+- `tokens.ts` 色票：主色「LongTalk 藍綠」（見 `DESIGN.md`）；深色為會議室預設（視訊畫面在深底上好看），淺色給首頁與設定。
 - 元件：`Tile`、`Nameplate`、`Toolbar`、`SidePanel`、`TopBar`、`PreJoin`、`Home`、`Left`。
 - 講話外框用 Web Audio `AnalyserNode` 在本機算自己的，別人的由 E2 的 audio level 統計。
 
