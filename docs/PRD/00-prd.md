@@ -1,11 +1,11 @@
 ---
-title: PRD — LongTalk · 長談（總 PRD）
+title: PRD — LongTalk（總 PRD）
 date: 2026-10-28
 status: draft
 owner: GeneCLee6
 ---
 
-# PRD — LongTalk · 長談
+# PRD — LongTalk
 
 > 這是產品的總 PRD：願景、範圍、功能需求（F）、驗收條件總表、里程碑與風險。每個 epic 的細節、AC 與 task 拆分在同一個資料夾的 `e*.md`，**勾選狀態以 epic 文件為準**。資料夾的閱讀方式與 task 格式見 [`README.md`](README.md)，Zoom 與其他競品的分析見 [`01-competitive-analysis.md`](01-competitive-analysis.md)，為什麼是這三層（而不是幾千份 PRD）見 [`../PLANNING-METHOD.md`](../PLANNING-METHOD.md)。
 
@@ -223,8 +223,8 @@ AC 編號是 `AC-<epic>.<序號>`；勾選狀態與完整文字以各 epic 為�
 
 ## 14. 未決問題（跨 epic）
 
-- [ ] **Q:** 產品名稱定為「長談 · LongTalk」？備選：「恆室 · EverRoom」「不斷 · Nonstop」。（E4 品牌，標誌在 `docs/design/logo/`）
-      **A:** _(unanswered)_
+- [x] **Q:** 產品名稱定為什麼？原候選「長談 · LongTalk」，備選「恆室 · EverRoom」「不斷 · Nonstop」。（E4 品牌，標誌在 `docs/design/logo/`）
+      **A:** 2026-10-30 擁有者拍板：名稱是「LongTalk」，只用英文，不取中文名；標誌與介面都只寫「LongTalk」，標誌標語改英文「The meeting room that never cuts out」。中文候選名「長談」不用。
 - [ ] **Q:** 媒體層第一選擇 Cloudflare Realtime SFU，還是自架 LiveKit？（E2 `e2-t01` 決策紀錄）
       **A:** _(建議 Cloudflare Realtime，理由見 `ARCHITECTURE.md` §3；未拍板)_
 - [ ] **Q:** M1 的帳號要不要和淡江牌桌共用 Worker 與帳號系統？（E1 AC-1.6）

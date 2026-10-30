@@ -1,4 +1,4 @@
-# CLAUDE.md — LongTalk · 長談
+# CLAUDE.md — LongTalk
 
 給 Claude Code 的專案說明。**目前只有規劃文件，沒有程式碼**（2026-10-28）。動工後 A1 批會補 `RULES.md`、`ARCHITECTURE.md` 改為現況、`DEPLOY.md`。
 

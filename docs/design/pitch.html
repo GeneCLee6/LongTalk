@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>長談 LongTalk</title>
+<title>LongTalk</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Manrope:wght@500;700;800&display=swap">
 <style>
@@ -35,8 +35,7 @@ h2{font-size:clamp(24px,3.4vw,34px);font-weight:900;margin-bottom:18px}
 /* hero */
 .hero{display:grid;gap:28px;padding-block:48px 56px}
 .brand{display:flex;align-items:center;gap:12px}
-.brand .name{font-weight:900;font-size:22px;letter-spacing:3px}
-.brand .en{font-family:var(--latin);font-weight:700;color:var(--primary);letter-spacing:.5px}
+.brand .name{font-family:var(--latin);font-weight:800;font-size:24px;letter-spacing:-.3px}
 .hero h1{font-size:clamp(34px,6vw,60px);font-weight:900;letter-spacing:1px;max-width:14em}
 .hero .lead{font-size:19px}
 .timer{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:100%}
@@ -128,13 +127,13 @@ td.us,th.us{background:var(--primary-soft);font-weight:700}
 <section class="hero">
   <div class="brand">
     <svg width="40" height="40" viewBox="0 0 64 64" aria-hidden="true"><path d="M32 32C32 21 20.5 17 14 24.5S12 44 20 44c5.5 0 9.5-4.5 12-12 2.5-7.5 6.5-12 12-12 8 0 11 12 6 19.5S32 43 32 32z" fill="none" stroke="var(--primary)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 43.5 11 52l10.5-5.5z" fill="var(--primary)"/><path d="M47 20.5 53 12l-10.5 5.5z" fill="var(--primary)"/></svg>
-    <span class="name">長談</span><span class="en">LongTalk</span>
+    <span class="name">LongTalk</span>
   </div>
   <h1>開著就不會斷的會議室。</h1>
   <p class="lead">給朋友用的線上會議室：貼一個連結就能進來，有麥克風、視訊、螢幕分享、聊天。沒有 40 分鐘限制、不用裝 App、不用註冊。</p>
   <div class="timer" aria-label="計時器對照">
     <div class="clock zoom"><span class="lbl">ZOOM 免費版</span><span class="num">40:00</span><span class="cap">時間到，全員被踢出。重開、重貼連結、重等人進來。</span></div>
-    <div class="clock us"><span class="lbl">長談</span><span class="num" id="clock">02:47:13</span><span class="cap">計時器只會一直走。房間在最後一個人離開後才關。</span></div>
+    <div class="clock us"><span class="lbl">LongTalk</span><span class="num" id="clock">02:47:13</span><span class="cap">計時器只會一直走。房間在最後一個人離開後才關。</span></div>
   </div>
 </section>
 
@@ -169,7 +168,7 @@ td.us,th.us{background:var(--primary-soft);font-weight:700}
   <h2>和現有選項比</h2>
   <div class="tbl">
     <table>
-      <thead><tr><th></th><th>Zoom 免費</th><th>Google Meet</th><th>Jitsi Meet</th><th>Discord</th><th class="us">長談</th></tr></thead>
+      <thead><tr><th></th><th>Zoom 免費</th><th>Google Meet</th><th>Jitsi Meet</th><th>Discord</th><th class="us">LongTalk</th></tr></thead>
       <tbody>
         <tr><td>團體會議時限</td><td class="pay">40 分</td><td class="pay">60 分</td><td>無</td><td>無</td><td class="us">無</td></tr>
         <tr><td>訪客免帳號、免安裝</td><td>部分</td><td class="no">要 Google 帳號</td><td>是</td><td class="no">要帳號</td><td class="us">是</td></tr>
@@ -242,7 +241,7 @@ td.us,th.us{background:var(--primary-soft);font-weight:700}
     <div class="st"><b>130</b><span>個 task，一個 ≈ 一個 PR</span></div>
     <div class="st"><b>58</b><span>批，一批 ≈ 一個 AI session</span></div>
   </div>
-  <p class="foot">2026-10-28 規劃完成，下一批是 A1（repo 與部署），關鍵的一批是 A2（媒體層驗證）。產品名稱「長談 · LongTalk」待拍板。文件：docs/PRD、docs/ROADMAP.md、docs/ARCHITECTURE.md。</p>
+  <p class="foot">2026-10-28 規劃完成，下一批是 A1（repo 與部署），關鍵的一批是 A2（媒體層驗證）。產品名稱定為「LongTalk」（2026-10-30）。文件：docs/PRD、docs/ROADMAP.md、docs/ARCHITECTURE.md。</p>
 </section>
 
 </div>

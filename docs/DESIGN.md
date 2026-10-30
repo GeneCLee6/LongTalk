@@ -93,6 +93,7 @@
 
 ## 7. 品牌
 
-- 名稱：長談 · LongTalk（待拍板，`PRD/00-prd.md` §14）。一句話：「開著就不會斷的會議室」／英文「The room that stays open.」
+- 名稱：**LongTalk**，只用英文，沒有中文名（2026-10-30 定案，`PRD/00-prd.md` §14）。標誌、介面、`<title>`、PWA 名稱一律寫「LongTalk」。
+- 標語（標誌內）：英文「The meeting room that never cuts out」。中文介紹文案可寫「開著就不會斷的會議室」，但不和標誌組在一起。
 - 標誌：兩個對話泡泡交織成無限符號 ∞，意思是「說不完的話」。主色藍綠，深色模式自動換亮綠。檔案：`logo.svg`（圖＋字）、`logo-mark.svg`（單圖）、`favicon.svg`、`icon-maskable.svg`。
-- 字標：「長談」粗體 ＋「LongTalk」細字。
+- 字標：只有拉丁字「LongTalk」，粗體（700），字體 `'Inter', system-ui, sans-serif`，不需要中文字型；標語用同字體 400、次要文字色。
