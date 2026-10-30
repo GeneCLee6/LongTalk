@@ -25,7 +25,7 @@ worktree 開分支、只讀需要的段落、lint+typecheck+test+build 只看最
 
 | 批 | Task | 內容 | 前提 |
 | --- | --- | --- | --- |
-| [ ] A1 | `e11-t01` `e11-t02` | repo 骨架（Vite／React／TS、worker、shared、wrangler、Vitest、oxlint、CLAUDE.md）、CI 與 Pages／Workers 部署、`DEPLOY.md` | — |
+| [x] A1 #2 | `e11-t01` `e11-t02` | repo 骨架（Vite／React／TS、worker、shared、wrangler、Vitest、oxlint、CLAUDE.md）、CI 與 Workers 部署（含 PR 預覽）、`DEPLOY.md` | — |
 | [ ] A2 | `e2-t01` `e4-t01` | **ADR 媒體層**（Cloudflare Realtime spike：兩個瀏覽器互通的最小範例）、`MediaTransport` 介面定稿；設計 token、基礎元件、`strings.ts` 骨架 | A1 |
 | [ ] A3 | `e2-t02` `e1-t01` `e1-t02` | RoomDO 訊號骨架（WebSocket、成員、心跳、差異推送、`shared/protocol.ts`）、Room 模型與短 id、建房 API 與首頁按鈕 | A1 |
 | [ ] A4 | `e1-t03` `e4-t02` `e4-t03` | 訪客加入（名字、session token、重新整理接回）、首頁、預先加入簡版（鏡頭預覽、音量表、裝置選單） | A2, A3 |

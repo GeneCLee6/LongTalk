@@ -2,7 +2,7 @@
 
 **一間開著就不會斷的會議室。** 瀏覽器開會：音訊、視訊、螢幕分享、聊天，沒有 40 分鐘限制、不用裝 App、不用註冊。之後加畫筆標註、白板、雲端錄影、AI 摘要、遠端控制。
 
-目前狀態：**規劃完成，尚未動工**（2026-10-28）。
+目前狀態：**A1 完成**（2026-10-30）：骨架、CI、部署 workflow。下一批 A2（媒體層 spike）與 A3（房間訊號）。
 
 ## 文件
 
@@ -23,7 +23,7 @@
 
 ## 技術（規劃）
 
-React 19 ＋ TypeScript ＋ Vite；Cloudflare Pages、Workers、Durable Objects、D1、R2；Cloudflare Realtime SFU ＋ TURN（後備 LiveKit）；Tauri 桌面端代理（遠端控制，M3）。
+React 19 ＋ TypeScript ＋ Vite；Cloudflare Workers（帶靜態資產）、Durable Objects、D1、R2；Cloudflare Realtime SFU ＋ TURN（後備 LiveKit）；Tauri 桌面端代理（遠端控制，M3）。
 
 ## 開工
 

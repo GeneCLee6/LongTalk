@@ -1,0 +1,64 @@
+name: Deploy
+
+# After CI passes on main, build and deploy the Worker (API, Durable Objects and the React app) to
+# Cloudflare, then check that the site serves this commit. Skipped, with a notice, until the
+# CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets are set (DEPLOY.md §1).
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # The merged commit (GitHub's own GITHUB_SHA cannot be overridden)
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Check for Cloudflare credentials
+        id: creds
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::notice::Cloudflare secrets are not set; skipping deployment (see DEPLOY.md §1)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.creds.outputs.ready == 'true'
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - uses: actions/setup-node@v7
+        if: steps.creds.outputs.ready == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install, build and deploy
+        if: steps.creds.outputs.ready == 'true'
+        id: deploy
+        run: |
+          npm ci
+          APP_VERSION="$DEPLOY_SHA" npm run build
+          npx wrangler deploy --var "APP_VERSION:$DEPLOY_SHA" --message "$DEPLOY_SHA" | tee deploy.log
+          url=$(grep -o 'https://[^ ]*workers.dev' deploy.log | head -1)
+          [ -n "$url" ] || { echo "::error::wrangler deploy printed no workers.dev URL"; exit 1; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          SITE_URL: ${{ steps.deploy.outputs.url }}
+        run: ./scripts/smoke.sh "$SITE_URL" "$DEPLOY_SHA"

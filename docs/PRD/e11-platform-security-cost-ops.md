@@ -44,7 +44,7 @@ depends_on: []
 
 ## 驗收條件
 
-- [ ] AC-11.1 — Pages＋Workers＋DO 部署；preview 與 production；合併 `main` 自動上線；`DEPLOY.md`。
+- [ ] AC-11.1 — Workers（帶靜態資產）＋DO 部署；preview 與 production；合併 `main` 自動上線；`DEPLOY.md`。
 - [ ] AC-11.2 — CI：lint、typecheck、test、build、budget 全綠才可合併；M1 加視覺回歸與 Lighthouse。
 - [ ] AC-11.3 — 進房成功率、失敗原因、重連、TURN 比例、評分可在 `/admin` 看；錯誤有告警。
 - [ ] AC-11.4 — 成本儀表板：各項用量與預估費用、月預算、自動降級可演練、告警。
@@ -59,8 +59,8 @@ depends_on: []
 
 ### M0
 
-- [ ] `e11-t01` repo 骨架：Vite／React／TS、`worker/`、`shared/`、wrangler、Vitest、oxlint、`CLAUDE.md`／`RULES.md` · AC-11.1 · M
-- [ ] `e11-t02` CI（lint、typecheck、test、build、budget）、Pages 預覽與 production 部署、`DEPLOY.md` · AC-11.1, AC-11.2 · M · ← e11-t01
+- [x] `e11-t01` repo 骨架：Vite／React／TS、`worker/`、`shared/`、wrangler、Vitest、oxlint、`CLAUDE.md`／`RULES.md` · AC-11.1 · #2
+- [x] `e11-t02` CI（lint、typecheck、test、build、budget）、PR 預覽 Worker 與 production 部署、`DEPLOY.md` · AC-11.1, AC-11.2 · #2
 - [ ] `e11-t03` 最小遙測：事件 API、Analytics Engine、錯誤回報、`/admin` 骨架 · AC-11.3 · M · ← e11-t02
 - [ ] `e11-t04` `BROWSER-SUPPORT.md` 初版與 `capabilities.ts` · AC-11.6 · S · ← e11-t01
 

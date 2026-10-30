@@ -1,0 +1,122 @@
+name: Preview
+
+# Every pull request from this repository gets its own Worker, longtalk-pr-<number>, with its own
+# Durable Object storage (never production's rooms). The link is left as a comment on the pull
+# request, and the Worker is deleted when the pull request closes (DEPLOY.md §2).
+#
+# Why a Worker per pull request and not `wrangler versions upload`: a version of the production
+# Worker shares its Durable Object namespace, so a preview would run on production's data, and
+# Cloudflare gives no preview URLs to Workers that implement a Durable Object.
+#
+# Skipped (with a notice, never a failure) when the secrets are not set, and for pull requests from
+# forks and Dependabot, which GitHub gives no secrets.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, closed]
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  # A newer push replaces a running deploy; the clean-up after closing waits for it instead
+  cancel-in-progress: ${{ github.event.action != 'closed' }}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  WORKER: longtalk-pr-${{ github.event.pull_request.number }}
+  PR: ${{ github.event.pull_request.number }}
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      FROM_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+    steps:
+      - name: Check for Cloudflare credentials
+        id: creds
+        run: |
+          if [ "$FROM_FORK" = "true" ]; then
+            echo "::notice::Pull request from a fork: no preview (forks never get the deploy secrets)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::notice::Cloudflare secrets are not set; skipping the preview (see DEPLOY.md §1)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.creds.outputs.ready == 'true'
+        with:
+          ref: ${{ env.HEAD_SHA }}
+
+      - uses: actions/setup-node@v7
+        if: steps.creds.outputs.ready == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Build and deploy the preview Worker
+        if: steps.creds.outputs.ready == 'true'
+        id: deploy
+        run: |
+          npm ci
+          CLOUDFLARE_ENV=preview APP_VERSION="$HEAD_SHA" npm run build
+          npx wrangler deploy --name "$WORKER" --var "APP_VERSION:$HEAD_SHA" --message "PR #$PR $HEAD_SHA" | tee deploy.log
+          echo "url=$(grep -o 'https://[^ ]*workers.dev' deploy.log | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          SITE_URL: ${{ steps.deploy.outputs.url }}
+        run: ./scripts/smoke.sh "$SITE_URL" "$HEAD_SHA"
+
+      - name: Comment the link on the pull request
+        if: steps.creds.outputs.ready == 'true' && steps.deploy.outputs.url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SITE_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          marker='<!-- longtalk-preview -->'
+          {
+            echo "$marker"
+            echo "**預覽部署**：$SITE_URL"
+            echo
+            echo "- commit：\`$HEAD_SHA\`"
+            echo "- 獨立的 Worker（\`$WORKER\`）與房間資料，不會動到正式站；PR 關閉時自動刪除"
+          } > comment.md
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comment.md > /dev/null
+          else
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
+          fi
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Delete the preview Worker and its data
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::notice::Cloudflare secrets are not set; nothing to delete"
+            exit 0
+          fi
+          # Only ever a PR Worker: the name is built from the pull request number above
+          case "$WORKER" in longtalk-pr-[0-9]*) ;; *) echo "::error::Refusing to delete $WORKER"; exit 1 ;; esac
+          # Outside the repository, so wrangler reads no config and deletes exactly this name
+          cd "$RUNNER_TEMP"
+          if npx --yes wrangler@4 delete --name "$WORKER" --force; then
+            echo "Deleted $WORKER"
+          else
+            echo "::notice::$WORKER could not be deleted (it may never have been deployed)"
+          fi
