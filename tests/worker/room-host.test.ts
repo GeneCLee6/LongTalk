@@ -12,7 +12,13 @@ import {
   type RoomView,
   type ServerMessage,
 } from '../../shared/protocol.ts'
-import { RoomHost, type SessionRecord } from '../../worker/room-host.ts'
+import { ASSUMED_BITRATE, MAX_REPORTED_BITRATE } from '../../shared/usage.ts'
+import {
+  MAX_USAGE_GAP_MS,
+  RoomHost,
+  type SessionRecord,
+  type UsageCursor,
+} from '../../worker/room-host.ts'
 
 const V = String(PROTOCOL_VERSION)
 const ROOM = { id: 'abcdefghij', createdAt: 1000 }
@@ -42,7 +48,12 @@ function setup(prefix = 'm') {
   let nextId = 0
   let nextConn = 0
   const clients = new Map<string, FakeClient>()
-  const saved = { room: null as unknown, rev: 0, sessions: [] as SessionRecord[] }
+  const saved = {
+    room: null as unknown,
+    rev: 0,
+    sessions: [] as SessionRecord[],
+    usage: null as UsageCursor | null,
+  }
   const host = new RoomHost({
     sockets: {
       send: (conn, message) => clients.get(conn)?.receive(message),
@@ -60,6 +71,9 @@ function setup(prefix = 'm') {
       },
       saveSessions: (sessions) => {
         saved.sessions = structuredClone(sessions)
+      },
+      saveUsage: (usage) => {
+        saved.usage = usage
       },
     },
     now: () => clock,
@@ -105,6 +119,7 @@ const member = (id: string, name: string, joinedAt: number, reconnecting = false
   name,
   joinedAt,
   reconnecting,
+  tracks: [],
 })
 
 describe('RoomHost', () => {
@@ -119,7 +134,7 @@ describe('RoomHost', () => {
     expect(t.host.create(ROOM)).toBe(true)
     expect(t.host.create({ ...ROOM, createdAt: 2 })).toBe(false)
     expect(t.saved.room).toEqual(ROOM)
-    expect(t.host.view()).toEqual({ room: ROOM, members: {} })
+    expect(t.host.view()).toEqual({ room: ROOM, members: {}, usage: 'normal' })
     expect(t.host.summary()).toEqual({ ...ROOM, memberCount: 0 })
   })
 
@@ -145,7 +160,7 @@ describe('RoomHost', () => {
         you: 'm1',
         token: 'token-m1'.padEnd(43, '_'),
         rev: 1,
-        state: { room: ROOM, members: { m1: member('m1', '小潔', t.now()) } },
+        state: { room: ROOM, members: { m1: member('m1', '小潔', t.now()) }, usage: 'normal' },
       },
     ])
     expect(t.host.summary()).toMatchObject({ memberCount: 1 })
@@ -337,7 +352,13 @@ describe('RoomHost', () => {
     t.host.create(ROOM)
     const a = t.join('Gene')
     expect(t.saved.sessions).toEqual([
-      { token: a.token, member: member(a.id, 'Gene', t.now()), conn: a.conn, awaySince: null },
+      {
+        token: a.token,
+        member: member(a.id, 'Gene', t.now()),
+        conn: a.conn,
+        awaySince: null,
+        sfu: null,
+      },
     ])
     t.tick(10)
     t.host.closed(a.conn)
@@ -347,6 +368,7 @@ describe('RoomHost', () => {
         member: member(a.id, 'Gene', t.now() - 10, true),
         conn: null,
         awaySince: t.now(),
+        sfu: null,
       },
     ])
   })
@@ -391,5 +413,175 @@ describe('RoomHost', () => {
     t.host.restore(null, 0, [], [])
     expect(t.host.exists).toBe(false)
     expect(t.host.admit(V)).toMatchObject({ code: CloseCode.roomNotFound })
+  })
+})
+
+describe('RoomHost media (e2-t03) and usage (e11-t13)', () => {
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    t = setup()
+    t.host.create(ROOM)
+  })
+
+  const tracksMessage = (sessionId: string, tracks: { trackName: string; kind: string }[]) =>
+    JSON.stringify({ t: 'tracks', sessionId, tracks })
+  const statsMessage = (sessionId: string, bytesReceived: number) =>
+    JSON.stringify({ t: 'stats', sessionId, bytesReceived })
+
+  it('serves the SFU proxy only for a member, and only for its own session', () => {
+    const a = t.join('Gene')
+    const b = t.join('Wei')
+    expect(t.host.sfuAccess('x'.repeat(43), null, [])).toEqual({
+      ok: false,
+      reason: 'unauthorized',
+    })
+    expect(t.host.sfuAccess(a.token, null, [])).toEqual({ ok: true, memberId: a.id, pulls: [] })
+    // No session bound yet
+    expect(t.host.sfuAccess(a.token, 'sess-a', [])).toEqual({ ok: false, reason: 'forbidden' })
+    expect(t.host.bindSfu(a.token, 'sess-a')).toBe(true)
+    expect(t.host.bindSfu(b.token, 'sess-b')).toBe(true)
+    expect(t.host.sfuAccess(a.token, 'sess-a', [])).toMatchObject({ ok: true })
+    expect(t.host.sfuAccess(a.token, 'sess-b', [])).toEqual({ ok: false, reason: 'forbidden' })
+    expect(t.host.bindSfu('y'.repeat(43), 'sess-z')).toBe(false)
+    // A member who left is nobody
+    t.host.message(a.conn, JSON.stringify({ t: 'leave' }))
+    expect(t.host.sfuAccess(a.token, 'sess-a', [])).toEqual({ ok: false, reason: 'unauthorized' })
+  })
+
+  it('lets a member pull only tracks published in this room', () => {
+    const a = t.join('Gene')
+    const b = t.join('Wei')
+    t.host.bindSfu(a.token, 'sess-a')
+    t.host.bindSfu(b.token, 'sess-b')
+    t.host.message(
+      b.conn,
+      tracksMessage('sess-b', [
+        { trackName: 'mic-1', kind: 'mic' },
+        { trackName: 'cam-1', kind: 'cam' },
+      ]),
+    )
+    expect(
+      t.host.sfuAccess(a.token, 'sess-a', [
+        { sessionId: 'sess-b', trackName: 'cam-1' },
+        { sessionId: 'sess-b', trackName: 'mic-1' },
+      ]),
+    ).toEqual({ ok: true, memberId: a.id, pulls: ['cam', 'mic'] })
+    for (const ref of [
+      { sessionId: 'sess-b', trackName: 'cam-2' },
+      { sessionId: 'elsewhere', trackName: 'cam-1' },
+    ]) {
+      expect(t.host.sfuAccess(a.token, 'sess-a', [ref])).toEqual({
+        ok: false,
+        reason: 'not_found',
+      })
+    }
+  })
+
+  it('lists what each member publishes and pushes it to everyone', () => {
+    const a = t.join('Gene')
+    const b = t.join('Wei')
+    t.host.bindSfu(b.token, 'sess-b')
+    t.host.message(b.conn, tracksMessage('sess-b', [{ trackName: 'mic-1', kind: 'mic' }]))
+    const listed = [{ sessionId: 'sess-b', trackName: 'mic-1', kind: 'mic' }]
+    expect(a.client.view!.members[b.id].tracks).toEqual(listed)
+    expect(b.client.view!.members[b.id].tracks).toEqual(listed)
+    expect(t.saved.sessions.find((r) => r.member.id === b.id)).toMatchObject({ sfu: 'sess-b' })
+    // A list for another session (sent before a reload) changes nothing
+    const before = a.client.received.length
+    t.host.message(b.conn, tracksMessage('sess-old', [{ trackName: 'cam-9', kind: 'cam' }]))
+    expect(a.client.received).toHaveLength(before)
+    // A new session (a reload) drops the old session's tracks at once
+    t.host.bindSfu(b.token, 'sess-b2')
+    expect(a.client.view!.members[b.id].tracks).toEqual([])
+    // Leaving takes the tracks along
+    t.host.message(b.conn, tracksMessage('sess-b2', [{ trackName: 'cam-2', kind: 'cam' }]))
+    expect(a.client.view!.members[b.id].tracks).toHaveLength(1)
+    t.host.message(b.conn, JSON.stringify({ t: 'leave' }))
+    expect(a.client.view!.members[b.id]).toBeUndefined()
+  })
+
+  it('refuses track lists before join like any other message', () => {
+    const socket = t.open()
+    t.host.message(socket.conn, tracksMessage('s', []))
+    expect(socket.client.received).toEqual([{ t: 'error', code: 'bad_message' }])
+  })
+
+  it('keeps the bound session across the object being evicted', () => {
+    const a = t.join('Gene')
+    t.host.bindSfu(a.token, 'sess-a')
+    const woken = setup()
+    woken.host.restore(ROOM, t.saved.rev, t.saved.sessions, [{ conn: a.conn, openedAt: 0 }])
+    expect(woken.host.sfuAccess(a.token, 'sess-a', [])).toMatchObject({ ok: true })
+  })
+
+  it('estimates egress from the tracks every connected member receives', () => {
+    const a = t.join('Gene')
+    t.join('Wei')
+    const c = t.join('Lin')
+    t.host.takeUsage()
+    t.host.bindSfu(a.token, 'sess-a')
+    t.host.message(
+      a.conn,
+      tracksMessage('sess-a', [
+        { trackName: 'mic-1', kind: 'mic' },
+        { trackName: 'cam-1', kind: 'cam' },
+      ]),
+    )
+    t.tick(15_000)
+    // Wei and Lin each receive Gene's microphone and camera; Gene receives nothing
+    const perReceiver = ((ASSUMED_BITRATE.mic + ASSUMED_BITRATE.cam) / 8) * 15
+    expect(t.host.takeUsage()).toEqual({ clientBytes: 0, estimateBytes: 2 * perReceiver })
+    expect(t.saved.usage).toEqual({ at: t.now(), state: 'normal' })
+    // A reconnecting member receives nothing
+    t.host.closed(c.conn)
+    t.tick(15_000)
+    expect(t.host.takeUsage().estimateBytes).toBe(perReceiver)
+    // A long gap (the room sat empty, or was evicted) counts at most MAX_USAGE_GAP_MS
+    t.tick(10 * MAX_USAGE_GAP_MS)
+    expect(t.host.takeUsage().estimateBytes).toBe((perReceiver * MAX_USAGE_GAP_MS) / 15_000)
+  })
+
+  it('counts what browsers report, from a baseline, clamped to a plausible rate', () => {
+    const a = t.join('Gene')
+    t.host.bindSfu(a.token, 'sess-a')
+    t.tick(10_000)
+    t.host.message(a.conn, statsMessage('sess-a', 1_000_000))
+    t.tick(10_000)
+    t.host.message(a.conn, statsMessage('sess-a', 3_000_000))
+    // Another session's report, and a counter that went backwards, add nothing
+    t.host.message(a.conn, statsMessage('sess-x', 9_000_000))
+    t.host.message(a.conn, statsMessage('sess-a', 2_000_000))
+    expect(t.host.takeUsage().clientBytes).toBe(3_000_000)
+    expect(t.host.takeUsage().clientBytes).toBe(0)
+    // 10 GB in 10 seconds is not a camera: clamped to MAX_REPORTED_BITRATE
+    t.tick(10_000)
+    t.host.message(a.conn, statsMessage('sess-a', 2_000_000 + 10_000_000_000))
+    expect(t.host.takeUsage().clientBytes).toBe((MAX_REPORTED_BITRATE / 8) * 10)
+  })
+
+  it('only takes a baseline from the first report after being evicted', () => {
+    const a = t.join('Gene')
+    t.host.bindSfu(a.token, 'sess-a')
+    const woken = setup()
+    woken.host.restore(ROOM, t.saved.rev, t.saved.sessions, [{ conn: a.conn, openedAt: 0 }])
+    woken.host.message(a.conn, statsMessage('sess-a', 5_000_000))
+    expect(woken.host.takeUsage().clientBytes).toBe(0)
+    woken.tick(10_000)
+    woken.host.message(a.conn, statsMessage('sess-a', 6_000_000))
+    expect(woken.host.takeUsage().clientBytes).toBe(1_000_000)
+  })
+
+  it('tells everyone the month state, and remembers it', () => {
+    const a = t.join('Gene')
+    t.host.setUsage('low')
+    expect(a.client.view!.usage).toBe('low')
+    expect(t.saved.usage).toMatchObject({ state: 'low' })
+    const before = a.client.received.length
+    t.host.setUsage('low')
+    expect(a.client.received).toHaveLength(before)
+    const woken = setup()
+    woken.host.restore(ROOM, t.saved.rev, t.saved.sessions, [], t.saved.usage)
+    expect(woken.host.view().usage).toBe('low')
+    expect(woken.host.usageState).toBe('low')
   })
 })

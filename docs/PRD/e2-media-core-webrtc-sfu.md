@@ -53,7 +53,7 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 
 ## 驗收條件
 
-- [ ] AC-2.1 — 每房一個 RoomDO：成員與軌清單、心跳、差異推送；新進者收到完整快照；訊息型別在 `shared/protocol.ts` 且有測試。
+- [x] AC-2.1 — 每房一個 RoomDO：成員與軌清單、心跳、差異推送；新進者收到完整快照；訊息型別在 `shared/protocol.ts` 且有測試。
 - [ ] AC-2.2 — 透過 `MediaTransport`（Cloudflare Realtime 實作）發布與訂閱音訊視訊；8 人同時在線互通；介面的假實作能跑完整個 `useRoomMedia` 測試。
 - [ ] AC-2.3 — 麥克風、鏡頭開關即時同步到所有人；可切換麥克風、喇叭、鏡頭不中斷通話；拔裝置自動換；權限被拒、無裝置、被佔用有明確提示與重試。
 - [ ] AC-2.4 — ICE 含 TURN 短期憑證；關掉 UDP 直連（模擬嚴格 NAT）仍能通話；統計記錄是否走 TURN。
@@ -68,8 +68,8 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 
 - [x] `e2-t01` ADR `docs/adr-001-media-layer.md`：Cloudflare Realtime vs LiveKit vs 自架，決定與切換條件；`MediaTransport` 介面定稿（＋`FakeTransport`、Worker 代理 `/api/sfu/*`、`/dev/realtime` 兩瀏覽器 spike；兩台裝置實測待 secret 設定後補） · AC-2.2 · #4
 - [x] `e2-t02` RoomDO 訊號骨架：WebSocket 升級、成員表、心跳、`snapshot`／`patch` 差異推送、`shared/protocol.ts` · AC-2.1 · #3
-- [ ] `e2-t03` `CloudflareRealtimeTransport`：Worker 代理 session 建立、`publish` mic／cam、track id 回報 RoomDO · AC-2.2 · M · ← e2-t01, e2-t02
-- [ ] `e2-t04` 訂閱：依 RoomDO 軌清單 pull 別人的軌、renegotiation、`useRoomMedia` 的 desired／actual 對齊 · AC-2.2 · M · ← e2-t03
+- [x] `e2-t03` `CloudflareRealtimeTransport`：Worker 代理 session 建立、`publish` mic／cam、track id 回報 RoomDO（`/api/sfu/<roomId>/*` 只服務帶成員 session token 的呼叫，session 屬於該成員、只能 pull 同房的軌；協定 v3 `tracks`、`Member.tracks`；`/dev/realtime` spike 移除） · AC-2.2 · #8
+- [x] `e2-t04` 訂閱：依 RoomDO 軌清單 pull 別人的軌、renegotiation、`useRoomMedia` 的 desired／actual 對齊（`src/room/RoomMedia.ts`；會議室簡版格狀畫面，正式版面是 C1） · AC-2.2 · #8
 - [ ] `e2-t05` 麥克風／鏡頭開關與軌狀態同步（mute 走訊號，不重新 publish） · AC-2.3 · S · ← e2-t04
 - [ ] `e2-t06` 裝置列舉與切換（麥克風、喇叭 `setSinkId`、鏡頭）、拔裝置自動換、記住選擇 · AC-2.3 · M · ← e2-t05
 - [ ] `e2-t07` TURN：Worker 發短期憑證 API、ICE 設定、統計是否走 TURN · AC-2.4 · S · ← e2-t03

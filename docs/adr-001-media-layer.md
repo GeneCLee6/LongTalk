@@ -40,7 +40,7 @@ LongTalk 的核心是 2–8 人（M0／M1）的音訊、視訊與螢幕分享，
 
 ## Realtime API（spike 實際用到的端點）
 
-基底 `https://rtc.live.cloudflare.com/v1`，標頭 `Authorization: Bearer <App Secret>`（OpenAPI `realtime-api-2024-05-21`）。**瀏覽器從不直接呼叫**：Worker 在 `/api/sfu/*` 代理（`worker/sfu.ts`），只放行下列路徑並檢查 session id 格式與 body 大小。
+基底 `https://rtc.live.cloudflare.com/v1`，標頭 `Authorization: Bearer <App Secret>`（OpenAPI `realtime-api-2024-05-21`）。**瀏覽器從不直接呼叫**：Worker 在 `/api/sfu/<roomId>/*` 代理（`worker/sfu.ts`），只放行下列路徑並檢查 session id 格式與 body 大小。B1 起每個呼叫都要帶成員的 session token（`Authorization: Bearer …`），由該房的 RoomDO 判斷（見「後果」）。下表的 `/api/sfu` 都是 `/api/sfu/<roomId>` 的簡寫。
 
 | LongTalk（Worker） | Realtime | 用途 |
 | --- | --- | --- |
@@ -49,7 +49,7 @@ LongTalk 的核心是 2–8 人（M0／M1）的音訊、視訊與螢幕分享，
 | `PUT /api/sfu/sessions/:id/renegotiate` | `PUT …/renegotiate` | pull 之後把瀏覽器的 answer 送回去 |
 | `PUT /api/sfu/sessions/:id/tracks/update` | `PUT …/tracks/update` | 改訂閱的 simulcast 層（`simulcast.preferredRid`） |
 | `PUT /api/sfu/sessions/:id/tracks/close` | `PUT …/tracks/close` | 協商式關閉：`transceiver.stop()` → 新 offer ＋ `{tracks:[{mid}], force:false}` → 套用 answer |
-| `GET /api/sfu/sessions/:id` | `GET …/sessions/{id}` | 查 session 的軌與狀態（spike 用來找對方的 trackName；正式流程改由 RoomDO 告知） |
+| ~~`GET /api/sfu/sessions/:id`~~ | `GET …/sessions/{id}` | A2 spike 用來找對方的 trackName；B1 移除，軌清單由 RoomDO 告知 |
 
 要點：
 
@@ -81,16 +81,17 @@ interface MediaTransport {
 
 - `TrackRef = { sessionId, trackName }` 是一條軌的全域位址：發布者回報 RoomDO，RoomDO 轉給訂閱者。和 Realtime 的模型一致，換成 LiveKit 時對應到 participant identity ＋ track sid。
 - `TrackKind = 'mic' | 'cam' | 'screen' | 'screenAudio'`，給 RoomDO 與介面用；SFU 不需要知道。
-- 錯誤一律是 `MediaTransportError`，`code` 為 `not_connected`、`closed`、`not_found`、`sfu_not_configured`、`sfu_error`、`negotiation_failed`。
+- 錯誤一律是 `MediaTransportError`，`code` 為 `not_connected`、`closed`、`not_found`、`sfu_not_configured`、`sfu_error`、`negotiation_failed`；B1 加上 `unauthorized`（代理不認得 session token，或 session 不是自己的）與 `quota_exceeded`（本月免費額度快用完，新的視訊軌被拒，`DEPLOY.md` §6）。
+- `TrackKind` B1 起定義在 `shared/protocol.ts`（RoomDO 的軌清單也用它），`MediaTransport.ts` 轉出。`CloudflareRealtimeTransport` 的建構參數必填 `apiBase`（`/api/sfu/<roomId>`）與 `token`（取 session token 的函式）。
 - 和 ARCHITECTURE §3 原本的清單相比：加了 `unsubscribe`、`on()`（回傳取消函式）與 `trackEnded` 事件；`stats` 事件拿掉，改由呼叫端每 2 秒 `getStats()`（`e2-t13` 決定節奏）。
 - `FakeTransport`（`src/media/FakeTransport.ts`）：同一個 `FakeSfu` 建出來的 transport 互相 publish／subscribe，`useRoomMedia`（`e2-t04`）的測試用它跑。
 
 ## 後果
 
 - **要自己做的**：房間與軌清單（RoomDO，A3／B1）、desired／actual 訂閱對齊（`e2-t04`）、重連（`e2-t08`）、選層策略（`e2-t12`、`e2-t15`）、統計（`e2-t13`）。這些 LiveKit SDK 會送，Realtime 不會；已經排進 E2 的 task。
-- **Worker 代理是信任邊界**：A2 的 `/api/sfu/*` 還沒綁房間成員（任何人都能建 session，花的是我們的流量額度）。**B1（`e2-t03`）要改成：只接受 RoomDO 發的成員 session token，而且 session id 必須屬於該成員**；在那之前沒有設定 secret 的環境一律回 503。
+- **Worker 代理是信任邊界**：A2 的 `/api/sfu/*` 還沒綁房間成員。**B1（`e2-t03`）已綁定**：路徑帶房間 id，RoomDO 的 `sfuAccess` 只接受該房成員的 session token（不然 401）；建立 session 後 `bindSfu` 把它記成該成員的（同一成員再建一個就取代舊的，舊 session 的軌清單清掉），之後對這個 session 的呼叫只接受它的主人（不然 403）；pull 的每條軌都必須是同房成員正在發布的（不然 404 `track_not_in_room`）。push 的軌種類從 offer 的 m-line 讀出，給免費額度保護用（`DEPLOY.md` §6）。
 - **兩個 secret**：`REALTIME_APP_ID`、`REALTIME_APP_SECRET`（`DEPLOY.md` §5）；TURN 另外兩個（`e2-t07`）。
-- **元件不碰 WebRTC**（規則 2）：spike 頁也只透過 `CloudflareRealtimeTransport` 與 `src/media/spike.ts`。
+- **元件不碰 WebRTC**（規則 2）：會議室頁只透過 `src/room/RoomMedia.ts`（發布、desired／actual 訂閱對齊）與 `MediaTransport`；A2 的 `/dev/realtime` spike 在 B1 移除。
 
 ## 切換條件（何時改用 LiveKit）
 
@@ -103,4 +104,5 @@ interface MediaTransport {
 ## 驗證
 
 - 已驗證（A2）：Worker 代理的路徑、標頭、錯誤處理（`tests/worker/sfu.test.ts`，mock fetch）；`CloudflareRealtimeTransport` 的呼叫順序與 body 和官方 connection patterns 一致（`tests/app/media/CloudflareRealtimeTransport.test.ts`，mock PeerConnection）；`FakeTransport` 行為（`tests/app/media/FakeTransport.test.ts`）；本機 `vite dev` 下 `/api/sfu/sessions` 未設定 secret 時回 503。
-- **尚未驗證**：真的透過 Cloudflare 互通。要等擁有者建立 Realtime SFU app、設定 secret 之後，用 `/dev/realtime` 在兩台不同裝置實測（步驟見 `DEPLOY.md` §5）。實測通過前 AC-2.2 不勾。
+- 已驗證（B1）：代理的成員綁定與拒絕路徑（`tests/worker/sfu.test.ts`，背後是真的 `RoomHost`）；`RoomMedia` 的發布與 desired／actual 對齊（`tests/app/RoomMedia.test.ts`、`tests/app/RoomMediaPage.test.tsx`，`FakeTransport`，含 StrictMode）。PR 預覽上的結果寫在 #8。
+- **尚未驗證**：兩台不同裝置透過 Cloudflare 互通。用會議室頁在兩台不同裝置實測（步驟見 `DEPLOY.md` §5）。實測通過前 AC-2.2 不勾。

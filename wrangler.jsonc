@@ -11,21 +11,41 @@
     "run_worker_first": ["/api/*"]
   },
   "durable_objects": {
-    // One object per room (ARCHITECTURE.md §2)
-    "bindings": [{ "name": "ROOM", "class_name": "RoomDO" }]
+    "bindings": [
+      // One object per room (ARCHITECTURE.md §2)
+      { "name": "ROOM", "class_name": "RoomDO" },
+      // One object for the whole deployment: the month's Realtime egress count (e11-t13)
+      { "name": "USAGE", "class_name": "UsageDO" }
+    ]
   },
   // The free plan only offers SQLite-backed Durable Objects. Migrations only ever add: never edit
   // or remove one that was deployed (DEPLOY.md §4)
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RoomDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["UsageDO"] }
+  ],
+  // The Realtime free-tier guard (e11-t13, DEPLOY.md §6): GB of SFU + TURN egress this calendar
+  // month (UTC) after which cameras send low quality, and after which new video is refused
+  "vars": {
+    "USAGE_LOW_QUALITY_GB": "800",
+    "USAGE_AUDIO_ONLY_GB": "950"
+  },
   // Pull request previews (DEPLOY.md §2): each PR deploys its own Worker, longtalk-pr-<number>,
   // with `wrangler deploy --name`, so it has its own Durable Object storage and never touches
-  // production's. Bindings are not inherited from the top level: repeat each one here.
+  // production's. Bindings and vars are not inherited from the top level: repeat each one here.
   // Selected at build time with CLOUDFLARE_ENV=preview (the Vite plugin bakes it into dist/).
   "env": {
     "preview": {
       "name": "longtalk-preview",
       "durable_objects": {
-        "bindings": [{ "name": "ROOM", "class_name": "RoomDO" }]
+        "bindings": [
+          { "name": "ROOM", "class_name": "RoomDO" },
+          { "name": "USAGE", "class_name": "UsageDO" }
+        ]
+      },
+      "vars": {
+        "USAGE_LOW_QUALITY_GB": "800",
+        "USAGE_AUDIO_ONLY_GB": "950"
       }
     }
   }

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PROTOCOL_VERSION } from '../../shared/protocol.ts'
 import { App } from '../../src/App.tsx'
@@ -34,10 +34,10 @@ class RoomSocket {
     if (message.t !== 'join') return
     const roomId = /rooms\/([^/]+)\/ws/.exec(this.url)?.[1] ?? ''
     const members = {
-      w: { id: 'w', name: 'Wei', joinedAt: 1, reconnecting: true },
-      a: { id: 'a', name: message.name, joinedAt: 2, reconnecting: false },
+      w: { id: 'w', name: 'Wei', joinedAt: 1, reconnecting: true, tracks: [] },
+      a: { id: 'a', name: message.name, joinedAt: 2, reconnecting: false, tracks: [] },
     }
-    const state = { room: { id: roomId, createdAt: 1 }, members }
+    const state = { room: { id: roomId, createdAt: 1 }, members, usage: 'normal' }
     queueMicrotask(() =>
       this.onmessage?.({
         data: JSON.stringify({
@@ -156,9 +156,9 @@ describe('joining a room', () => {
     expect(socket.url).toMatch(new RegExp(`/api/rooms/${ROOM_ID}/ws\\?v=${PROTOCOL_VERSION}$`))
     expect(socket.sent[0]).toBe('{"t":"join","name":"小潔","token":null}')
     expect(await screen.findByText('目前 2 人在線')).toBeInTheDocument()
-    const list = screen.getByRole('list', { name: '在房間裡的人' })
-    expect(list).toHaveTextContent('小潔你')
-    expect(list).toHaveTextContent('Wei重新連線中')
+    const grid = screen.getByRole('region', { name: '會議室畫面' })
+    expect(within(grid).getByRole('figure', { name: '小潔（你）' })).toBeInTheDocument()
+    expect(within(grid).getByRole('figure', { name: 'Wei' })).toHaveTextContent('重新連線中')
     // Remembered for the next visit (name) and for a reload of this tab (token)
     expect(localStorage.getItem('longtalk.name')).toBe('小潔')
     expect(sessionStorage.getItem(`longtalk.session.${ROOM_ID}`)).toBe(TOKEN)

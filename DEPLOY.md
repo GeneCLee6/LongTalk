@@ -71,11 +71,12 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 
 ## 4. 新增綁定或 Durable Object 時
 
-- `wrangler.jsonc` 的 `migrations` **只能往後加**；已部署的 migration 不要改、不要刪。新增 DO class 就加一個新 tag（`v2`…）。
+- `wrangler.jsonc` 的 `migrations` **只能往後加**；已部署的 migration 不要改、不要刪。新增 DO class 就加一個新 tag。現有：`v1` `RoomDO`（A1）、`v2` `UsageDO`（B1，§6）；下一個是 `v3`。
+- `vars` 也**不會繼承**：頂層與 `env.preview` 各寫一次（現有 `USAGE_LOW_QUALITY_GB`、`USAGE_AUDIO_ONLY_GB`，§6）。
 - `env.preview` **不會繼承**頂層的綁定：每個 DO、KV、R2、D1 綁定都要在 `env.preview` 重寫一次；R2／D1 要給預覽自己的資源，不要指到正式站的。
 - secret（SFU App token、TURN key、AI 金鑰）只用 `wrangler secret put` 放在 Worker，**不進前端、不進 repo**（CLAUDE.md 規則 3）。要設定的 secret 見 §5。
 
-## 5. Secrets 與 Realtime 互通測試（A2）
+## 5. Secrets 與 Realtime 互通測試（A2，B1 起改用會議室頁）
 
 ### 要設定的 secret
 
@@ -86,7 +87,9 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 | `REALTIME_TURN_KEY_ID` | Worker secret | 儀表板 → Realtime → TURN → 建立 key → **Turn Token ID** | `e2-t07`（B 期，尚未使用） |
 | `REALTIME_TURN_KEY_API_TOKEN` | Worker secret | 同一個 TURN key 的 **API token** | `e2-t07`（B 期，尚未使用） |
 
-App ID 不算機密，但和 App Secret 放在一起管理比較不會漏。**沒設定時 `/api/sfu/*` 回 503 `sfu_not_configured`**，其餘功能照常。
+App ID 不算機密，但和 App Secret 放在一起管理比較不會漏。**沒設定時 `/api/sfu/<roomId>/*` 對房間成員回 503 `sfu_not_configured`**，其餘功能照常（進得了房、看得到成員，只是沒有聲音與畫面）。
+
+**B1 起代理綁定房間成員**（`worker/sfu.ts`）：每個呼叫都要帶 RoomDO 在 `welcome` 發的 session token（`Authorization: Bearer …`），沒帶或不認得一律 401；SFU session 屬於建立它的成員，動別人的 session 403；只能 pull 同一間房發布的軌（不然 404 `track_not_in_room`）。所以正式站設定 secret 之後，不在房間裡的人用不到 SFU 流量。
 
 ```sh
 # 正式站（secret 會保留到之後每次部署）
@@ -100,14 +103,30 @@ REALTIME_APP_SECRET=...
 
 PR 預覽的 Worker 每個 PR 都是新的：在 GitHub 也設定同名的 `REALTIME_APP_ID`、`REALTIME_APP_SECRET`（`gh secret set …`），`preview.yml` 部署後會把它們寫進該 PR 的 Worker；沒設定就跳過（notice）。建議預覽與正式站用**不同的 Realtime app**，流量分開看。
 
-### 跑 spike：兩個瀏覽器透過 Realtime 互通
+### 兩台裝置互通測試（會議室頁）
 
-頁面 `/dev/realtime`（`src/pages/RealtimeSpikePage.tsx`，獨立 chunk，不算進首頁與會議室的 JS 預算）。沒有房間與訊號（那是 A3／B1），兩邊手動交換 session id：
+A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）；改用會議室本身：
 
-1. 兩台裝置打開同一個部署的 `https://…/dev/realtime`（手機的鏡頭權限需要 HTTPS，所以用 PR 預覽或正式站；同一台電腦可以用 `npm run dev` 的 `http://localhost:5173/dev/realtime` 開兩個分頁先試）。
-2. 兩邊各按「開始發布（麥克風＋鏡頭）」，允許權限。畫面顯示「我的 session id」與已發布的軌（`mic-…`、`cam-…`）。
-3. 把 A 的 session id 傳給 B（聊天軟體即可），B 貼到「對方的 session id」按「接收」；反過來 B 給 A 再做一次。
-4. 通過的條件：兩邊都看到並聽到對方；狀態「connected」；顯示 RTT。把兩台裝置、瀏覽器、網路（例如 Wi-Fi 與 4G）與結果寫進 PR。
-5. 結束按「結束」（關閉 PeerConnection，SFU 端的軌跟著停）。
+1. 一台裝置在 PR 預覽或正式站按「開一間房」，把連結傳給另一台（手機的鏡頭權限需要 HTTPS，所以用 PR 預覽或正式站；同一台電腦可以用 `npm run dev` 開兩個分頁先試）。
+2. 兩邊各自在預先加入頁允許麥克風與鏡頭，按「加入」。
+3. 通過的條件：兩邊的格子都看到並聽到對方。把兩台裝置、瀏覽器、網路（例如 Wi-Fi 與 4G）與結果寫進 PR。
+4. 檢查代理沒有開放給房外：`curl -i -X POST https://…/api/sfu/<roomId>/sessions` 要回 401。
 
-常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「找不到對方的軌」＝ session id 貼錯或對方還沒發布；一直停在 connecting ＝ 網路擋 UDP，等 `e2-t07` 的 TURN。
+常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「媒體伺服器不認得這個分頁」＝ session token 過期（房間把成員移除了），重新整理；一直沒有對方的畫面 ＝ 網路擋 UDP，等 `e2-t07` 的 TURN。
+
+## 6. Realtime 免費額度保護（e11-t13，B1）
+
+擁有者決定**只用免費額度**（2026-10-31）：Realtime 的 SFU 與 TURN 共用每月 1,000 GB 流出。超過就要付費，所以 LongTalk 自己記帳、提早降級：
+
+| 這個月（UTC）的流出 | 狀態 | 會發生什麼 |
+| --- | --- | --- |
+| 未滿 `USAGE_LOW_QUALITY_GB`（預設 800） | `normal` | 照常 |
+| 達 `USAGE_LOW_QUALITY_GB` | `low` | 房裡每個人收到通知；鏡頭改成低畫質（320×180、15 fps）送出，新進房的人一開始就是低畫質 |
+| 達 `USAGE_AUDIO_ONLY_GB`（預設 950） | `audioOnly` | 代理拒絕任何**新的**視訊軌（push 或 pull 都是 403 `usage_audio_only`）；已經在送的視訊不切斷；聲音照常；介面提示「只保留聲音」 |
+
+- **怎麼算**：`UsageDO`（`worker/usage-do.ts`，整個部署一個，`idFromName('global')`）存這個月的累計。每間有人的房間在每 15 秒的 alarm 把這段時間的兩個數字交給它，**取大的那個**加進當月總數：(1) 瀏覽器每 10 秒經房間 WebSocket 回報的 `bytesReceived`（`stats` 訊息，RoomDO 只算增量、限速 25 Mbps 防灌水）；(2) 伺服器自己的估算：經過時間 × 每個連線中成員收的每條軌 × 假設位元率（cam 1.5 Mbps、screen 2.5 Mbps、mic 64 kbps，`shared/usage.ts`）。估算不信任瀏覽器，所以不回報也躲不掉；回報抓得到估算低估的情況。
+- **每月 1 日歸零**：以 UTC 月份為準（台灣時間每月 1 日早上 8 點）。
+- **門檻設定**：`wrangler.jsonc` 的 `vars`（頂層與 `env.preview` 各一份），單位 GB（十進位）。改了要重新部署；值不合法時用預設。
+- **查詢**：`GET /api/usage` → `{"month":"2026-10","bytes":123456789,"state":"normal"}`（不快取）。
+- **誤差**：這是估算，不是 Cloudflare 的帳單；TURN 流量（`e2-t07` 之後）也算在瀏覽器回報裡，但伺服器估算沒有另外加。真正的用量以 Cloudflare 儀表板為準，`e11-t09` 成本儀表板會拿這份計數和帳單對照。
+- **重設或手動調整**：目前沒有管理介面；真的需要時把門檻 var 暫時調高或調低後重新部署。

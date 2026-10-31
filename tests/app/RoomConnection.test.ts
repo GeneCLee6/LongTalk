@@ -40,7 +40,13 @@ class FakeSocket implements SocketLike {
 }
 
 const room = { id: 'abcdefghij', createdAt: 1 }
-const member = (id: string) => ({ id, name: id.toUpperCase(), joinedAt: 1, reconnecting: false })
+const member = (id: string) => ({
+  id,
+  name: id.toUpperCase(),
+  joinedAt: 1,
+  reconnecting: false,
+  tracks: [],
+})
 const TOKEN = 'T'.repeat(43)
 const welcome = (rev: number, members: Record<string, ReturnType<typeof member>> = {}) =>
   ({
@@ -49,7 +55,7 @@ const welcome = (rev: number, members: Record<string, ReturnType<typeof member>>
     you: 'a',
     token: TOKEN,
     rev,
-    state: { room, members },
+    state: { room, members, usage: 'normal' as const },
   }) as const
 
 function connect(token: string | null = null) {
@@ -129,7 +135,11 @@ describe('RoomConnection', () => {
     })
     expect(socket.sent).toEqual(['{"t":"resync"}'])
     expect(connection.getState().view?.members).toEqual({})
-    socket.receive({ t: 'snapshot', rev: 3, state: { room, members: { c: member('c') } } })
+    socket.receive({
+      t: 'snapshot',
+      rev: 3,
+      state: { room, members: { c: member('c') }, usage: 'normal' },
+    })
     // An old patch already in the snapshot is ignored; the next one applies
     socket.receive({ t: 'patch', rev: 3, ops: [{ op: 'del', path: ['members', 'c'] }] })
     socket.receive({

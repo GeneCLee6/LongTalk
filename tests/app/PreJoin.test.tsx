@@ -136,15 +136,18 @@ describe('pre-join screen', () => {
     }
   })
 
-  it('stops the preview when the person joins', async () => {
+  it('stops the preview when the person joins; the room opens the devices for itself', async () => {
     const fake = await openPreJoin()
     await screen.findByLabelText('鏡頭預覽')
     fireEvent.change(screen.getByRole('textbox', { name: '你的名字' }), {
       target: { value: 'Gene' },
     })
+    const preview = fake.streams.length
     fireEvent.click(screen.getByRole('button', { name: '加入' }))
     expect(await screen.findByRole('heading', { name: `會議室 ${ROOM_ID}` })).toBeInTheDocument()
-    expect(fake.streams.flatMap((s) => s.tracks).every((track) => track.stopped)).toBe(true)
+    const previewTracks = fake.streams.slice(0, preview).flatMap((s) => s.tracks)
+    expect(previewTracks.every((track) => track.stopped)).toBe(true)
+    await waitFor(() => expect(fake.streams.length).toBeGreaterThan(preview))
   })
 })
 
