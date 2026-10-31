@@ -1,6 +1,6 @@
 # NEXT — 接下來怎麼做（給 AI 協作者與自己的交接手冊）
 
-最後更新 2026-10-30。**完整順序在 [`ROADMAP.md`](ROADMAP.md)**（一批一個 PR）；這份只記「現在的位置」與工作方式。每完成一批就更新「現在的位置」；每個 AI session 開頭只需要讀 `CLAUDE.md` 和這一份。
+最後更新 2026-10-31。**完整順序在 [`ROADMAP.md`](ROADMAP.md)**（一批一個 PR）；這份只記「現在的位置」與工作方式。每完成一批就更新「現在的位置」；每個 AI session 開頭只需要讀 `CLAUDE.md` 和這一份。
 
 ## 1. 現在的位置
 
@@ -10,8 +10,9 @@
 - **2026-10-30 A3 完成**（#3）：`shared/protocol.ts`（v1：`welcome`／`snapshot`／`patch`／`error`、`resync`、文字 `ping`／`pong` 心跳）、`shared/patch.ts` 差異推送、`shared/room-id.ts`（10 碼 base58）、`RoomDO`（hibernation WebSocket、成員、45 秒沒心跳就移除、`worker/room-host.ts` 純類別）、`POST /api/rooms` 與 WebSocket `/api/rooms/<id>/ws?v=1`、首頁「建立會議室」、會議室頁顯示在線人數。AC-2.1 等 `e2-t03` 加上軌清單才勾；AC-1.1 等 `e1-t05`（改名、複製連結）。
 - **2026-10-30 A4 完成**（#5），**Phase A 全部完成**：通訊協定升到 v2（`join`／`leave`、`welcome.token`、`Member.name`／`reconnecting`；v1 瀏覽器在升級時收到 4400 要求重新整理）；RoomDO 發 session token，斷線（沒有 `leave`）保留成員 60 秒並標示「重新連線中」，同一 token 回來就是同一成員，同一 token 從新 socket 加入會關掉舊的（4410）；成員與 session 存在 DO storage，DO 被逐出也接得回；開了 10 秒不 `join` 的 socket 會被關掉；WebSocket 升級檢查 `Origin`（不同站 403）；`GET /api/rooms/<id>` 給預先加入頁人數。首頁照 DESIGN §4.1（標誌、一句話、開一間房、貼連結或代碼加入、三張小卡）。預先加入簡版：鏡像預覽、音量表、麥克風／鏡頭／喇叭選單（喇叭只在支援 `setSinkId` 的瀏覽器出現）、麥克風與鏡頭開關、權限被拒與找不到裝置的說明＋重試；裝置存取在 `src/media/devices.ts`、`levelMeter.ts`，hook 在 `src/room/`。名字存 localStorage；token 存 sessionStorage（同分頁重新整理直接回房，不再經過預先加入；第二個分頁是新成員）。**兩台裝置實測尚未做**：AC-1.2（還差 `e1-t05` 房內改名）、AC-4.1（還差 `e4-t19` 品牌定稿）、AC-4.2（還差 `e4-t09`，且鏡頭預覽、音量表、裝置選單要在兩台不同裝置實測）都還不勾。
 - **2026-10-31**：`main` 設為受保護分支（`CI / verify` 必過）；`REALTIME_APP_ID`／`REALTIME_APP_SECRET` 已設成 GitHub secret（app `longtalk-dev`，只給 PR 預覽用；正式站等 B1 綁定成員後再設）。擁有者決定**只用免費額度**：新增 `e11-t13` 流量保護，排進 B1。
-- **下一批：B1**（`e2-t03` `e2-t04` `e11-t13`：發布 mic／cam、訂閱、免費額度保護；依賴 A4）。A2 的兩台裝置實測用 PR 預覽的 `/dev/realtime`（`DEPLOY.md` §5）；預先加入的鏡頭、麥克風、裝置選單也一起在兩台裝置上試。
-- **等人決定的事**（不卡 A 期）：帳號登入方式（E1）；AI 摘要用哪家模型（E8）；建立 Cloudflare Realtime SFU app 並設定 secret，做 A2 的兩台裝置實測（B1 之前）。
+- **2026-10-31 B1 完成**（#8）：通訊協定升到 v3（`tracks`、`stats`、`Member.tracks`、`RoomView.usage`）。SFU 代理改成 `/api/sfu/<roomId>/*` 並**綁定房間成員**：每個呼叫帶 session token，由 RoomDO 判斷（房外 401、別人的 session 403、只能 pull 同房的軌）；`/dev/realtime` spike 移除。會議室進房後重新開啟預先加入選的裝置，經 `CloudflareRealtimeTransport` 發布 mic／cam、回報 RoomDO；`src/room/RoomMedia.ts`＋`useRoomMedia` 以 desired／actual 對齊訂閱別人的軌（冪等、StrictMode 只留一個 session、失敗重試 3 次）；簡版格狀畫面（每人一格，正式版面是 C1）。**免費額度保護**（`e11-t13`）：`UsageDO`（migration `v2`）記當月流出，取「瀏覽器回報」與「伺服器估算」的大者；800 GB 鏡頭低畫質、950 GB 代理拒絕新的視訊軌；門檻是 `vars`；`GET /api/usage`（`DEPLOY.md` §6）。AC-2.1、AC-11.11 已勾。**AC-2.2 不勾**：還沒有兩台不同裝置實測（PR 預覽上的單機驗證結果寫在 #8）。
+- **下一批：B2**（`e2-t05` `e2-t06` `e2-t09`：開關與軌狀態同步、裝置切換與記憶、權限與裝置錯誤畫面；依賴 B1）。動工前先用 PR 預覽在兩台不同裝置跑一次會議室互通（`DEPLOY.md` §5），通過就勾 AC-2.2 的發布訂閱部分；預先加入的鏡頭、麥克風、裝置選單也一起試。
+- **等人決定的事**：正式站要不要現在設定 `REALTIME_APP_ID`／`REALTIME_APP_SECRET`（B1 已綁定成員，可以設；建議用和預覽不同的 Realtime app）；帳號登入方式（E1）；AI 摘要用哪家模型（E8）；兩台不同裝置的會議室互通實測（AC-2.2，要人拿兩台裝置）。
 
 ## 2. 建議順序（為什麼這樣排）
 

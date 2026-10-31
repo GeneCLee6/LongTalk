@@ -10,7 +10,15 @@ import {
   type ServerMessage,
 } from '../shared/protocol.ts'
 import type { Env } from './app.ts'
-import { RoomHost, type OpenSocket, type SessionRecord } from './room-host.ts'
+import {
+  RoomHost,
+  type OpenSocket,
+  type SessionRecord,
+  type SfuAccess,
+  type SfuTrackRef,
+  type UsageCursor,
+} from './room-host.ts'
+import { USAGE_OBJECT } from './usage.ts'
 
 /** What each hibernatable socket carries, so the connections survive the object waking up */
 type Attachment = OpenSocket
@@ -18,6 +26,10 @@ type Attachment = OpenSocket
 const ROOM_KEY = 'room'
 const REV_KEY = 'rev'
 const SESSIONS_KEY = 'sessions'
+const USAGE_KEY = 'usage'
+
+/** A socket opening asks UsageDO for the month's state when the room has not heard for this long */
+const USAGE_REFRESH_MS = 60_000
 
 /**
  * One room in its own Durable Object (`idFromName(<room id>)`, ARCHITECTURE.md §2). Only the glue
@@ -31,6 +43,8 @@ export class RoomDO extends DurableObject<Env> {
   private readonly host: RoomHost
   /** The socket being closed in `webSocketClose`: `getWebSockets()` still lists it */
   private closing: WebSocket | null = null
+  /** When the room last heard the month's usage state from UsageDO */
+  private usageCheckedAt = 0
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -52,6 +66,7 @@ export class RoomDO extends DurableObject<Env> {
         saveRoom: (info) => void storage.put(ROOM_KEY, info),
         saveRev: (rev) => void storage.put(REV_KEY, rev),
         saveSessions: (sessions) => void storage.put(SESSIONS_KEY, sessions),
+        saveUsage: (usage) => void storage.put(USAGE_KEY, usage),
       },
       now: Date.now,
       newMemberId: () => crypto.randomUUID(),
@@ -59,16 +74,17 @@ export class RoomDO extends DurableObject<Env> {
     })
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG))
     void ctx.blockConcurrencyWhile(async () => {
-      const [info, rev, sessions] = await Promise.all([
+      const [info, rev, sessions, usage] = await Promise.all([
         storage.get<RoomInfo>(ROOM_KEY),
         storage.get<number>(REV_KEY),
         storage.get<SessionRecord[]>(SESSIONS_KEY),
+        storage.get<UsageCursor>(USAGE_KEY),
       ])
       const sockets = ctx
         .getWebSockets()
         .filter((ws) => ws.readyState === WebSocket.OPEN)
         .map((ws) => ws.deserializeAttachment() as Attachment)
-      this.host.restore(info ?? null, rev ?? 0, sessions ?? [], sockets)
+      this.host.restore(info ?? null, rev ?? 0, sessions ?? [], sockets, usage ?? null)
     })
   }
 
@@ -82,10 +98,28 @@ export class RoomDO extends DurableObject<Env> {
     return this.host.summary()
   }
 
+  /** RPC from the SFU proxy (worker/sfu.ts) before every call */
+  async sfuAccess(
+    token: string,
+    sessionId: string | null,
+    pulls: SfuTrackRef[],
+  ): Promise<SfuAccess> {
+    return this.host.sfuAccess(token, sessionId, pulls)
+  }
+
+  /** RPC from the SFU proxy: it created `sessionId` for the member holding `token` */
+  async bindSfu(token: string, sessionId: string): Promise<boolean> {
+    return this.host.bindSfu(token, sessionId)
+  }
+
   /** Only the WebSocket upgrade, forwarded by the Worker from /api/rooms/<id>/ws */
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('Expected WebSocket', { status: 426 })
+    }
+    // Someone joining learns the month's state before publishing (the sweep keeps it fresh after)
+    if (this.host.exists && Date.now() - this.usageCheckedAt > USAGE_REFRESH_MS) {
+      await this.flushUsage()
     }
     const { 0: client, 1: server } = new WebSocketPair()
     const admission = this.host.admit(new URL(request.url).searchParams.get('v'))
@@ -147,7 +181,25 @@ export class RoomDO extends DurableObject<Env> {
       if (at) this.host.heartbeat((ws.deserializeAttachment() as Attachment).conn, at.getTime())
     }
     this.host.sweep()
+    await this.flushUsage()
     if (this.host.active) await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS)
+  }
+
+  /**
+   * Hands the egress counted since the last flush to UsageDO (e11-t13) and takes back the
+   * month's state, which members see as `RoomView.usage`. A failed call loses that interval's
+   * count rather than the room.
+   */
+  private async flushUsage() {
+    const delta = this.host.takeUsage()
+    try {
+      const usage = this.env.USAGE.get(this.env.USAGE.idFromName(USAGE_OBJECT))
+      const status = await usage.record(delta)
+      this.usageCheckedAt = Date.now()
+      this.host.setUsage(status.state)
+    } catch (error) {
+      console.error('usage flush failed', error)
+    }
   }
 
   private async scheduleSweep() {

@@ -66,6 +66,16 @@ export const strings = {
     closed: '連線中斷了，請重新整理頁面。',
     replaced: '你在另一個分頁加入了這間會議室，這個分頁已經離開。',
     backHome: '回首頁',
+    grid: '會議室畫面',
+    tileVideo: (name: string) => `${name} 的畫面`,
+    camOff: '鏡頭沒開',
+    mediaConnecting: '正在連接媒體伺服器…',
+  },
+  // The Realtime free-tier guard (e11-t13): the month's egress is past a threshold
+  usage: {
+    low: '本月的免費流量快用完了，視訊先改成低畫質。',
+    audioOnly: '本月的免費流量快用完了，先暫停新的視訊，只保留聲音。',
+    videoRefused: '本月的免費流量快用完了，你的鏡頭先不送出，大家仍然聽得到你。',
   },
   common: {
     close: '關閉',
@@ -101,27 +111,10 @@ export const strings = {
   },
   errors: {
     sfuNotConfigured: '媒體伺服器尚未設定（缺少 Realtime 的 App ID 或 App Secret）。',
-    sfu: '媒體伺服器回應錯誤。',
+    sfu: '媒體伺服器回應錯誤，聲音與畫面可能送不出去。',
+    sfuUnauthorized: '媒體伺服器不認得這個分頁，請重新整理頁面。',
     trackNotFound: '找不到對方的軌，可能已經停止分享。',
     permissionDenied: '瀏覽器沒有麥克風或鏡頭權限。',
     unknown: '發生未預期的錯誤。',
-  },
-  // The two-browser Realtime spike (A2, /dev/realtime). Removed once the room page does this.
-  spike: {
-    title: 'Realtime 互通測試',
-    intro:
-      '兩台裝置都打開這一頁。各自按「開始發布」，把自己的 session id 傳給對方，貼到下面再按「接收」。',
-    publish: '開始發布（麥克風＋鏡頭）',
-    publishing: '發布中…',
-    sessionId: '我的 session id',
-    remoteSession: '對方的 session id',
-    remoteSessionPlaceholder: '貼上對方的 session id',
-    pull: '接收',
-    localVideo: '我的畫面',
-    remoteVideo: '對方的畫面',
-    tracks: (names: string) => `已發布的軌：${names}`,
-    stats: (rtt: string, relay: boolean) => `RTT ${rtt} ms・${relay ? '經 TURN' : '直連'}`,
-    state: (state: string) => `狀態：${state}`,
-    hangUp: '結束',
   },
 } as const

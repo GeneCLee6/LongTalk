@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
+import type { ClientMessage } from '../../shared/protocol.ts'
 import { RoomConnection, type RoomConnectionState } from './RoomConnection.ts'
 import { clearSession, loadSession, saveSession } from './session.ts'
 
@@ -6,6 +7,8 @@ export interface RoomConnectionHandle {
   state: RoomConnectionState
   /** Leaves the room on purpose: the member is removed at once and the session forgotten */
   leave: () => void
+  /** Sends a message to the room (dropped while the socket is not open) */
+  send: (message: ClientMessage) => void
 }
 
 /**
@@ -31,5 +34,5 @@ export function useRoomConnection(roomId: string, name: string): RoomConnectionH
     connection.stop({ leave: true })
     clearSession(roomId)
   }, [connection, roomId])
-  return { state, leave }
+  return { state, leave, send: connection.send }
 }

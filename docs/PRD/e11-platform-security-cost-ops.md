@@ -54,7 +54,7 @@ depends_on: []
 - [ ] AC-11.8 — 隱私權政策頁、資料保留表、錄影同意清單、刪除請求流程；R2 到期刪除與 D1 備份有排程測試。
 - [ ] AC-11.9 — E2EE 可行性 ADR。
 - [ ] AC-11.10 — 多租戶：帳號配額、方案、擁有者後台。
-- [ ] AC-11.11 — **只用免費額度**：Realtime（SFU＋TURN）每月流出有計數；達 800 GB 新連線預設低畫質、達 950 GB 不再建立新的視訊 session（只留音訊）、每月 1 日歸零；門檻可設定、有測試、`/api/usage` 可查。
+- [x] AC-11.11 — **只用免費額度**：Realtime（SFU＋TURN）每月流出有計數；達 800 GB 新連線預設低畫質、達 950 GB 不再建立新的視訊 session（只留音訊）、每月 1 日歸零；門檻可設定、有測試、`/api/usage` 可查。
 
 ## Task 拆分
 
@@ -64,7 +64,7 @@ depends_on: []
 - [x] `e11-t02` CI（lint、typecheck、test、build、budget）、PR 預覽 Worker 與 production 部署、`DEPLOY.md` · AC-11.1, AC-11.2 · #2
 - [ ] `e11-t03` 最小遙測：事件 API、Analytics Engine、錯誤回報、`/admin` 骨架 · AC-11.3 · M · ← e11-t02
 - [ ] `e11-t04` `BROWSER-SUPPORT.md` 初版與 `capabilities.ts` · AC-11.6 · S · ← e11-t01
-- [ ] `e11-t13` Realtime 免費額度保護：`UsageDO` 每月流量計數（客戶端 `getStats` 回報與伺服器端以 session 時長×軌數估算取大者）、800 GB 降畫質、950 GB 拒絕新視訊 session、`/api/usage`（2026-10-31 擁有者決定只用免費方案；`e11-t09` 成本儀表板之後接這份計數） · AC-11.11 · M · ← e2-t03
+- [x] `e11-t13` Realtime 免費額度保護：`UsageDO` 每月流量計數（客戶端 `getStats` 回報與伺服器端以 session 時長×軌數估算取大者）、800 GB 降畫質、950 GB 拒絕新視訊 session、`/api/usage`（2026-10-31 擁有者決定只用免費方案；`e11-t09` 成本儀表板之後接這份計數；做法見 `DEPLOY.md` §6） · AC-11.11 · #8
 
 ### M1
 

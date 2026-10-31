@@ -73,8 +73,23 @@ export interface CloseTracksResponse extends ApiError {
   tracks?: ({ mid: string } & ApiError)[]
 }
 
-// What /api/sfu/* answers when the Worker has no Realtime app configured, or rejects a request
-// before it reaches Cloudflare
+// What /api/sfu/<roomId>/* answers when the Worker has no Realtime app configured, or rejects a
+// request before it reaches Cloudflare (worker/sfu.ts):
+// - 401 `unauthorized`: no member session token for this room
+// - 403 `forbidden`: the SFU session is not this member's
+// - 403 `usage_audio_only`: the month's allowance is nearly spent, no new video (shared/usage.ts)
+// - 404 `track_not_in_room`: a track to pull is not published in this room
 export interface SfuProxyError {
-  error: 'sfu_not_configured' | 'bad_request' | 'not_found' | 'upstream_error'
+  error:
+    | 'sfu_not_configured'
+    | 'bad_request'
+    | 'not_found'
+    | 'upstream_error'
+    | 'unauthorized'
+    | 'forbidden'
+    | 'usage_audio_only'
+    | 'track_not_in_room'
 }
+
+/** The SFU proxy's base for a room; calls carry `Authorization: Bearer <session token>` */
+export const sfuApiBase = (roomId: string): string => `/api/sfu/${roomId}`
