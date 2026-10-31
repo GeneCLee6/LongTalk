@@ -36,7 +36,7 @@ worktree 開分支、只讀需要的段落、lint+typecheck+test+build 只看最
 
 | 批 | Task | 內容 | 前提 |
 | --- | --- | --- | --- |
-| [ ] B1 | `e2-t03` `e2-t04` | `CloudflareRealtimeTransport` 發布 mic／cam、Worker 代理 session；訂閱與 `useRoomMedia` desired／actual 對齊 | A4 |
+| [ ] B1 | `e2-t03` `e2-t04` `e11-t13` | `CloudflareRealtimeTransport` 發布 mic／cam、Worker 代理 session（綁定房間成員）；訂閱與 `useRoomMedia` desired／actual 對齊；**Realtime 免費額度保護**（每月計數、800 GB 降畫質、950 GB 只留音訊） | A4 |
 | [ ] B2 | `e2-t05` `e2-t06` `e2-t09` | 開關與軌狀態同步、裝置切換與記憶、權限與裝置錯誤畫面 | B1 |
 | [ ] B3 | `e2-t07` `e2-t08` | TURN 憑證與 ICE、斷線重連（WebSocket 退避、PC 重建、媒體恢復、「重新連線中」） | B2 |
 | [ ] B4 | `e2-t10` `e11-t04` | 兩個 Chromium 假裝置互通的整合測試進 CI、`FakeTransport` 單元測試；`BROWSER-SUPPORT.md` 初版與 `capabilities.ts` | B3 |
