@@ -35,10 +35,24 @@ describe('IconButton', () => {
     expect(button).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('shows the caption as the accessible name when showLabel is set', () => {
+  it('keeps the label as the accessible name when it shows a caption (hidden on phones)', () => {
     render(<IconButton label={strings.toolbar.chat} icon={<svg />} showLabel />)
-    expect(screen.getByRole('button', { name: '聊天' })).not.toHaveAttribute('aria-label')
-    expect(screen.getByText('聊天')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '聊天' })).toHaveAttribute('aria-label', '聊天')
+    expect(screen.getByText('聊天')).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  it('can show a shorter caption and a count than its accessible name', () => {
+    render(
+      <IconButton
+        label={strings.toolbar.participantsCount(3)}
+        caption={strings.toolbar.participants}
+        badge={3}
+        icon={<svg />}
+        showLabel
+      />,
+    )
+    const button = screen.getByRole('button', { name: '參與者（3 人）' })
+    expect(button).toHaveTextContent('3參與者')
   })
 })
 

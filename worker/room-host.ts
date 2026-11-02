@@ -1,7 +1,9 @@
 import { diff } from '../shared/patch.ts'
 import {
   CloseCode,
+  EMPTY_ROOM_TTL_MS,
   HEARTBEAT_PING,
+  HOST_HANDOFF_MS,
   JOIN_TIMEOUT_MS,
   MAX_MEMBERS,
   MAX_PENDING_SOCKETS,
@@ -14,6 +16,7 @@ import {
   type Member,
   type MemberTrack,
   type RoomInfo,
+  type RoomInit,
   type RoomSummary,
   type RoomView,
   type ServerMessage,
@@ -27,6 +30,7 @@ import {
   RELAY_OVERHEAD,
   type UsageState,
 } from '../shared/usage.ts'
+import { Scheduler, type Schedule } from './scheduler.ts'
 
 /**
  * The server estimate counts at most this long between two flushes: the sweep flushes every
@@ -92,6 +96,21 @@ export interface RoomStorage {
   saveSessions(sessions: SessionRecord[]): void
   /** When egress was last counted and the month's state, so both survive the object being evicted */
   saveUsage(usage: UsageCursor): void
+  /** The alarm's jobs (scheduler.ts), saved whenever they change */
+  saveSchedule(schedule: Schedule): void
+  /** The room closed: everything stored goes (the adapter also drops the alarm) */
+  clear(): void
+}
+
+/** Stored rooms from before v6 have no name, creator or start time */
+type StoredRoomInfo = RoomInit & Partial<Omit<RoomInfo, keyof RoomInit>>
+
+/** What the alarm did, for the adapter */
+export type AlarmResult = {
+  /** The sweep ran: hand the egress to UsageDO */
+  swept: boolean
+  /** The room was empty for EMPTY_ROOM_TTL_MS and is gone */
+  closed: boolean
 }
 
 export type UsageCursor = { at: number; state: UsageState }
@@ -151,6 +170,10 @@ export class RoomHost {
    * after an eviction the next report (STATS_INTERVAL_MS) says it again.
    */
   private readonly relayed = new Set<string>()
+  /** The alarm's jobs: `sweep`, `close`, `handoff` (scheduler.ts) */
+  private schedule = new Scheduler()
+  /** The schedule as last stored, to store it only when it changes */
+  private storedSchedule = '{}'
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -163,14 +186,18 @@ export class RoomHost {
    * whose socket is gone is marked reconnecting.
    */
   restore(
-    info: RoomInfo | null,
+    info: StoredRoomInfo | null,
     rev: number,
     sessions: readonly SessionRecord[],
     sockets: readonly OpenSocket[],
     usage: UsageCursor | null = null,
+    schedule: Schedule | null = null,
   ): void {
-    this.info = info
+    // Rooms stored before v6 have no name, creator or start time
+    this.info = info ? { name: null, createdBy: null, startedAt: null, ...info } : null
     this.rev = rev
+    this.schedule = new Scheduler(schedule)
+    this.storedSchedule = JSON.stringify(this.schedule)
     this.members.clear()
     this.sessions.clear()
     this.byToken.clear()
@@ -184,12 +211,13 @@ export class RoomHost {
       this.conns.set(conn, { member: null, openedAt, lastSeen: openedAt })
     }
     for (const record of sessions) {
-      // Members stored by protocol v2 have no tracks, by v3 no `muted`
+      // Members stored by protocol v2 have no tracks, by v3 no `muted`, by v5 no role
       const tracks = (record.member.tracks ?? []).map((track) => ({
         ...track,
         muted: track.muted ?? false,
       }))
-      this.members.set(record.member.id, { ...record.member, tracks })
+      const role = record.member.role ?? 'participant'
+      this.members.set(record.member.id, { ...record.member, role, tracks })
       this.sessions.set(record.member.id, {
         token: record.token,
         conn: record.conn,
@@ -201,7 +229,6 @@ export class RoomHost {
     this.sent = info ? this.view() : null
     if (!info) return
     const now = this.deps.now()
-    let changed = false
     for (const [id, session] of this.sessions) {
       const conn = session.conn === null ? undefined : this.conns.get(session.conn)
       if (conn) {
@@ -210,12 +237,11 @@ export class RoomHost {
       }
       session.conn = null
       session.awaySince ??= now
-      if (!this.members.get(id)!.reconnecting) {
-        this.setMember(id, { reconnecting: true })
-        changed = true
-      }
+      if (!this.members.get(id)!.reconnecting) this.setMember(id, { reconnecting: true })
     }
-    if (changed) this.publish()
+    // Sends only what changed (members marked reconnecting, a host for a room stored by v5) and
+    // brings the schedule up to date (a room stored before C2 has none)
+    this.publish()
   }
 
   get exists(): boolean {
@@ -232,14 +258,47 @@ export class RoomHost {
     return this.conns.size > 0 || this.members.size > 0
   }
 
-  /** Called once by POST /api/rooms; false when the id is already taken */
-  create(info: RoomInfo): boolean {
+  /**
+   * Called once by POST /api/rooms; false when the id is already taken. A room nobody joins
+   * closes like an empty one, EMPTY_ROOM_TTL_MS later.
+   */
+  create(init: RoomInit): boolean {
     if (this.info) return false
-    this.info = info
-    this.deps.storage.saveRoom(info)
+    this.info = { ...init, name: null, createdBy: null, startedAt: null }
+    this.deps.storage.saveRoom(this.info)
     this.usageAt = this.deps.now()
     this.sent = this.view()
+    this.reschedule()
     return true
+  }
+
+  /** When the alarm should fire next (the earliest job), or null for no alarm */
+  nextAlarm(): number | null {
+    return this.schedule.next()
+  }
+
+  /**
+   * The alarm fired: runs every job that is due. `sweep` checks heartbeats and grace windows
+   * (the adapter then flushes usage), `handoff` hands a host that stayed away to someone
+   * connected, `close` deletes a room that stayed empty. Then schedules what is next.
+   */
+  alarm(): AlarmResult {
+    const result: AlarmResult = { swept: false, closed: false }
+    for (const job of this.schedule.take(this.deps.now())) {
+      if (job === 'sweep') {
+        this.sweep()
+        result.swept = true
+      } else if (job === 'handoff') {
+        // publish hands the role over (assignHost) and sends the change
+        this.publish()
+      } else if (job === 'close' && this.info && !this.active) {
+        this.close()
+        result.closed = true
+        return result
+      }
+    }
+    this.reschedule()
+    return result
   }
 
   /** For GET /api/rooms/<id>; null when the room does not exist */
@@ -262,6 +321,7 @@ export class RoomHost {
   opened(connId: string): void {
     const now = this.deps.now()
     this.conns.set(connId, { member: null, openedAt: now, lastSeen: now })
+    this.reschedule()
   }
 
   /**
@@ -272,7 +332,10 @@ export class RoomHost {
     const conn = this.conns.get(connId)
     if (!conn) return
     this.conns.delete(connId)
-    if (conn.member === null) return
+    if (conn.member === null) {
+      this.reschedule()
+      return
+    }
     this.markAway(conn.member)
     this.publish()
   }
@@ -312,7 +375,28 @@ export class RoomHost {
       case 'stats':
         this.countStats(conn.member!, message)
         return
+      case 'rename':
+        this.setMember(conn.member!, { name: message.name })
+        this.publish()
+        return
+      case 'renameRoom':
+        this.renameRoom(connId, conn.member!, message.name)
+        return
     }
+  }
+
+  /**
+   * `renameRoom`. Who may: the host only. The permission table is worker/roles.ts from e1-t06
+   * (F1); until then this is the one check, here on the server (CLAUDE.md rule 1).
+   */
+  private renameRoom(connId: string, memberId: string, name: string): void {
+    if (this.members.get(memberId)?.role !== 'host') {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    this.info = { ...this.info!, name }
+    this.deps.storage.saveRoom(this.info)
+    this.publish()
   }
 
   /**
@@ -430,6 +514,7 @@ export class RoomHost {
       }
     }
     if (changed) this.publish()
+    else this.reschedule()
     return count
   }
 
@@ -516,10 +601,18 @@ export class RoomHost {
       }
       memberId = this.deps.newMemberId()
       const newToken = this.deps.newToken()
+      const now = this.deps.now()
+      // The first member names the room's default and starts its clock
+      if (this.info!.startedAt === null) {
+        this.info = { ...this.info!, createdBy: name, startedAt: now }
+        this.deps.storage.saveRoom(this.info)
+      }
+      // publish makes the member host if nobody is (assignHost)
       const member: Member = {
         id: memberId,
         name,
-        joinedAt: this.deps.now(),
+        role: 'participant',
+        joinedAt: now,
         reconnecting: false,
         tracks: [],
       }
@@ -572,8 +665,84 @@ export class RoomHost {
     }))
   }
 
+  /**
+   * The host role (AC-1.3): the first member to join is the host. A host that left, or has been
+   * reconnecting for HOST_HANDOFF_MS, hands the role to the earliest-joined connected member; a
+   * host who comes back after that is a participant. While nobody is connected the role waits
+   * with the reconnecting host (or nobody), and goes to whoever connects first.
+   */
+  private assignHost(): void {
+    let host: Member | null = null
+    let candidate: Member | null = null
+    for (const member of this.members.values()) {
+      if (member.role === 'host') {
+        // Never two hosts (a defensive repair: nothing makes a second one)
+        if (host) this.setMember(member.id, { role: 'participant' })
+        else host = member
+      } else if (
+        !member.reconnecting &&
+        (candidate === null || member.joinedAt < candidate.joinedAt)
+      ) {
+        candidate = member
+      }
+    }
+    if (candidate === null) return
+    if (host) {
+      if (!host.reconnecting) return
+      const away = this.sessions.get(host.id)?.awaySince ?? null
+      if (away === null || this.deps.now() - away < HOST_HANDOFF_MS) return
+      this.setMember(host.id, { role: 'participant' })
+    }
+    this.setMember(candidate.id, { role: 'host' })
+  }
+
+  /**
+   * Brings the alarm's jobs up to date with the room (e1-t04): the sweep every
+   * SWEEP_INTERVAL_MS while anyone is connected or reconnecting (one more runs after the room
+   * empties, flushing the last usage); `close` EMPTY_ROOM_TTL_MS after the room became empty;
+   * `handoff` when a reconnecting host's HOST_HANDOFF_MS runs out and someone connected could
+   * take over. Stores the schedule when it changed.
+   */
+  private reschedule(): void {
+    if (!this.info) return
+    const now = this.deps.now()
+    if (this.active) {
+      this.schedule.ensure('sweep', now + SWEEP_INTERVAL_MS)
+      this.schedule.clear('close')
+    } else {
+      this.schedule.ensure('close', now + EMPTY_ROOM_TTL_MS)
+    }
+    const host = [...this.members.values()].find((member) => member.role === 'host')
+    const away = host?.reconnecting ? (this.sessions.get(host.id)?.awaySince ?? null) : null
+    const someoneConnected = [...this.members.values()].some((member) => !member.reconnecting)
+    if (away !== null && someoneConnected) this.schedule.set('handoff', away + HOST_HANDOFF_MS)
+    else this.schedule.clear('handoff')
+    const stored = JSON.stringify(this.schedule)
+    if (stored !== this.storedSchedule) {
+      this.storedSchedule = stored
+      this.deps.storage.saveSchedule(this.schedule.toJSON())
+    }
+  }
+
+  /** Nobody came back for EMPTY_ROOM_TTL_MS: the room and everything stored are gone */
+  private close(): void {
+    this.info = null
+    this.rev = 0
+    this.sent = null
+    this.members.clear()
+    this.sessions.clear()
+    this.byToken.clear()
+    this.baselines.clear()
+    this.relayed.clear()
+    this.schedule.clearAll()
+    this.storedSchedule = '{}'
+    this.deps.storage.clear()
+  }
+
   /** Sends what changed since the last patch to every joined connection but `except` */
   private publish(except?: string): void {
+    this.assignHost()
+    this.reschedule()
     const next = this.view()
     const ops = this.sent
       ? diff(viewAsJson(this.sent), viewAsJson(next))

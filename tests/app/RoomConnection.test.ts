@@ -41,10 +41,11 @@ class FakeSocket implements SocketLike {
   }
 }
 
-const room = { id: 'abcdefghij', createdAt: 1 }
+const room = { id: 'abcdefghij', createdAt: 1, name: null, createdBy: null, startedAt: null }
 const member = (id: string) => ({
   id,
   name: id.toUpperCase(),
+  role: 'participant' as const,
   joinedAt: 1,
   reconnecting: false,
   tracks: [],
@@ -284,6 +285,16 @@ describe('RoomConnection reconnect (e2-t08)', () => {
     t.latest().serverClose(1006)
     vi.advanceTimersByTime(1000)
     expect(t.created).toHaveLength(5)
+  })
+
+  it('tells the room a new name and rejoins with it after a reconnect (e1-t05)', () => {
+    const t = joined()
+    t.connection.rename('阿明')
+    expect(t.socket.sent.at(-1)).toBe('{"t":"rename","name":"阿明"}')
+    t.socket.serverClose(1006)
+    vi.advanceTimersByTime(1000)
+    t.latest().open()
+    expect(t.latest().sent).toEqual([JSON.stringify({ t: 'join', name: '阿明', token: TOKEN })])
   })
 
   it('caps the delay at 8 s and gives up after the grace window, until retry', () => {

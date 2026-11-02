@@ -103,7 +103,7 @@ export class RoomConnection {
   private readonly createSocket: (url: string) => SocketLike
   private readonly onToken: (token: string) => void
   private readonly backoff: Backoff
-  private readonly name: string
+  private name: string
   private token: string | null
   private socket: SocketLike | null = null
   private heartbeat: ReturnType<typeof setInterval> | null = null
@@ -316,6 +316,15 @@ export class RoomConnection {
   /** Sends a message if the socket is open; dropped otherwise (the room resends state on join) */
   send = (message: ClientMessage): void => {
     if (this.socket?.readyState === OPEN) this.socket.send(JSON.stringify(message))
+  }
+
+  /**
+   * The member's own name from now on (e1-t05): told to the room now, and used by every later
+   * `join`, so a reconnect does not bring the old name back. `name` is already normalized.
+   */
+  rename = (name: string): void => {
+    this.name = name
+    this.send({ t: 'rename', name })
   }
 
   private clearTimers(): void {

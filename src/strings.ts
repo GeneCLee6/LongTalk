@@ -56,11 +56,14 @@ export const strings = {
   },
   room: {
     title: (roomId: string) => `會議室 ${roomId}`,
+    // The name a room has until the host renames it (e1-t05)
+    defaultName: (creator: string) => `${creator} 的房間`,
     connecting: '連線中…',
     memberCount: (count: number) => `目前 ${count} 人在線`,
     members: '在房間裡的人',
     reconnecting: '重新連線中',
-    notFound: '找不到這間會議室，請確認連結是否正確。',
+    notFound: '找不到這間會議室。請確認連結是否正確；房間沒有人超過 10 分鐘也會自動關閉。',
+    youAreHost: '你現在是主持人',
     full: '這間會議室已經滿了。',
     outdated: 'LongTalk 已經更新，請重新整理頁面。',
     reconnectingSelf: '連線中斷，正在重新連線…',
@@ -129,8 +132,33 @@ export const strings = {
     share: '分享螢幕',
     chat: '聊天',
     participants: '參與者',
+    participantsCount: (count: number) => `參與者（${count} 人）`,
     more: '更多',
     leave: '離開',
+    // Buttons whose feature lands in a later batch (D1, D3, F1)
+    comingSoon: (feature: string) => `「${feature}」即將推出`,
+  },
+  // The top bar (e4-t06): room name, elapsed time, copy link
+  topBar: {
+    label: '會議室資訊',
+    elapsed: '會議時間',
+    copyLink: '複製連結',
+    copied: '已複製會議室連結，貼給朋友就能加入',
+    copyFailed: (url: string) => `無法自動複製，請手動複製這個連結：${url}`,
+  },
+  // The room link, renaming (e1-t05)
+  share: {
+    action: '分享連結…',
+    text: '來 LongTalk 一起聊：',
+  },
+  rename: {
+    room: '重新命名會議室',
+    roomLabel: '會議室名稱',
+    self: '修改我的名字',
+    selfLabel: '你的名字',
+    save: '儲存',
+    empty: '名字不能空白。',
+    tooLong: (max: number) => `最多 ${max} 個字。`,
   },
   connection: {
     connecting: '連線中…',

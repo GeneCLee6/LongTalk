@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import styled from 'styled-components'
 import type { DeviceLists, DeviceOption } from '../media/devices.ts'
 import { strings } from '../strings.ts'
-import { color, radius, space } from '../styles/tokens.ts'
+import { breakpoint, color, radius, space } from '../styles/tokens.ts'
 import { IconButton } from './IconButton.tsx'
 import { CamIcon, CamOffIcon, ChevronUpIcon, MicIcon, MicOffIcon } from './icons.tsx'
 import { Menu, type MenuItem } from './Menu.tsx'
@@ -23,7 +23,7 @@ export interface MediaControlsProps {
   onSelect: (choice: DeviceMenuChoice, deviceId: string) => void
   /** Offer the speakers (HTMLMediaElement.setSinkId; not Safari or older Firefox) */
   speakerSupported: boolean
-  /** More buttons after the media ones (leave) */
+  /** More buttons after the media ones (Toolbar: share, chat, participants, more, leave) */
   children?: ReactNode
 }
 
@@ -51,9 +51,9 @@ function deviceItems(
 }
 
 /**
- * The room's media buttons (e2-t05, e2-t06; the full toolbar is C2): microphone and camera on /
- * off, each with a menu of devices (the microphone's also lists the speakers). Off is the red
- * button with the slashed icon (DESIGN.md §5).
+ * The room's media buttons (e2-t05, e2-t06): microphone and camera on / off, each with a menu of
+ * devices (the microphone's also lists the speakers). Off is the red button with the slashed icon
+ * (DESIGN.md §5). The rest of the toolbar comes in as children (Toolbar.tsx, e4-t06).
  */
 export function MediaControls(props: MediaControlsProps) {
   const { devices, selected, onSelect } = props
@@ -117,6 +117,11 @@ const Bar = styled.div`
   border-radius: ${radius.panel};
   background: ${color.surface};
   color: ${color.fg};
+
+  @media (max-width: ${breakpoint.phone}) {
+    gap: ${space(1)};
+    padding: ${space(1)};
+  }
 `
 
 const Group = styled.div`

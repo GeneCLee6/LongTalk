@@ -32,7 +32,14 @@ const OFFER = [
 
 const quietDeps = (overrides: Partial<RoomHostDeps> = {}): RoomHostDeps => ({
   sockets: { send() {}, close() {} },
-  storage: { saveRoom() {}, saveRev() {}, saveSessions() {}, saveUsage() {} },
+  storage: {
+      saveRoom() {},
+      saveRev() {},
+      saveSessions() {},
+      saveUsage() {},
+      saveSchedule() {},
+      clear() {},
+    },
   now: () => 1000,
   newMemberId: () => 'x',
   newToken: () => 'x',

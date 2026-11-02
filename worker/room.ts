@@ -3,7 +3,6 @@ import {
   HEARTBEAT_PING,
   HEARTBEAT_PONG,
   MAX_CLIENT_MESSAGE_CHARS,
-  SWEEP_INTERVAL_MS,
   newSessionToken,
   type RoomInfo,
   type RoomSummary,
@@ -18,6 +17,7 @@ import {
   type SfuTrackRef,
   type UsageCursor,
 } from './room-host.ts'
+import type { Schedule } from './scheduler.ts'
 import { USAGE_OBJECT } from './usage.ts'
 
 /** What each hibernatable socket carries, so the connections survive the object waking up */
@@ -27,6 +27,7 @@ const ROOM_KEY = 'room'
 const REV_KEY = 'rev'
 const SESSIONS_KEY = 'sessions'
 const USAGE_KEY = 'usage'
+const SCHEDULE_KEY = 'schedule'
 
 /** A socket opening asks UsageDO for the month's state when the room has not heard for this long */
 const USAGE_REFRESH_MS = 60_000
@@ -37,7 +38,11 @@ const USAGE_REFRESH_MS = 60_000
  * connection, tagged with its connection id). What the room does is `RoomHost` (room-host.ts).
  *
  * The heartbeat `ping` is answered with `pong` by the runtime without waking the object; the
- * sweep alarm reads when each socket last pinged.
+ * sweep reads when each socket last pinged.
+ *
+ * One alarm for every timed job (e1-t04): RoomHost keeps the jobs (sweep, empty-room close, host
+ * handoff; worker/scheduler.ts) and after anything that may change them the object moves its
+ * alarm to `host.nextAlarm()` (`syncAlarm`).
  */
 export class RoomDO extends DurableObject<Env> {
   private readonly host: RoomHost
@@ -45,6 +50,8 @@ export class RoomDO extends DurableObject<Env> {
   private closing: WebSocket | null = null
   /** When the room last heard the month's usage state from UsageDO */
   private usageCheckedAt = 0
+  /** The alarm as last set (or found), so it is only written when it moves */
+  private alarmAt: number | null = null
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -67,6 +74,8 @@ export class RoomDO extends DurableObject<Env> {
         saveRev: (rev) => void storage.put(REV_KEY, rev),
         saveSessions: (sessions) => void storage.put(SESSIONS_KEY, sessions),
         saveUsage: (usage) => void storage.put(USAGE_KEY, usage),
+        saveSchedule: (schedule) => void storage.put(SCHEDULE_KEY, schedule),
+        clear: () => void storage.deleteAll(),
       },
       now: Date.now,
       newMemberId: () => crypto.randomUUID(),
@@ -74,23 +83,37 @@ export class RoomDO extends DurableObject<Env> {
     })
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG))
     void ctx.blockConcurrencyWhile(async () => {
-      const [info, rev, sessions, usage] = await Promise.all([
+      const [info, rev, sessions, usage, schedule, alarm] = await Promise.all([
         storage.get<RoomInfo>(ROOM_KEY),
         storage.get<number>(REV_KEY),
         storage.get<SessionRecord[]>(SESSIONS_KEY),
         storage.get<UsageCursor>(USAGE_KEY),
+        storage.get<Schedule>(SCHEDULE_KEY),
+        storage.getAlarm(),
       ])
       const sockets = ctx
         .getWebSockets()
         .filter((ws) => ws.readyState === WebSocket.OPEN)
         .map((ws) => ws.deserializeAttachment() as Attachment)
-      this.host.restore(info ?? null, rev ?? 0, sessions ?? [], sockets, usage ?? null)
+      this.alarmAt = alarm
+      this.host.restore(
+        info ?? null,
+        rev ?? 0,
+        sessions ?? [],
+        sockets,
+        usage ?? null,
+        schedule ?? null,
+      )
+      // A room stored before C2 has no schedule: restore made one
+      await this.syncAlarm()
     })
   }
 
   /** RPC from POST /api/rooms: false when a room with this id already exists */
   async create(id: string): Promise<boolean> {
-    return this.host.create({ id, createdAt: Date.now() })
+    const created = this.host.create({ id, createdAt: Date.now() })
+    await this.syncAlarm()
+    return created
   }
 
   /** RPC from GET /api/rooms/<id>: null when there is no such room */
@@ -134,7 +157,7 @@ export class RoomDO extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server, [attachment.conn])
     server.serializeAttachment(attachment)
     this.host.opened(attachment.conn)
-    await this.scheduleSweep()
+    await this.syncAlarm()
     return new Response(null, { status: 101, webSocket: client })
   }
 
@@ -148,6 +171,8 @@ export class RoomDO extends DurableObject<Env> {
     // Normally answered by the auto-response without waking the object
     if (data === HEARTBEAT_PING) ws.send(HEARTBEAT_PONG)
     this.host.message(conn, data)
+    // `leave` may empty the room or hand the host on
+    await this.syncAlarm()
   }
 
   async webSocketClose(ws: WebSocket) {
@@ -164,7 +189,7 @@ export class RoomDO extends DurableObject<Env> {
       this.closing = null
     }
     // A member who dropped is removed by the sweep once its grace runs out
-    await this.scheduleSweep()
+    await this.syncAlarm()
   }
 
   async webSocketError(ws: WebSocket) {
@@ -172,17 +197,19 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   /**
-   * The sweep: closes sockets that never joined or whose heartbeat stopped, removes members whose
-   * reconnect grace ran out; runs while anyone is connected or reconnecting.
+   * The one alarm: RoomHost runs every job that is due (room-host.ts `alarm`). After a sweep the
+   * egress goes to UsageDO; a closed room's storage is already gone.
    */
   async alarm() {
+    // The alarm that fired is spent
+    this.alarmAt = null
     for (const ws of this.ctx.getWebSockets()) {
       const at = this.ctx.getWebSocketAutoResponseTimestamp(ws)
       if (at) this.host.heartbeat((ws.deserializeAttachment() as Attachment).conn, at.getTime())
     }
-    this.host.sweep()
-    await this.flushUsage()
-    if (this.host.active) await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS)
+    const { swept, closed } = this.host.alarm()
+    if (swept && !closed) await this.flushUsage()
+    await this.syncAlarm()
   }
 
   /**
@@ -202,10 +229,13 @@ export class RoomDO extends DurableObject<Env> {
     }
   }
 
-  private async scheduleSweep() {
-    if (this.host.active && (await this.ctx.storage.getAlarm()) === null) {
-      await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS)
-    }
+  /** Moves the alarm to the room's next job (or drops it when there is none) */
+  private async syncAlarm() {
+    const next = this.host.nextAlarm()
+    if (next === this.alarmAt) return
+    this.alarmAt = next
+    if (next === null) await this.ctx.storage.deleteAlarm()
+    else await this.ctx.storage.setAlarm(next)
   }
 
   private send(connId: string, message: ServerMessage) {

@@ -17,14 +17,18 @@ const fakeTrack = (kind: 'audio' | 'video') =>
 
 /** RoomDO's part: members, their tracks from `tracks` messages, and a view to subscribe to */
 class FakeRoom {
-  view: RoomView = { room: { id: 'abcdefghij', createdAt: 1 }, members: {}, usage: 'normal' }
+  view: RoomView = {
+    room: { id: 'abcdefghij', createdAt: 1, name: null, createdBy: null, startedAt: null },
+    members: {},
+    usage: 'normal',
+  }
   readonly sent: Record<string, ClientMessage[]> = {}
   readonly #listeners = new Set<() => void>()
 
   add(id: string, name: string): void {
     this.sent[id] = []
     this.#update((members) => {
-      members[id] = { id, name, joinedAt: 1, reconnecting: false, tracks: [] }
+      members[id] = { id, name, role: 'participant', joinedAt: 1, reconnecting: false, tracks: [] }
     })
   }
 

@@ -229,6 +229,14 @@ interop(
     const carol = await room.join('Carol')
     const members = [alice, bob, carol]
 
+    await interop.step('the top bar names the room after its first member (e1-t05)', async () => {
+      for (const member of members) {
+        await expect(
+          member.page.getByRole('heading', { name: strings.room.defaultName('Alice') }),
+        ).toBeVisible()
+      }
+    })
+
     await interop.step('every way: video frames and audio', async () => {
       for (const viewer of members) {
         for (const other of members) {

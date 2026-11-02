@@ -85,6 +85,7 @@ export const fontSize = {
   small: '14px',
   nameplate: '13px',
   toolbarLabel: '12px',
+  badge: '11px',
   title: '28px',
   titleWide: '40px',
 } as const

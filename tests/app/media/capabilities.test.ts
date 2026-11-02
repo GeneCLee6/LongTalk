@@ -3,8 +3,10 @@ import doc from '../../../docs/BROWSER-SUPPORT.md?raw'
 import {
   CAPABILITIES,
   canChooseSpeaker,
+  canCopy,
   canMeasureLevel,
   canShareScreen,
+  canWebShare,
   detectCapabilities,
   supportsWebRtc,
   type CapabilityEnv,
@@ -31,7 +33,7 @@ function fullBrowser(): CapabilityEnv {
     RTCRtpSender,
     HTMLMediaElement,
     AudioContext: class {},
-    navigator: { mediaDevices: new MediaDevices() },
+    navigator: { mediaDevices: new MediaDevices(), clipboard: { writeText() {} }, share() {} },
   }
 }
 
@@ -76,6 +78,15 @@ describe('capabilities (e11-t04)', () => {
     expect(supportsWebRtc({ RTCPeerConnection: {} })).toBe(false)
     expect(canMeasureLevel({})).toBe(false)
     expect(canMeasureLevel({ AudioContext: class {} })).toBe(true)
+  })
+
+  it('copies the link with the clipboard API, and shares it with Web Share when there is one', () => {
+    expect(canCopy(fullBrowser())).toBe(true)
+    expect(canWebShare(fullBrowser())).toBe(true)
+    // Firefox on the desktop: a clipboard, no share sheet; an http: page: neither
+    expect(canWebShare({ navigator: { clipboard: { writeText() {} } } })).toBe(false)
+    expect(canCopy({ navigator: { share: 'not a function' } })).toBe(false)
+    expect(canWebShare({ navigator: { share: 'not a function' } })).toBe(false)
   })
 
   it('looks at the real globals by default', () => {

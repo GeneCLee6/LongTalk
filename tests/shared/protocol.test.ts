@@ -13,8 +13,10 @@ import {
 } from '../../shared/protocol.ts'
 
 const state = {
-  room: { id: 'abcdefghij', createdAt: 1 },
-  members: { m1: { id: 'm1', name: 'Gene', joinedAt: 2, reconnecting: false, tracks: [] } },
+  room: { id: 'abcdefghij', createdAt: 1, name: null, createdBy: null, startedAt: null },
+  members: {
+    m1: { id: 'm1', name: 'Gene', role: 'host' as const, joinedAt: 2, reconnecting: false, tracks: [] },
+  },
   usage: 'normal' as const,
 }
 const TOKEN = 'A'.repeat(43)
@@ -22,6 +24,18 @@ const TOKEN = 'A'.repeat(43)
 describe('protocol', () => {
   it('builds the versioned WebSocket path', () => {
     expect(roomSocketPath('abcdefghij')).toBe(`/api/rooms/abcdefghij/ws?v=${PROTOCOL_VERSION}`)
+  })
+
+  it('parses renames: a display name up to 40 characters, a room name up to 60 (C2)', () => {
+    expect(parseClientMessage('{"t":"rename","name":" 阿明 "}')).toEqual({ t: 'rename', name: '阿明' })
+    expect(parseClientMessage(JSON.stringify({ t: 'rename', name: 'x'.repeat(41) }))).toBeNull()
+    expect(parseClientMessage(JSON.stringify({ t: 'renameRoom', name: 'x'.repeat(60) }))).toEqual({
+      t: 'renameRoom',
+      name: 'x'.repeat(60),
+    })
+    expect(parseClientMessage(JSON.stringify({ t: 'renameRoom', name: 'x'.repeat(61) }))).toBeNull()
+    expect(parseClientMessage('{"t":"renameRoom","name":"‮ "}')).toBeNull()
+    expect(parseClientMessage('{"t":"renameRoom"}')).toBeNull()
   })
 
   it('parses the messages a browser may send', () => {

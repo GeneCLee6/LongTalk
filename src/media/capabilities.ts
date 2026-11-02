@@ -24,6 +24,10 @@ export interface Capabilities {
   audioContext: boolean
   /** The `devicechange` event: noticing a device plugged in or out (B2) */
   deviceChange: boolean
+  /** navigator.clipboard.writeText: the top bar's copy link (only on HTTPS or localhost) */
+  clipboard: boolean
+  /** navigator.share (Web Share API): the share sheet for the room link (mostly phones) */
+  webShare: boolean
 }
 
 export type Capability = keyof Capabilities
@@ -38,6 +42,8 @@ export const CAPABILITIES: readonly Capability[] = [
   'senderParameters',
   'audioContext',
   'deviceChange',
+  'clipboard',
+  'webShare',
 ]
 
 /** Where detection looks: the browser's globals, or a stand-in in tests */
@@ -46,7 +52,7 @@ export interface CapabilityEnv {
   RTCRtpSender?: { prototype: object }
   HTMLMediaElement?: { prototype: object }
   AudioContext?: unknown
-  navigator?: { mediaDevices?: object | null }
+  navigator?: { mediaDevices?: object | null; clipboard?: object | null; share?: unknown }
 }
 
 const browser = (): CapabilityEnv => globalThis as unknown as CapabilityEnv
@@ -73,6 +79,16 @@ export function canMeasureLevel(env: CapabilityEnv = browser()): boolean {
   return typeof env.AudioContext === 'function'
 }
 
+/** Whether text can be copied to the clipboard (navigator.clipboard.writeText) */
+export function canCopy(env: CapabilityEnv = browser()): boolean {
+  return has(env.navigator?.clipboard, 'writeText')
+}
+
+/** Whether the system share sheet is there (navigator.share: phones, Safari, Chrome on Windows) */
+export function canWebShare(env: CapabilityEnv = browser()): boolean {
+  return typeof env.navigator?.share === 'function'
+}
+
 /** Everything at once (the doc's table, for this browser) */
 export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities {
   const devices = env.navigator?.mediaDevices
@@ -86,5 +102,7 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     senderParameters: has(sender, 'setParameters'),
     audioContext: canMeasureLevel(env),
     deviceChange: has(devices, 'ondevicechange'),
+    clipboard: canCopy(env),
+    webShare: canWebShare(env),
   }
 }

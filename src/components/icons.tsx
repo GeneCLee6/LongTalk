@@ -74,3 +74,60 @@ export function ReconnectIcon() {
     </svg>
   )
 }
+
+/** A screen with an arrow out of it: share the screen */
+export function ScreenShareIcon() {
+  return (
+    <svg {...common}>
+      <rect x="2" y="4" width="20" height="13" rx="2" />
+      <path d="M8 21h8M12 17v4M12 13V8m-3 3 3-3 3 3" />
+    </svg>
+  )
+}
+
+/** A speech bubble: chat */
+export function ChatIcon() {
+  return (
+    <svg {...common}>
+      <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.2-4.4A8 8 0 1 1 21 12z" />
+    </svg>
+  )
+}
+
+/** Two people: participants */
+export function PeopleIcon() {
+  return (
+    <svg {...common}>
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14a6.5 6.5 0 0 1 3.5 6" />
+    </svg>
+  )
+}
+
+/** Three dots: more */
+export function MoreIcon() {
+  return (
+    <svg {...common}>
+      <path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth={3} />
+    </svg>
+  )
+}
+
+/** A door with an arrow out: leave */
+export function LeaveIcon() {
+  return (
+    <svg {...common}>
+      <path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M9 16l-4-4 4-4M5 12h11" />
+    </svg>
+  )
+}
+
+/** Two chain links: the room link */
+export function LinkIcon() {
+  return (
+    <svg {...common}>
+      <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
+      <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+    </svg>
+  )
+}

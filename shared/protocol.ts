@@ -29,11 +29,21 @@
 //    `tracks` again after every `welcome`, for anything it changed while the socket was down.
 //    `stats` also says whether the browser's media goes through a TURN relay (`relay`), which the
 //    free-tier guard counts with TURN's overhead (shared/usage.ts).
+// 8. Host and lifecycle (C2): the first member to join is the host (`Member.role`); a host that
+//    leaves, or stays reconnecting for HOST_HANDOFF_MS, hands the role to the earliest-joined
+//    connected member. A room with nobody in it (no member, no socket) for EMPTY_ROOM_TTL_MS is
+//    closed: its state is deleted and its id answers 404 / CloseCode.roomNotFound from then on.
+// 9. Names (C2): `rename` changes the member's own display name; `renameRoom` changes the room's
+//    name (`RoomInfo.name`; null shows a default made from `createdBy`), host only for now
+//    (worker/roles.ts arrives with e1-t06). A refused `renameRoom` is answered with `error`
+//    code `forbidden`.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
 // v3 → v4 (B2): `MemberTrack.muted`, and `muted` on every entry of `tracks`.
 // v4 → v5 (B3): `stats.relay`; the browser reconnects on its own (also after `stale`).
+// v5 → v6 (C2): `Member.role`, `RoomInfo.name` / `createdBy` / `startedAt`, `rename`,
+//   `renameRoom`, error code `forbidden`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -42,7 +52,7 @@ import type { JsonValue, PatchOp } from './patch.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 5
+export const PROTOCOL_VERSION = 6
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -64,6 +74,13 @@ export const MAX_PENDING_SOCKETS = 10
 export const MAX_CLIENT_MESSAGE_CHARS = 4_096
 /** A display name's length in characters (code points), after normalizeName */
 export const MAX_NAME_CHARS = 40
+/** A room name's length in characters (code points), after normalizeName */
+export const MAX_ROOM_NAME_CHARS = 60
+
+/** A room with nobody in it (no member, no socket) is closed after this long (AC-1.3) */
+export const EMPTY_ROOM_TTL_MS = 10 * 60_000
+/** A host reconnecting for this long hands the role to a connected member (AC-1.3) */
+export const HOST_HANDOFF_MS = 60_000
 
 /**
  * WebSocket close codes the server uses. The browser does not reconnect after the 44xx ones but
@@ -83,11 +100,24 @@ export const CloseCode = {
   replaced: 4410,
 } as const
 
-/** The room as POST /api/rooms creates it */
-export type RoomInfo = {
+/** What POST /api/rooms decides about a room */
+export type RoomInit = {
   id: string
   createdAt: number
 }
+
+/** The room as everyone sees it */
+export type RoomInfo = RoomInit & {
+  /** Set by the host (`renameRoom`); null shows the default name, made from `createdBy` */
+  name: string | null
+  /** The first member's name when it joined (null until someone joins) */
+  createdBy: string | null
+  /** When the first member joined: the top bar's elapsed time counts from it */
+  startedAt: number | null
+}
+
+/** What a member may do in the room; cohost and waiting arrive with e1-t06 */
+export type Role = 'host' | 'participant'
 
 /** What GET /api/rooms/<id> answers, for the pre-join screen */
 export type RoomSummary = RoomInfo & { memberCount: number }
@@ -114,12 +144,14 @@ export const isSfuId = (value: unknown): value is string =>
   typeof value === 'string' && SFU_ID_PATTERN.test(value)
 
 /**
- * One person in the room. Roles arrive with e1-t04 / e1-t06. The session token is never part of
- * the view: only its owner gets it, in `welcome`.
+ * One person in the room. The session token is never part of the view: only its owner gets it,
+ * in `welcome`.
  */
 export type Member = {
   id: string
   name: string
+  /** One member is the host whenever anyone is connected (C2, e1-t04) */
+  role: Role
   joinedAt: number
   /** The socket dropped without `leave`; the member keeps its place for RECONNECT_GRACE_MS */
   reconnecting: boolean
@@ -153,7 +185,8 @@ export type SnapshotMessage = { t: 'snapshot'; rev: number; state: RoomView }
 /** The changes from rev − 1 to `rev` */
 export type PatchMessage = { t: 'patch'; rev: number; ops: PatchOp[] }
 
-export type ErrorMessage = { t: 'error'; code: 'bad_message' }
+/** `forbidden`: the member may not do that (`renameRoom` from someone who is not the host) */
+export type ErrorMessage = { t: 'error'; code: 'bad_message' | 'forbidden' }
 
 export type ServerMessage = WelcomeMessage | SnapshotMessage | PatchMessage | ErrorMessage
 
@@ -183,8 +216,20 @@ export type TracksMessage = {
  */
 export type StatsMessage = { t: 'stats'; sessionId: string; bytesReceived: number; relay: boolean }
 
+/** The member's own display name from now on (C2, e1-t05) */
+export type RenameMessage = { t: 'rename'; name: string }
+
+/** The room's name (host only, C2, e1-t05) */
+export type RenameRoomMessage = { t: 'renameRoom'; name: string }
+
 export type ClientMessage =
-  JoinMessage | ResyncMessage | LeaveMessage | TracksMessage | StatsMessage
+  | JoinMessage
+  | ResyncMessage
+  | LeaveMessage
+  | TracksMessage
+  | StatsMessage
+  | RenameMessage
+  | RenameRoomMessage
 
 // ── POST /api/rooms ──────────────────────────────────────────────────────────────────────────
 
@@ -210,14 +255,14 @@ function parseObject(raw: string, maxChars: number): Record<string, unknown> | n
 const UNSAFE_NAME_CHARS = /[\p{Cc}\u202A-\u202E\u2066-\u2069]/gu
 
 /**
- * A display name as the room stores it: unsafe characters removed, runs of whitespace collapsed,
- * trimmed; null when nothing is left or it is longer than MAX_NAME_CHARS. The browser uses it
- * before sending, the server again on `join`.
+ * A display name (or, with MAX_ROOM_NAME_CHARS, a room name) as the room stores it: unsafe
+ * characters removed, runs of whitespace collapsed, trimmed; null when nothing is left or it is
+ * longer than `maxChars`. The browser uses it before sending, the server again on receipt.
  */
-export function normalizeName(raw: unknown): string | null {
+export function normalizeName(raw: unknown, maxChars: number = MAX_NAME_CHARS): string | null {
   if (typeof raw !== 'string') return null
   const name = raw.replace(UNSAFE_NAME_CHARS, '').replace(/\s+/g, ' ').trim()
-  if (name === '' || [...name].length > MAX_NAME_CHARS) return null
+  if (name === '' || [...name].length > maxChars) return null
   return name
 }
 
@@ -254,6 +299,14 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return { t: 'leave' }
     case 'tracks':
       return parseTracks(value)
+    case 'rename': {
+      const name = normalizeName(value.name)
+      return name === null ? null : { t: 'rename', name }
+    }
+    case 'renameRoom': {
+      const name = normalizeName(value.name, MAX_ROOM_NAME_CHARS)
+      return name === null ? null : { t: 'renameRoom', name }
+    }
     case 'stats':
       return isSfuId(value.sessionId) &&
         Number.isSafeInteger(value.bytesReceived) &&
