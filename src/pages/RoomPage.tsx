@@ -1,19 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import styled from 'styled-components'
-import { normalizeName } from '../../shared/protocol.ts'
+import {
+  MAX_NAME_CHARS,
+  MAX_ROOM_NAME_CHARS,
+  normalizeName,
+  type RoomInfo,
+  type Role,
+} from '../../shared/protocol.ts'
 import { isRoomId } from '../../shared/room-id.ts'
 import type { UsageState } from '../../shared/usage.ts'
 import { getRoom } from '../api/rooms.ts'
 import { fetchIceConfig } from '../api/turn.ts'
 import { Button } from '../components/Button.tsx'
-import { MediaControls } from '../components/MediaControls.tsx'
+import type { MenuItem } from '../components/Menu.tsx'
+import { NameDialog } from '../components/NameDialog.tsx'
 import { PreJoin } from '../components/PreJoin.tsx'
 import { Stage } from '../components/Stage.tsx'
 import { Tile, type TileProps } from '../components/Tile.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
+import { Toolbar } from '../components/Toolbar.tsx'
+import { TopBar } from '../components/TopBar.tsx'
 import { useToasts } from '../components/useToasts.ts'
-import { canChooseSpeaker, supportsWebRtc } from '../media/capabilities.ts'
+import {
+  canChooseSpeaker,
+  canShareScreen,
+  canWebShare,
+  supportsWebRtc,
+} from '../media/capabilities.ts'
 import { activeDeviceId, type MediaProblem } from '../media/devices.ts'
 import { trackKey, type MediaTransportErrorCode } from '../media/MediaTransport.ts'
 import type { RoomConnectionState } from '../room/RoomConnection.ts'
@@ -33,10 +47,11 @@ import { useMicLevel } from '../room/useMicLevel.ts'
 import { useRoomConnection } from '../room/useRoomConnection.ts'
 import type { LocalTracks } from '../room/RoomMedia.ts'
 import { useRoomMedia } from '../room/useRoomMedia.ts'
+import { copyRoomLink, roomUrl, shareRoomLink, type LinkOutcome } from '../room/shareLink.ts'
 import { useSpeaking } from '../room/useSpeaking.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
 import { strings } from '../strings.ts'
-import { color, font, fontSize, layer, radius, space } from '../styles/tokens.ts'
+import { breakpoint, color, font, fontSize, layer, radius, space } from '../styles/tokens.ts'
 
 /** What the pre-join screen hands to the room: the room publishes with the media choices */
 export interface JoinChoices {
@@ -204,7 +219,7 @@ function Room({
   choices: JoinChoices
   onLeft: () => void
 }) {
-  const { state, leave, send, retry: retryRoom } = useRoomConnection(roomId, choices.name)
+  const { state, leave, send, retry: retryRoom, rename } = useRoomConnection(roomId, choices.name)
   const gone = state.status === 'notFound'
   useEffect(() => {
     if (gone) clearSession(roomId)
@@ -212,6 +227,41 @@ function Room({
 
   const toasts = useToasts()
   const { show } = toasts
+  const roomInfo = state.view?.room ?? null
+  const title = roomTitle(roomId, roomInfo)
+  const self = state.you ? state.view?.members[state.you] : undefined
+  const isHost = self?.role === 'host'
+  useHostNotice(self?.role, show)
+  useEffect(() => {
+    document.title = `${title} · ${strings.appName}`
+    return () => {
+      document.title = strings.appName
+    }
+  }, [title])
+  const [renaming, setRenaming] = useState<'room' | 'self' | null>(null)
+  const [webShare] = useState(canWebShare)
+  const [screenShare] = useState(canShareScreen)
+  const link = roomUrl(roomId)
+  const onLinkOutcome = (outcome: LinkOutcome) => {
+    if (outcome === 'copied') show(strings.topBar.copied)
+    else if (outcome === 'failed') show(strings.topBar.copyFailed(link), 'warn')
+  }
+  const moreItems: MenuItem[] = [
+    ...(webShare
+      ? [
+          {
+            id: 'share',
+            label: strings.share.action,
+            onSelect: () => void shareRoomLink(link, title, strings.share.text).then(onLinkOutcome),
+          },
+        ]
+      : []),
+    { id: 'rename-self', label: strings.rename.self, onSelect: () => setRenaming('self') },
+    // Only the host may rename the room (RoomDO checks it too)
+    ...(isHost
+      ? [{ id: 'rename-room', label: strings.rename.room, onSelect: () => setRenaming('room') }]
+      : []),
+  ]
   const onNotice = useCallback((notice: DeviceNotice) => show(noticeText(notice), 'warn'), [show])
   // The microphone and camera chosen on the pre-join screen, opened again for the room; the
   // toolbar turns them on and off and switches them after that (e2-t05, e2-t06)
@@ -286,13 +336,13 @@ function Room({
   const selfReconnecting = state.status === 'reconnecting' || media.status === 'reconnecting'
   return (
     <>
-      {/* The top bar's place: room name and status (the full top bar is C2, e4-t06) */}
-      <Header>
-        <h1>{strings.room.title(roomId)}</h1>
-        <Status role="status" $tone={state.status === 'open' ? 'normal' : 'warn'}>
-          {statusText(state)}
-        </Status>
-      </Header>
+      <TopBar
+        title={title}
+        startedAt={roomInfo?.startedAt ?? null}
+        status={statusText(state)}
+        warn={state.status !== 'open'}
+        onCopyLink={() => void copyRoomLink(link, title, strings.share.text).then(onLinkOutcome)}
+      />
       <StageArea>
         {inRoom && (
           <Stage>
@@ -355,9 +405,16 @@ function Room({
           <DeviceProblems local={local} onRetry={(kind) => void devices?.retry(kind)} />
         </Notices>
       </StageArea>
-      {/* The toolbar's place (the full toolbar is C2, e4-t06) */}
       <ToolbarArea>
-        <MediaControls
+        <Toolbar
+          memberCount={members.length}
+          canShareScreen={screenShare}
+          onComingSoon={(feature) => show(strings.toolbar.comingSoon(feature))}
+          moreItems={moreItems}
+          onLeave={() => {
+            leave()
+            onLeft()
+          }}
           micOn={local.mic.on}
           camOn={local.cam.on}
           micBusy={!local.ready || local.mic.opening}
@@ -372,21 +429,58 @@ function Room({
           }}
           onSelect={(choice, deviceId) => void devices?.select(choice, deviceId)}
           speakerSupported={speakerSupported}
-        >
-          <Button
-            variant="danger"
-            onClick={() => {
-              leave()
-              onLeft()
-            }}
-          >
-            {strings.toolbar.leave}
-          </Button>
-        </MediaControls>
+        />
       </ToolbarArea>
+      {renaming === 'room' && (
+        <NameDialog
+          title={strings.rename.room}
+          label={strings.rename.roomLabel}
+          initial={title}
+          maxChars={MAX_ROOM_NAME_CHARS}
+          onSave={(name) => {
+            send({ t: 'renameRoom', name })
+            setRenaming(null)
+          }}
+          onCancel={() => setRenaming(null)}
+        />
+      )}
+      {renaming === 'self' && (
+        <NameDialog
+          title={strings.rename.self}
+          label={strings.rename.selfLabel}
+          initial={self?.name ?? choices.name}
+          maxChars={MAX_NAME_CHARS}
+          onSave={(name) => {
+            rename(name)
+            // Remembered for the next room too, like the pre-join screen's name
+            saveName(name)
+            setRenaming(null)
+          }}
+          onCancel={() => setRenaming(null)}
+        />
+      )}
       <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
     </>
   )
+}
+
+/**
+ * The room's name as shown (e1-t05): what the host named it, else "<first member>'s room", else
+ * (before anyone joined, or a room from before v6) its code
+ */
+function roomTitle(roomId: string, info: RoomInfo | null): string {
+  if (info?.name) return info.name
+  if (info?.createdBy) return strings.room.defaultName(info.createdBy)
+  return strings.room.title(roomId)
+}
+
+/** "You are the host now" when the role comes to us from someone else (AC-1.3's handoff) */
+function useHostNotice(role: Role | undefined, show: (text: string) => void) {
+  const previous = useRef(role)
+  useEffect(() => {
+    if (role === 'host' && previous.current === 'participant') show(strings.room.youAreHost)
+    previous.current = role
+  }, [role, show])
 }
 
 /** One member's tile, with the speaking outline from their microphone's level (e4-t05) */
@@ -588,8 +682,8 @@ const Alert = styled.div`
 `
 
 /**
- * The room (DESIGN.md §4.3): the top bar's row, the stage, the toolbar's row; the side panel
- * joins in C2 / D3
+ * The room (DESIGN.md §4.3): the top bar, the stage, the toolbar; the side panel (chat,
+ * participants) joins in D3 / F1
  */
 const Shell = styled.main`
   height: 100dvh;
@@ -608,31 +702,6 @@ const Centered = styled.div`
   grid-row: 1 / -1;
   display: grid;
   place-items: center;
-`
-
-const Header = styled.header`
-  display: flex;
-  align-items: center;
-  gap: ${space(3)};
-  min-height: 44px;
-  padding: 0 ${space(4)};
-  border-bottom: 1px solid ${color.line};
-  background: ${color.surface};
-  font-size: ${fontSize.nameplate};
-  color: ${color.muted};
-
-  h1 {
-    margin: 0;
-    font-size: ${fontSize.small};
-    font-weight: 700;
-    color: ${color.fg};
-  }
-`
-
-const Status = styled.p<{ $tone: 'normal' | 'warn' }>`
-  margin: 0;
-  color: ${({ $tone }) => ($tone === 'warn' ? color.warn : color.muted)};
-  font-weight: ${({ $tone }) => ($tone === 'warn' ? 600 : 400)};
 `
 
 const StageArea = styled.div`
@@ -672,4 +741,8 @@ const ToolbarArea = styled.footer`
   padding: ${space(1)} ${space(3)};
   border-top: 1px solid ${color.line};
   background: ${color.surface};
+
+  @media (max-width: ${breakpoint.phone}) {
+    padding: 0;
+  }
 `

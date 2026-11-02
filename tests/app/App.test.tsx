@@ -34,8 +34,8 @@ class RoomSocket {
     if (message.t !== 'join') return
     const roomId = /rooms\/([^/]+)\/ws/.exec(this.url)?.[1] ?? ''
     const members = {
-      w: { id: 'w', name: 'Wei', joinedAt: 1, reconnecting: true, tracks: [] },
-      a: { id: 'a', name: message.name, joinedAt: 2, reconnecting: false, tracks: [] },
+      w: { id: 'w', name: 'Wei', role: 'participant', joinedAt: 1, reconnecting: true, tracks: [] },
+      a: { id: 'a', name: message.name, role: 'host', joinedAt: 2, reconnecting: false, tracks: [] },
     }
     const state = { room: { id: roomId, createdAt: 1 }, members, usage: 'normal' }
     queueMicrotask(() =>
@@ -195,6 +195,39 @@ describe('joining a room', () => {
     expect(socket.sent.at(-1)).toBe('{"t":"leave"}')
     expect(sessionStorage.getItem(`longtalk.session.${ROOM_ID}`)).toBeNull()
     expect(window.location.pathname).toBe('/')
+  })
+
+  it('renames the room (as host) and myself, and copies the link (e1-t05)', async () => {
+    stubApi()
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    localStorage.setItem('longtalk.name', 'Gene')
+    sessionStorage.setItem(`longtalk.session.${ROOM_ID}`, TOKEN)
+    visit(`/r/${ROOM_ID}`)
+    await screen.findByText('目前 2 人在線')
+    const socket = RoomSocket.instances.at(-1)!
+
+    fireEvent.click(screen.getByRole('button', { name: '更多' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '重新命名會議室' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '會議室名稱' }), {
+      target: { value: '週五聊天' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }))
+    expect(socket.sent.at(-1)).toBe('{"t":"renameRoom","name":"週五聊天"}')
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '更多' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '修改我的名字' }))
+    const box = screen.getByRole('textbox', { name: '你的名字' })
+    expect(box).toHaveValue('Gene')
+    fireEvent.change(box, { target: { value: ' 阿明 ' } })
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }))
+    expect(socket.sent.at(-1)).toBe('{"t":"rename","name":"阿明"}')
+    expect(localStorage.getItem('longtalk.name')).toBe('阿明')
+
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: '複製連結' })))
+    expect(writeText).toHaveBeenCalledWith(`${location.origin}/r/${ROOM_ID}`)
+    expect(await screen.findByText(/已複製會議室連結/)).toBeInTheDocument()
   })
 
   it('says so when the room does not exist, without asking for the camera', async () => {

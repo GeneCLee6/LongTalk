@@ -24,6 +24,10 @@ export interface MenuProps {
   items: MenuItem[]
   /** Open upwards (from the bottom toolbar) */
   placement?: 'below' | 'above'
+  /** Line the list up with the trigger's left edge (start) or right edge (end) */
+  align?: 'start' | 'end'
+  /** The icon trigger shows its caption (the toolbar's 更多) */
+  showLabel?: boolean
 }
 
 /**
@@ -31,7 +35,14 @@ export interface MenuProps {
  * Up, Down, Home, End move; Escape closes and returns focus to the trigger; Tab or a click
  * outside closes.
  */
-export function Menu({ label, icon, items, placement = 'below' }: MenuProps) {
+export function Menu({
+  label,
+  icon,
+  items,
+  placement = 'below',
+  align = 'start',
+  showLabel = false,
+}: MenuProps) {
   const [open, setOpen] = useState(false)
   const [focusIndex, setFocusIndex] = useState(0)
   const menuId = useId()
@@ -101,7 +112,7 @@ export function Menu({ label, icon, items, placement = 'below' }: MenuProps) {
   return (
     <Root ref={rootRef}>
       {icon ? (
-        <IconButton label={label} icon={icon} {...triggerProps} />
+        <IconButton label={label} icon={icon} showLabel={showLabel} {...triggerProps} />
       ) : (
         <Button variant="secondary" {...triggerProps}>
           {label}
@@ -113,6 +124,7 @@ export function Menu({ label, icon, items, placement = 'below' }: MenuProps) {
           role="menu"
           aria-label={label}
           $placement={placement}
+          $align={align}
           onKeyDown={onMenuKey}
         >
           {items.map((item, index) => [
@@ -152,10 +164,10 @@ const Root = styled.div`
   display: inline-block;
 `
 
-const List = styled.div<{ $placement: 'below' | 'above' }>`
+const List = styled.div<{ $placement: 'below' | 'above'; $align: 'start' | 'end' }>`
   position: absolute;
   ${({ $placement }) => ($placement === 'below' ? 'top' : 'bottom')}: calc(100% + ${space(1)});
-  left: 0;
+  ${({ $align }) => ($align === 'start' ? 'left' : 'right')}: 0;
   z-index: ${layer.menu};
   min-width: 200px;
   padding: ${space(1)};

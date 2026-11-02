@@ -12,6 +12,8 @@ export interface RoomConnectionHandle {
   send: (message: ClientMessage) => void
   /** After `lost`: try to reconnect again */
   retry: () => void
+  /** Changes this member's own name (normalized), also for every later rejoin (e1-t05) */
+  rename: (name: string) => void
 }
 
 /**
@@ -47,5 +49,11 @@ export function useRoomConnection(roomId: string, name: string): RoomConnectionH
     connection.stop({ leave: true })
     clearSession(roomId)
   }, [connection, roomId])
-  return { state, leave, send: connection.send, retry: connection.retry }
+  return {
+    state,
+    leave,
+    send: connection.send,
+    retry: connection.retry,
+    rename: connection.rename,
+  }
 }

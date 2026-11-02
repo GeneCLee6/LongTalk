@@ -2,13 +2,17 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { applyPatch } from '../../shared/patch.ts'
 import {
   CloseCode,
+  EMPTY_ROOM_TTL_MS,
+  HOST_HANDOFF_MS,
   JOIN_TIMEOUT_MS,
   MAX_MEMBERS,
   MAX_PENDING_SOCKETS,
   PROTOCOL_VERSION,
   RECONNECT_GRACE_MS,
   STALE_AFTER_MS,
+  SWEEP_INTERVAL_MS,
   viewAsJson,
+  type RoomInfo,
   type RoomView,
   type ServerMessage,
 } from '../../shared/protocol.ts'
@@ -19,9 +23,12 @@ import {
   type SessionRecord,
   type UsageCursor,
 } from '../../worker/room-host.ts'
+import type { Schedule } from '../../worker/scheduler.ts'
 
 const V = String(PROTOCOL_VERSION)
 const ROOM = { id: 'abcdefghij', createdAt: 1000 }
+/** ROOM as created, before anyone joined */
+const INFO = { ...ROOM, name: null, createdBy: null, startedAt: null }
 
 /** A browser as the room sees it: keeps its own copy of the view from what it receives */
 class FakeClient {
@@ -53,6 +60,8 @@ function setup(prefix = 'm') {
     rev: 0,
     sessions: [] as SessionRecord[],
     usage: null as UsageCursor | null,
+    schedule: {} as Schedule,
+    cleared: 0,
   }
   const host = new RoomHost({
     sockets: {
@@ -74,6 +83,12 @@ function setup(prefix = 'm') {
       },
       saveUsage: (usage) => {
         saved.usage = usage
+      },
+      saveSchedule: (schedule) => {
+        saved.schedule = schedule
+      },
+      clear: () => {
+        saved.cleared++
       },
     },
     now: () => clock,
@@ -114,9 +129,16 @@ function setup(prefix = 'm') {
   }
 }
 
-const member = (id: string, name: string, joinedAt: number, reconnecting = false) => ({
+const member = (
+  id: string,
+  name: string,
+  joinedAt: number,
+  reconnecting = false,
+  role: 'host' | 'participant' = 'participant',
+) => ({
   id,
   name,
+  role,
   joinedAt,
   reconnecting,
   tracks: [],
@@ -133,9 +155,9 @@ describe('RoomHost', () => {
     expect(t.host.summary()).toBeNull()
     expect(t.host.create(ROOM)).toBe(true)
     expect(t.host.create({ ...ROOM, createdAt: 2 })).toBe(false)
-    expect(t.saved.room).toEqual(ROOM)
-    expect(t.host.view()).toEqual({ room: ROOM, members: {}, usage: 'normal' })
-    expect(t.host.summary()).toEqual({ ...ROOM, memberCount: 0 })
+    expect(t.saved.room).toEqual(INFO)
+    expect(t.host.view()).toEqual({ room: INFO, members: {}, usage: 'normal' })
+    expect(t.host.summary()).toEqual({ ...INFO, memberCount: 0 })
   })
 
   it('refuses sockets to a room that was never created, of another version, or when full', () => {
@@ -160,7 +182,11 @@ describe('RoomHost', () => {
         you: 'm1',
         token: 'token-m1'.padEnd(43, '_'),
         rev: 1,
-        state: { room: ROOM, members: { m1: member('m1', '小潔', t.now()) }, usage: 'normal' },
+        state: {
+          room: { ...INFO, createdBy: '小潔', startedAt: t.now() },
+          members: { m1: member('m1', '小潔', t.now(), false, 'host') },
+          usage: 'normal',
+        },
       },
     ])
     expect(t.host.summary()).toMatchObject({ memberCount: 1 })
@@ -354,7 +380,7 @@ describe('RoomHost', () => {
     expect(t.saved.sessions).toEqual([
       {
         token: a.token,
-        member: member(a.id, 'Gene', t.now()),
+        member: member(a.id, 'Gene', t.now(), false, 'host'),
         conn: a.conn,
         awaySince: null,
         sfu: null,
@@ -365,7 +391,7 @@ describe('RoomHost', () => {
     expect(t.saved.sessions).toEqual([
       {
         token: a.token,
-        member: member(a.id, 'Gene', t.now() - 10, true),
+        member: member(a.id, 'Gene', t.now() - 10, true, 'host'),
         conn: null,
         awaySince: t.now(),
         sfu: null,
@@ -380,7 +406,9 @@ describe('RoomHost', () => {
     t.host.closed(b.conn)
     const view = t.host.view()
     const woken = setup('w')
-    woken.host.restore(ROOM, t.saved.rev, t.saved.sessions, [{ conn: a.conn, openedAt: 0 }])
+    woken.host.restore(t.saved.room as RoomInfo, t.saved.rev, t.saved.sessions, [
+      { conn: a.conn, openedAt: 0 },
+    ])
     expect(woken.host.view()).toEqual(view)
     woken.clients.set(a.conn, a.client)
     // The next change continues the same numbering, so a's copy stays valid
@@ -696,5 +724,251 @@ describe('RoomHost media (e2-t03) and usage (e11-t13)', () => {
     woken.host.restore(ROOM, t.saved.rev, t.saved.sessions, [], t.saved.usage)
     expect(woken.host.view().usage).toBe('low')
     expect(woken.host.usageState).toBe('low')
+  })
+})
+
+describe('RoomHost lifecycle (e1-t04): one alarm, empty-room close, host handoff', () => {
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    t = setup()
+    t.host.create(ROOM)
+  })
+
+  /**
+   * Plays the alarm the way RoomDO does until `until`: jumps the clock to each due time, reports
+   * a heartbeat for every connection in `alive`, and runs what is due
+   */
+  function runAlarms(until: number, alive: string[] = []) {
+    const results = []
+    for (let next = t.host.nextAlarm(); next !== null && next <= until; next = t.host.nextAlarm()) {
+      t.tick(Math.max(next - t.now(), 0))
+      for (const conn of alive) t.host.heartbeat(conn, t.now())
+      results.push({ at: t.now(), ...t.host.alarm() })
+    }
+    t.tick(Math.max(until - t.now(), 0))
+    return results
+  }
+
+  const roles = (view: RoomView | null) =>
+    Object.fromEntries(Object.values(view!.members).map((m) => [m.name, m.role]))
+
+  it('closes a room nobody joins, EMPTY_ROOM_TTL_MS after it was created', () => {
+    const created = t.now()
+    expect(t.host.nextAlarm()).toBe(created + EMPTY_ROOM_TTL_MS)
+    expect(runAlarms(created + EMPTY_ROOM_TTL_MS - 1)).toEqual([])
+    expect(t.host.exists).toBe(true)
+    expect(runAlarms(created + EMPTY_ROOM_TTL_MS)).toEqual([
+      { at: created + EMPTY_ROOM_TTL_MS, swept: false, closed: true },
+    ])
+    expect(t.saved.cleared).toBe(1)
+    expect(t.host.exists).toBe(false)
+    expect(t.host.summary()).toBeNull()
+    expect(t.host.admit(V)).toMatchObject({ ok: false, code: CloseCode.roomNotFound })
+    expect(t.host.nextAlarm()).toBeNull()
+  })
+
+  it('sweeps while anyone is in, once more after, then closes 10 minutes after the last one left', () => {
+    const a = t.join('Gene')
+    const start = t.now()
+    // Someone is in: the sweep, no close
+    expect(t.saved.schedule).toEqual({ sweep: start + SWEEP_INTERVAL_MS })
+    const sweeps = runAlarms(start + 3 * SWEEP_INTERVAL_MS, [a.conn])
+    expect(sweeps.map((r) => r.at)).toEqual([1, 2, 3].map((n) => start + n * SWEEP_INTERVAL_MS))
+    expect(sweeps.every((r) => r.swept && !r.closed)).toBe(true)
+    t.tick(1000)
+    t.host.heartbeat(a.conn, t.now())
+    t.host.message(a.conn, '{"t":"leave"}')
+    const left = t.now()
+    // The last sweep (it flushes the usage) is still due; then only the close
+    expect(t.saved.schedule).toEqual({
+      sweep: start + 4 * SWEEP_INTERVAL_MS,
+      close: left + EMPTY_ROOM_TTL_MS,
+    })
+    expect(runAlarms(left + EMPTY_ROOM_TTL_MS)).toEqual([
+      { at: start + 4 * SWEEP_INTERVAL_MS, swept: true, closed: false },
+      { at: left + EMPTY_ROOM_TTL_MS, swept: false, closed: true },
+    ])
+    expect(t.host.exists).toBe(false)
+  })
+
+  it('keeps the room while someone is reconnecting, and counts the 10 minutes from when they are gone', () => {
+    const a = t.join('Gene')
+    const joined = t.now()
+    t.host.closed(a.conn)
+    expect(t.saved.schedule.close).toBeUndefined()
+    // The first sweep past the grace removes the member
+    runAlarms(joined + RECONNECT_GRACE_MS + SWEEP_INTERVAL_MS)
+    expect(t.host.memberCount).toBe(0)
+    const removedAt =
+      joined + (Math.floor(RECONNECT_GRACE_MS / SWEEP_INTERVAL_MS) + 1) * SWEEP_INTERVAL_MS
+    expect(t.saved.schedule.close).toBe(removedAt + EMPTY_ROOM_TTL_MS)
+  })
+
+  it('does not close a room someone came back to before the 10 minutes ran out', () => {
+    const a = t.join('Gene')
+    t.host.message(a.conn, '{"t":"leave"}')
+    const left = t.now()
+    t.tick(EMPTY_ROOM_TTL_MS - 1000)
+    const b = t.join('小潔')
+    expect(t.saved.schedule.close).toBeUndefined()
+    const results = runAlarms(left + 2 * EMPTY_ROOM_TTL_MS, [b.conn])
+    expect(results.some((r) => r.closed)).toBe(false)
+    expect(t.host.exists).toBe(true)
+    // A socket that has not joined yet also keeps the room open
+    t.host.message(b.conn, '{"t":"leave"}')
+    const pending = t.open()
+    expect(t.saved.schedule.close).toBeUndefined()
+    t.host.closed(pending.conn)
+    expect(t.saved.schedule.close).toBe(t.now() + EMPTY_ROOM_TTL_MS)
+  })
+
+  it('makes the first member the host, and hands it on at once when the host leaves', () => {
+    const a = t.join('Gene')
+    t.tick(5)
+    const b = t.join('小潔')
+    t.tick(5)
+    const c = t.join('阿明')
+    expect(roles(c.client.view)).toEqual({ Gene: 'host', 小潔: 'participant', 阿明: 'participant' })
+    t.host.message(a.conn, '{"t":"leave"}')
+    // The earliest-joined connected member takes over
+    expect(roles(b.client.view)).toEqual({ 小潔: 'host', 阿明: 'participant' })
+    expect(c.client.view).toEqual(b.client.view)
+  })
+
+  it('hands the host on after HOST_HANDOFF_MS reconnecting, and not back when it returns', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.closed(a.conn)
+    const dropped = t.now()
+    expect(t.saved.schedule.handoff).toBe(dropped + HOST_HANDOFF_MS)
+    // One alarm: the earliest job
+    expect(t.host.nextAlarm()).toBe(dropped + SWEEP_INTERVAL_MS)
+    runAlarms(dropped + HOST_HANDOFF_MS - 1, [b.conn])
+    expect(roles(b.client.view)).toEqual({ Gene: 'host', 小潔: 'participant' })
+    runAlarms(dropped + HOST_HANDOFF_MS, [b.conn])
+    expect(roles(b.client.view)).toEqual({ Gene: 'participant', 小潔: 'host' })
+    expect(t.saved.schedule.handoff).toBeUndefined()
+    // Gene comes back (still within the reconnect grace) as a participant
+    const back = t.join('Gene', a.token)
+    expect(back.id).toBe(a.id)
+    expect(roles(back.client.view)).toEqual({ Gene: 'participant', 小潔: 'host' })
+  })
+
+  it('keeps the host who comes back within HOST_HANDOFF_MS', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.closed(a.conn)
+    t.tick(HOST_HANDOFF_MS - 1000)
+    t.host.heartbeat(b.conn, t.now())
+    const back = t.join('Gene', a.token)
+    expect(t.saved.schedule.handoff).toBeUndefined()
+    runAlarms(t.now() + 2 * HOST_HANDOFF_MS, [back.conn, b.conn])
+    expect(roles(b.client.view)).toEqual({ Gene: 'host', 小潔: 'participant' })
+  })
+
+  it('leaves the role with a reconnecting host while nobody else is connected', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.closed(a.conn)
+    t.host.closed(b.conn)
+    // Nobody could take over: no handoff job
+    expect(t.saved.schedule.handoff).toBeUndefined()
+    t.tick(HOST_HANDOFF_MS + 1000)
+    // 小潔 comes back first, after the host's minute ran out: she takes over
+    const back = t.join('小潔', b.token)
+    expect(roles(back.client.view)).toEqual({ Gene: 'participant', 小潔: 'host' })
+  })
+
+  it('gives a room whose host left to whoever connects next', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.closed(b.conn)
+    t.host.message(a.conn, '{"t":"leave"}')
+    // Only 小潔 is left, reconnecting: no host for now
+    expect(Object.values(t.host.view().members).map((m) => m.role)).toEqual(['participant'])
+    const back = t.join('小潔', b.token)
+    expect(roles(back.client.view)).toEqual({ 小潔: 'host' })
+  })
+
+  it('stores the schedule and picks it up again after the object is evicted', () => {
+    const a = t.join('Gene')
+    t.join('小潔')
+    t.host.closed(a.conn)
+    const woken = setup('w')
+    woken.host.restore(t.saved.room as RoomInfo, t.saved.rev, t.saved.sessions, [], null, {
+      ...t.saved.schedule,
+    })
+    expect(woken.host.nextAlarm()).toBe(t.host.nextAlarm())
+  })
+
+  it('gives a room stored before C2 a host, a schedule and the new room fields', () => {
+    const a = t.join('Gene')
+    t.tick(5)
+    const b = t.join('小潔')
+    // As protocol v5 stored them: no role, no room name
+    const old = t.saved.sessions.map((s) => {
+      const { role: _role, ...member } = s.member
+      return { ...s, member } as unknown as SessionRecord
+    })
+    const woken = setup('w')
+    woken.clients.set(a.conn, a.client)
+    woken.clients.set(b.conn, b.client)
+    woken.host.restore(ROOM, t.saved.rev, old, [
+      { conn: a.conn, openedAt: woken.now() },
+      { conn: b.conn, openedAt: woken.now() },
+    ])
+    expect(woken.host.view().room).toEqual(INFO)
+    expect(roles(woken.host.view())).toEqual({ Gene: 'host', 小潔: 'participant' })
+    expect(woken.host.nextAlarm()).toBe(woken.now() + SWEEP_INTERVAL_MS)
+  })
+})
+
+describe('RoomHost names (e1-t05)', () => {
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    t = setup()
+    t.host.create(ROOM)
+  })
+
+  it('names the default after the first member and starts the clock when they join', () => {
+    t.tick(30_000)
+    const a = t.join('Gene')
+    const joined = t.now()
+    t.tick(5)
+    t.join('小潔')
+    expect(a.client.view!.room).toEqual({ ...INFO, createdBy: 'Gene', startedAt: joined })
+    expect(t.saved.room).toEqual(a.client.view!.room)
+  })
+
+  it('lets a member rename themselves', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.message(b.conn, JSON.stringify({ t: 'rename', name: '  小潔 2  ' }))
+    expect(a.client.view!.members[b.id].name).toBe('小潔 2')
+    t.host.message(b.conn, JSON.stringify({ t: 'rename', name: '   ' }))
+    expect(b.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+    expect(a.client.view!.members[b.id].name).toBe('小潔 2')
+  })
+
+  it('lets the host rename the room, and nobody else', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.message(a.conn, JSON.stringify({ t: 'renameRoom', name: ' 週五聊天 ' }))
+    expect(b.client.view!.room.name).toBe('週五聊天')
+    expect((t.saved.room as RoomInfo).name).toBe('週五聊天')
+    t.host.message(b.conn, JSON.stringify({ t: 'renameRoom', name: '小潔的房間' }))
+    expect(b.client.received.at(-1)).toEqual({ t: 'error', code: 'forbidden' })
+    expect(a.client.view!.room.name).toBe('週五聊天')
+    // Too long for a room name
+    t.host.message(a.conn, JSON.stringify({ t: 'renameRoom', name: 'x'.repeat(61) }))
+    expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+  })
+
+  it('lets the new host rename the room after a handoff', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.message(a.conn, '{"t":"leave"}')
+    t.host.message(b.conn, JSON.stringify({ t: 'renameRoom', name: '接手了' }))
+    expect(b.client.view!.room.name).toBe('接手了')
   })
 })
