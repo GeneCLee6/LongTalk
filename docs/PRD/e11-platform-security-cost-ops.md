@@ -26,7 +26,7 @@ depends_on: []
 
 - Repo：Vite＋React 19＋TS strict＋styled-components；`worker/`（Hono 或原生）＋ `wrangler.toml`；`shared/`；Vitest；Playwright；oxlint；`npm run budget` 效能預算（首頁 150 kB、會議室 350 kB）。
 - CI：lint、typecheck、test、build、budget、視覺回歸（M1）；PR 預覽部署；合併 `main` 自動部署；兩個環境（preview、production）。
-- 遙測：事件（進房成功／失敗原因、重連次數、TURN 比例、離開評分）送 Analytics Engine 或 D1；錯誤送 Sentry 類（自架或免費方案）；儀表板頁 `/admin`（擁有者）。
+- 遙測：事件（進房成功／失敗原因、重連次數、TURN 比例、離開評分）送 Analytics Engine 或 D1；錯誤送 Sentry 類（自架或免費方案）；儀表板頁 `/admin`（擁有者）。D3 起：自架，事件與錯誤都進 `/api/events`（`TelemetryDO` 計數＋Analytics Engine），`/admin` 以 `ADMIN_TOKEN` 保護（`DEPLOY.md` §8）。
 - 瀏覽器支援：`docs/BROWSER-SUPPORT.md` 每功能 × 瀏覽器矩陣；`src/media/capabilities.ts` 統一能力偵測。
 - 濫用防護：建房每 IP 每小時 10 間、Turnstile 於建房、WebSocket 訊息速率、上傳配額；黑名單 IP。
 - 安全：CSP、HSTS、Permissions-Policy（camera、microphone、display-capture 只給自己）、COOP；依賴稽核；secrets 只在 Worker。
@@ -40,7 +40,7 @@ depends_on: []
 ## 設計方向
 
 - 複製淡江牌桌的 CI、效能預算腳本、`scripts/load/` 手法；不共用程式碼 repo。
-- `/admin` 只給擁有者帳號；儀表板資料從 Analytics Engine SQL API 讀。
+- `/admin` 只給擁有者帳號；儀表板資料從 Analytics Engine SQL API 讀。D3 的骨架改讀 `TelemetryDO` 的計數（不需要另外的 Cloudflare API token），帳號登入前以 Worker secret `ADMIN_TOKEN` 保護；Analytics Engine SQL 留給細查。
 
 ## 驗收條件
 
@@ -62,7 +62,7 @@ depends_on: []
 
 - [x] `e11-t01` repo 骨架：Vite／React／TS、`worker/`、`shared/`、wrangler、Vitest、oxlint、`CLAUDE.md`／`RULES.md` · AC-11.1 · #2
 - [x] `e11-t02` CI（lint、typecheck、test、build、budget）、PR 預覽 Worker 與 production 部署、`DEPLOY.md` · AC-11.1, AC-11.2 · #2
-- [ ] `e11-t03` 最小遙測：事件 API、Analytics Engine、錯誤回報、`/admin` 骨架 · AC-11.3 · M · ← e11-t02
+- [x] `e11-t03` 最小遙測：事件 API、Analytics Engine、錯誤回報、`/admin` 骨架（`POST /api/events` 驗證、8 KB、每個 IP 雜湊的速率限制；`TelemetryDO` 每小時／每天計數與最近錯誤；Analytics Engine 綁定 `EVENTS`；未攔截錯誤去重、上限、去個資；`/admin` lazy、`ADMIN_TOKEN` 標頭＋常數時間比對；警示是 `/admin` 上的旗標。AC-11.3 不勾：評分是 D4 `e4-t18`，告警還不會主動通知） · AC-11.3 · #18
 - [x] `e11-t04` `BROWSER-SUPPORT.md` 初版與 `capabilities.ts`（`docs/BROWSER-SUPPORT.md`：8 項能力 × 6 個瀏覽器，實測過的才標 ●，其餘標「未實測」；`src/media/capabilities.ts`：`webrtc`、`getUserMedia`、`getDisplayMedia`、`setSinkId`、`replaceTrack`、`senderParameters`、`audioContext`、`deviceChange`，會議室頁與音量表改用它；測試比對文件表格與 `CAPABILITIES`。AC-11.6 不勾：Edge、Firefox、Safari、iOS Safari 都還沒實測，完整版是 `e2-t16`） · AC-11.6 · #11
 - [x] `e11-t13` Realtime 免費額度保護：`UsageDO` 每月流量計數（客戶端 `getStats` 回報與伺服器端以 session 時長×軌數估算取大者）、800 GB 降畫質、950 GB 拒絕新視訊 session、`/api/usage`（2026-10-31 擁有者決定只用免費方案；`e11-t09` 成本儀表板之後接這份計數；做法見 `DEPLOY.md` §6） · AC-11.11 · #8
 
@@ -92,5 +92,5 @@ depends_on: []
 
 ## 未決問題
 
-- [ ] **Q:** 錯誤回報用 Sentry 免費方案還是自架？
-      **A:** _(e11-t03 前決定)_
+- [x] **Q:** 錯誤回報用 Sentry 免費方案還是自架？
+      **A:** 自架，不開第三方帳號（不用 Sentry），只用免費額度（擁有者 2026-11-02 決定）。錯誤與事件送自己的 `POST /api/events`，計數在 `TelemetryDO`、明細進 Workers Analytics Engine，`/admin` 看；做法見 `DEPLOY.md` §8（#18）。
