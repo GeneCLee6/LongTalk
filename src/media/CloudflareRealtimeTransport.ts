@@ -141,6 +141,7 @@ export class CloudflareRealtimeTransport implements MediaTransport {
             ]
           : undefined,
       })
+      if (track.kind === 'video') sendVp8(transceiver)
       const trackName = `${options.kind}-${crypto.randomUUID().slice(0, 8)}`
       let answer: SessionDescription
       try {
@@ -500,6 +501,29 @@ const PROXY_ERRORS: Partial<Record<string, MediaTransportErrorCode>> = {
   forbidden: 'unauthorized',
   usage_audio_only: 'quota_exceeded',
   track_not_in_room: 'not_found',
+}
+
+/**
+ * Offers VP8 (and its retransmission) only on a camera or screen we send. With several codecs,
+ * once the PeerConnection already receives video from others, Chrome numbers the new section's
+ * payload types afresh and the SFU's answer uses the numbers of the sections it offered earlier
+ * (H264 125 for the offer's 97, VP9's RTX 36 for 99): payload types the offer never had, and the
+ * browser refuses the answer ("Failed to set remote video description send parameters"). Found
+ * with the third member of a room (two cameras pulled, then its own pushed), every time in
+ * Playwright's headless Chromium. With VP8 alone the answer keeps the offer's numbers, and every
+ * browser decodes VP8.
+ */
+function sendVp8(transceiver: RTCRtpTransceiver): void {
+  if (typeof RTCRtpSender === 'undefined' || !transceiver.setCodecPreferences) return
+  const codecs = (RTCRtpSender.getCapabilities?.('video')?.codecs ?? []).filter((codec) =>
+    /^video\/(vp8|rtx)$/i.test(codec.mimeType),
+  )
+  if (!codecs.some((codec) => /vp8$/i.test(codec.mimeType))) return
+  try {
+    transceiver.setCodecPreferences(codecs)
+  } catch {
+    // Not supported here: the browser offers its own list
+  }
 }
 
 async function hasSent(sender: RTCRtpSender): Promise<boolean> {
