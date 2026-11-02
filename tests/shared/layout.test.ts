@@ -12,6 +12,7 @@ import {
   PHONE_PAGE_SIZE,
   pickSpeaker,
   PORTRAIT_TILE_ASPECT,
+  shareLayout,
   speakerLayout,
   tileAspect,
 } from '../../shared/layout.ts'
@@ -261,5 +262,65 @@ describe('pickSpeaker (e4-t07)', () => {
     expect(pickSpeaker(ids, 'gene', 'yu')).toBe('wei')
     expect(pickSpeaker(['gene'], 'gene', null)).toBe('gene')
     expect(pickSpeaker([], 'gene', null)).toBeNull()
+  })
+})
+
+describe('shareLayout (e3-t05, e4-t08; AC-3.1, AC-4.3)', () => {
+  const desktop = { width: 1280, height: 640 }
+
+  it('gives the share the whole stage when nobody is in the strip', () => {
+    expect(shareLayout({ count: 0, ...desktop })).toEqual({ main: desktop, strip: null })
+  })
+
+  it('gives the share about three quarters of a wide stage, the people a column on the right', () => {
+    for (let count = 1; count <= MAX_GRID_TILES; count++) {
+      const { main, strip } = shareLayout({ count, ...desktop })
+      expect(strip?.side).toBe('right')
+      // All the height, and the width the strip leaves (not fitted to an aspect)
+      expect(main.height).toBe(desktop.height)
+      expect(main.width + GAP + strip!.tileWidth).toBe(desktop.width)
+      expect(main.width / desktop.width).toBeGreaterThanOrEqual(0.74)
+      expect(Math.abs(strip!.tileWidth / strip!.tileHeight - ASPECT)).toBeLessThan(0.05)
+      expect(strip!.tileHeight).toBeGreaterThanOrEqual(71)
+    }
+    // A few people fit the column without scrolling
+    const three = shareLayout({ count: 3, ...desktop }).strip!
+    expect(3 * three.tileHeight + 2 * GAP).toBeLessThanOrEqual(desktop.height)
+  })
+
+  it('puts the share on top and the people in a row under it on a phone held upright', () => {
+    const portrait = { width: 374, height: 600 }
+    for (let count = 1; count <= MAX_GRID_TILES; count++) {
+      const { main, strip } = shareLayout({ count, ...portrait })
+      expect(strip?.side).toBe('bottom')
+      expect(main.width).toBe(portrait.width)
+      expect(main.height + GAP + strip!.tileHeight).toBe(portrait.height)
+      // The share stays the main thing
+      expect(main.height).toBeGreaterThan(portrait.height / 2)
+    }
+  })
+
+  it('makes the share the big tile on a phone held sideways, people on the right', () => {
+    const landscape = { width: 812, height: 290 }
+    const { main, strip } = shareLayout({ count: 4, ...landscape })
+    expect(strip?.side).toBe('right')
+    expect(main.width).toBeGreaterThan(landscape.width / 2)
+    expect(main.height).toBe(landscape.height)
+  })
+
+  it('never makes the main area smaller as the stage grows', () => {
+    let last = 0
+    for (let width = 600; width <= 2400; width += 200) {
+      const { main } = shareLayout({ count: 5, width, height: 600 })
+      expect(main.width).toBeGreaterThanOrEqual(last)
+      last = main.width
+    }
+  })
+
+  it('has nothing to lay out without space', () => {
+    expect(shareLayout({ count: 3, width: 0, height: 0 })).toEqual({
+      main: { width: 0, height: 0 },
+      strip: null,
+    })
   })
 })

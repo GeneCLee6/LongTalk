@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
-import type { ClientMessage } from '../../shared/protocol.ts'
+import type { ClientMessage, ErrorCode } from '../../shared/protocol.ts'
 import { watchNetwork } from './network.ts'
 import { RoomConnection, type RoomConnectionState } from './RoomConnection.ts'
 import { clearSession, loadSession, saveSession } from './session.ts'
@@ -14,6 +14,8 @@ export interface RoomConnectionHandle {
   retry: () => void
   /** Changes this member's own name (normalized), also for every later rejoin (e1-t05) */
   rename: (name: string) => void
+  /** Listens for the room's refusals (`error` codes); returns a function that stops listening */
+  onError: (listener: (code: ErrorCode) => void) => () => void
 }
 
 /**
@@ -55,5 +57,6 @@ export function useRoomConnection(roomId: string, name: string): RoomConnectionH
     send: connection.send,
     retry: connection.retry,
     rename: connection.rename,
+    onError: connection.onError,
   }
 }

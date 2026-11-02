@@ -37,6 +37,17 @@
 //    name (`RoomInfo.name`; null shows a default made from `createdBy`), host only for now
 //    (worker/roles.ts arrives with e1-t06). A refused `renameRoom` is answered with `error`
 //    code `forbidden`.
+// 10. Screen sharing (D1): one member shares at a time (`RoomInfo.share`). A member who picked
+//    what to share sends `share`; the room grants it when nobody shares (or the member already
+//    does), and answers `error` code `share_busy` when someone else does, unless `takeOver` is
+//    set: then the share moves to the new member at once and the previous sharer's screen track
+//    is dropped from its list (its browser sees the change and stops capturing). Once granted, the
+//    sharer publishes its screen like any track and lists it in `tracks` (kind `screen`); a
+//    `screen` track from a member who does not hold the share is dropped from its list. `unshare`
+//    ends the member's own share; leaving, or being removed after RECONNECT_GRACE_MS, ends it too.
+//    A host stopping someone else's share is RoomHost.stopShare, put on the wire with F1
+//    (e1-t06, worker/roles.ts). In an audio-only month (shared/usage.ts) `share` is refused with
+//    `audio_only`: the SFU proxy would refuse the screen's video anyway.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -44,6 +55,7 @@
 // v4 → v5 (B3): `stats.relay`; the browser reconnects on its own (also after `stale`).
 // v5 → v6 (C2): `Member.role`, `RoomInfo.name` / `createdBy` / `startedAt`, `rename`,
 //   `renameRoom`, error code `forbidden`.
+// v6 → v7 (D1): `RoomInfo.share`, `share`, `unshare`, error codes `share_busy`, `audio_only`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -52,7 +64,7 @@ import type { JsonValue, PatchOp } from './patch.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 6
+export const PROTOCOL_VERSION = 7
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -114,6 +126,15 @@ export type RoomInfo = RoomInit & {
   createdBy: string | null
   /** When the first member joined: the top bar's elapsed time counts from it */
   startedAt: number | null
+  /** Who shares the screen now (D1, one at a time); null when nobody does */
+  share: ShareInfo | null
+}
+
+/** The room's one screen share (D1, e3-t02) */
+export type ShareInfo = {
+  memberId: string
+  /** When the member was granted the share */
+  since: number
 }
 
 /** What a member may do in the room; cohost and waiting arrive with e1-t06 */
@@ -185,8 +206,14 @@ export type SnapshotMessage = { t: 'snapshot'; rev: number; state: RoomView }
 /** The changes from rev − 1 to `rev` */
 export type PatchMessage = { t: 'patch'; rev: number; ops: PatchOp[] }
 
-/** `forbidden`: the member may not do that (`renameRoom` from someone who is not the host) */
-export type ErrorMessage = { t: 'error'; code: 'bad_message' | 'forbidden' }
+/**
+ * - `forbidden`: the member may not do that (`renameRoom` from someone who is not the host)
+ * - `share_busy`: `share` without `takeOver` while someone else shares (ask, then take over)
+ * - `audio_only`: `share` in a month that is audio-only (shared/usage.ts)
+ */
+export type ErrorCode = 'bad_message' | 'forbidden' | 'share_busy' | 'audio_only'
+
+export type ErrorMessage = { t: 'error'; code: ErrorCode }
 
 export type ServerMessage = WelcomeMessage | SnapshotMessage | PatchMessage | ErrorMessage
 
@@ -222,6 +249,15 @@ export type RenameMessage = { t: 'rename'; name: string }
 /** The room's name (host only, C2, e1-t05) */
 export type RenameRoomMessage = { t: 'renameRoom'; name: string }
 
+/**
+ * Start sharing the screen (D1): sent once the member picked what to share. `takeOver`: the
+ * member confirmed taking the share from whoever has it.
+ */
+export type ShareMessage = { t: 'share'; takeOver: boolean }
+
+/** Stop sharing (the member's own share) */
+export type UnshareMessage = { t: 'unshare' }
+
 export type ClientMessage =
   | JoinMessage
   | ResyncMessage
@@ -230,6 +266,8 @@ export type ClientMessage =
   | StatsMessage
   | RenameMessage
   | RenameRoomMessage
+  | ShareMessage
+  | UnshareMessage
 
 // ── POST /api/rooms ──────────────────────────────────────────────────────────────────────────
 
@@ -307,6 +345,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       const name = normalizeName(value.name, MAX_ROOM_NAME_CHARS)
       return name === null ? null : { t: 'renameRoom', name }
     }
+    case 'share':
+      return typeof value.takeOver === 'boolean' ? { t: 'share', takeOver: value.takeOver } : null
+    case 'unshare':
+      return { t: 'unshare' }
     case 'stats':
       return isSfuId(value.sessionId) &&
         Number.isSafeInteger(value.bytesReceived) &&

@@ -148,6 +148,39 @@ export const strings = {
     // Buttons whose feature lands in a later batch (D1, D3, F1)
     comingSoon: (feature: string) => `「${feature}」即將推出`,
   },
+  // Screen sharing (D1: e3-t01 – e3-t03, e3-t05)
+  screenShare: {
+    stop: '停止分享',
+    // The bar the sharer sees above the stage (e3-t03)
+    youAreSharing: '你正在分享畫面',
+    youAreSharingHint: '其他人看得到你分享的畫面',
+    // The tag on the share (DESIGN.md: 「<名字> 的畫面」) and the share's accessible name
+    label: (name: string) => `${name} 的畫面`,
+    region: (name: string) => `${name} 分享的畫面`,
+    waiting: (name: string) => `${name} 開始分享畫面，馬上就來…`,
+    // Taking the share over from someone (e3-t02)
+    takeOverTitle: '接手分享？',
+    takeOverBody: (name: string) =>
+      `${name} 正在分享畫面。接手後，${name} 的分享會停止，改成分享你的畫面。`,
+    takeOver: '接手分享',
+    takenOver: (name: string) => `${name} 接手了分享，你的分享已停止。`,
+    stopped: '你的分享已被停止。',
+    started: (name: string) => `${name} 開始分享畫面`,
+    problems: {
+      denied:
+        '系統不允許瀏覽器分享螢幕。Mac 請到「系統設定 › 隱私權與安全性 › 螢幕與系統錄音」允許這個瀏覽器，重新開啟瀏覽器後再試一次。',
+      unsupported: '這個瀏覽器不能分享螢幕，請改用電腦上的 Chrome、Edge 或 Firefox。',
+      failed: '無法分享這個畫面，請再試一次，或改選其他視窗或分頁。',
+    },
+    audioOnly: '本月的免費流量快用完了，先暫停螢幕分享，大家仍然聽得到你。',
+  },
+  // A part of the app that could not be loaded (e4-t20): a network blip, or a new deployment
+  // replaced the files this page was built with
+  loadFailed: {
+    title: '載入失敗，請重新整理',
+    body: '可能是網路中斷，或 LongTalk 剛更新。重新整理後就能繼續。',
+    reload: '重新整理',
+  },
   // The top bar (e4-t06): room name, elapsed time, copy link
   topBar: {
     label: '會議室資訊',

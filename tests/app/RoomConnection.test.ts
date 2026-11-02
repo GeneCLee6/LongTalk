@@ -41,7 +41,14 @@ class FakeSocket implements SocketLike {
   }
 }
 
-const room = { id: 'abcdefghij', createdAt: 1, name: null, createdBy: null, startedAt: null }
+const room = {
+  id: 'abcdefghij',
+  createdAt: 1,
+  name: null,
+  createdBy: null,
+  startedAt: null,
+  share: null,
+}
 const member = (id: string) => ({
   id,
   name: id.toUpperCase(),
@@ -114,6 +121,19 @@ describe('RoomConnection', () => {
     const fresh = connect()
     fresh.socket.open()
     expect(fresh.socket.sent).toEqual(['{"t":"join","name":"Gene","token":null}'])
+  })
+
+  it("tells its error listeners about the room's refusals (D1: share_busy)", () => {
+    const { connection, socket } = connect()
+    socket.open()
+    socket.receive(welcome(1))
+    const heard = vi.fn()
+    const off = connection.onError(heard)
+    socket.receive({ t: 'error', code: 'share_busy' })
+    expect(heard).toHaveBeenCalledWith('share_busy')
+    off()
+    socket.receive({ t: 'error', code: 'forbidden' })
+    expect(heard).toHaveBeenCalledTimes(1)
   })
 
   it('hands over the session token of every welcome', () => {

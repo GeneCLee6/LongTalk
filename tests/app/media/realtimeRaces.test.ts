@@ -287,6 +287,46 @@ describe('CloudflareRealtimeTransport in a busy room', () => {
     expect(preferences).toEqual([[codecs[1], codecs[2]]])
   })
 
+  it('publishes a screen as VP8 like a camera, after pulling others, and others pull it (D1)', async () => {
+    const codecs = [
+      { mimeType: 'video/H264', clockRate: 90000 },
+      { mimeType: 'video/VP8', clockRate: 90000 },
+      { mimeType: 'video/rtx', clockRate: 90000 },
+    ]
+    vi.stubGlobal('RTCRtpSender', { getCapabilities: () => ({ codecs, headerExtensions: [] }) })
+    const preferences: unknown[] = []
+    const pc = new MockPc()
+    const addTransceiver = pc.addTransceiver.bind(pc)
+    pc.addTransceiver = (track: unknown) =>
+      Object.assign(addTransceiver(track), {
+        setCodecPreferences: (c: unknown) => preferences.push(c),
+      })
+    const sfu = new ScriptedSfu()
+    const alice = transport(sfu)
+    await alice.connect()
+    const cam = await alice.publish(video, { kind: 'cam' })
+    const bob = new CloudflareRealtimeTransport({
+      apiBase: '/api/sfu/abcdefghij',
+      token: () => 'T'.repeat(43),
+      fetch: sfu.fetch,
+      createPeerConnection: () => pc as unknown as RTCPeerConnection,
+    })
+    await bob.connect()
+    // Bob already receives a camera when he starts sharing: the case VP8-only exists for
+    await bob.subscribe(cam)
+    const screen = await bob.publish(video, { kind: 'screen' })
+    vi.unstubAllGlobals()
+    expect(screen.trackName).toMatch(/^screen-/)
+    expect(preferences).toEqual([[codecs[1], codecs[2]]])
+    const carol = transport(sfu)
+    await carol.connect()
+    await expect(carol.subscribe(screen)).resolves.toMatchObject({ trackName: screen.trackName })
+    // Stopping the share closes its transceiver on the SFU, and the session stays usable
+    await bob.unpublish(screen.trackName)
+    await expect(bob.publish(audio, { kind: 'mic' })).resolves.toBeTruthy()
+    expect(sfu.conflicts).toBe(0)
+  })
+
   it('hands a published track back only once it sends, so the first pull of it works', async () => {
     const sfu = new ScriptedSfu()
     const alice = transport(sfu)

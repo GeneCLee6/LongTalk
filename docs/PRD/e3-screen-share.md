@@ -1,7 +1,7 @@
 ---
 title: E3 — 螢幕分享
 date: 2026-10-28
-status: planned
+status: in progress
 epic: E3
 owner: GeneCLee6
 milestones: [M0, M1, M2]
@@ -63,11 +63,11 @@ M2 的畫筆標註（E7）疊在分享畫面上，所以 E3 要在 M0 就把「�
 
 ### M0
 
-- [ ] `e3-t01` `getDisplayMedia` 封裝（選項、錯誤處理）與 `publish({kind:'screen'})` · AC-3.1 · S · ← e2-t05
-- [ ] `e3-t02` RoomDO 的分享狀態：一次一人、接手確認、主持人停止的掛勾 · AC-3.3 · S · ← e3-t01
-- [ ] `e3-t03` 「你正在分享」提示條、分享格名字標籤、三條停止路徑（含 `onended`） · AC-3.3 · S · ← e3-t02
+- [x] `e3-t01` `getDisplayMedia` 封裝（選項、錯誤處理）與 `publish({kind:'screen'})` · AC-3.1 · #16
+- [x] `e3-t02` RoomDO 的分享狀態：一次一人、接手確認、主持人停止的掛勾 · AC-3.3 · #16（主持人停止是 `RoomHost.stopShare`，F1 接上訊息與按鈕）
+- [x] `e3-t03` 「你正在分享」提示條、分享格名字標籤、三條停止路徑（含 `onended`） · AC-3.3 · #16
 - [ ] `e3-t04` 分享音訊軌 `screenAudio`：發布、接收端混音、分享者開關、能力偵測 · AC-3.2 · M · ← e3-t01
-- [ ] `e3-t05` 版面：有分享時主區＋側列（與 E4 `e4-t08` 同一個 PR） · AC-3.1 · S · ← e4-t04
+- [x] `e3-t05` 版面：有分享時主區＋側列（與 E4 `e4-t08` 同一個 PR） · AC-3.1 · #16
 
 ### M1
 
