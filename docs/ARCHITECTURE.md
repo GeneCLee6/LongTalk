@@ -48,11 +48,12 @@
 ## 4. 資料流：一個人進房
 
 1. 瀏覽器 `GET /r/abc123` → Worker 的靜態資產回 SPA。
-2. 預先加入頁先 `GET /api/rooms/abc123` 確認房間存在（順便拿人數）才開鏡頭。按「加入」後開 WebSocket `/api/rooms/abc123/ws?v=4`（Worker 檢查 `Origin` 後轉給 RoomDO），第一則訊息是 `join`（名字、這個分頁上次拿到的 session token）→ RoomDO 回 `welcome`：成員 id、session token、房間快照（A4 起）。角色、TURN 憑證、SFU session 資訊在之後的批次加進 `welcome`。
+2. 預先加入頁先 `GET /api/rooms/abc123` 確認房間存在（順便拿人數）才開鏡頭。按「加入」後開 WebSocket `/api/rooms/abc123/ws?v=5`（Worker 檢查 `Origin` 後轉給 RoomDO），第一則訊息是 `join`（名字、這個分頁上次拿到的 session token）→ RoomDO 回 `welcome`：成員 id、session token、房間快照（A4 起）。角色在之後的批次加進 `welcome`。
 3. 之後所有狀態變化走這條 WebSocket。
-4. 瀏覽器經 `/api/sfu/abc123/sessions`（帶 session token）建立 SFU session（RoomDO 記成這個成員的），發布 mic／cam 軌；把軌清單回報 RoomDO（`tracks` 訊息，B1 起）。
-5. RoomDO 以 patch 推送 `Member.tracks`；其他瀏覽器向 SFU 訂閱該軌（代理確認那條軌屬於同一間房）。瀏覽器每 10 秒送 `stats`（收到的 bytes），給免費額度保護記帳。
-6. 心跳每 15 秒（文字 `ping`，由 runtime 自動回 `pong`，不喚醒 DO；每 15 秒的 alarm 讀 `getWebSocketAutoResponseTimestamp` 檢查，45 秒沒心跳就關 socket 並移除成員）；A4 起：socket 關閉但沒有先送 `leave`（重新整理、斷網、心跳逾時）時，RoomDO 保留成員 60 秒並標示「重新連線中」；回來後以同一 session token 接回（B1 起重新發布與訂閱），超過 60 秒由 alarm 移除；送 `leave` 立即移除。成員與 session 存在 DO storage。
+4. 瀏覽器先 `POST /api/turn/abc123`（帶 session token，B3 起）拿 ICE 伺服器：Worker 用 TURN key 向 Cloudflare 要 3 小時的短期憑證（沒設定就只給 STUN），再經 `/api/sfu/abc123/sessions`（帶 session token）建立 SFU session（RoomDO 記成這個成員的），發布 mic／cam 軌；把軌清單回報 RoomDO（`tracks` 訊息，B1 起）。
+5. RoomDO 以 patch 推送 `Member.tracks`；其他瀏覽器向 SFU 訂閱該軌（代理確認那條軌屬於同一間房）。瀏覽器每 10 秒送 `stats`（收到的 bytes、是否走 TURN），給免費額度保護記帳。
+6. 心跳每 15 秒（文字 `ping`，由 runtime 自動回 `pong`，不喚醒 DO；每 15 秒的 alarm 讀 `getWebSocketAutoResponseTimestamp` 檢查，45 秒沒心跳就關 socket 並移除成員）；A4 起：socket 關閉但沒有先送 `leave`（重新整理、斷網、心跳逾時）時，RoomDO 保留成員 60 秒並標示「重新連線中」；回來後以同一 session token 接回，超過 60 秒由 alarm 移除；送 `leave` 立即移除。成員與 session 存在 DO storage。
+   **B3 起瀏覽器自己重連**（`src/room/RoomConnection.ts`）：socket 斷掉（4404／4409／4400／4410 以外）就以 1、2、4、8 秒（上限，±25% 抖動）退避重開、帶同一 token，60 秒內接回就是同一成員、同一份軌清單；心跳到下一次還沒回、瀏覽器 `offline`、回到前景時 5 秒內沒回 `pong`，都當作 socket 已死；`online` 與回到前景立即重試；超過 60 秒放棄，畫面給「重試」。接回後瀏覽器重送 `tracks`（斷線期間的開關）。媒體另外處理（`src/room/RoomMedia.ts`）：PeerConnection `failed`，或 `disconnected` 超過 4 秒，就丟掉這個 SFU session 重建（重新拿 ICE 伺服器、建 session、重新發布、從 RoomDO 的軌清單重新訂閱），一樣退避與 60 秒上限。WebSocket 斷線不影響媒體：PeerConnection 還活著就繼續收發。別人看到「重新連線中」的時間點是 RoomDO 發現 socket 關閉的時候：重新整理、瀏覽器判定離線會立刻關；網路默默斷掉要等心跳逾時（最多約 60 秒）。
 7. 最後一人離開 10 分鐘後，`alarm()` 清房間（持久房間除外）。
 
 ## 5. 安全邊界
@@ -67,7 +68,7 @@
 | 項目 | 假設 | 每月免費額度（規劃時） | 說明 |
 | --- | --- | --- | --- |
 | SFU 流出 | 4 人、720p 1.5 Mbps、每人收 3 路 ⇒ 18 Mbps ⇒ 2 小時約 16 GB | 1 TB | 約 60 場 4 人 2 小時；8 人會議約 4 倍流量，simulcast 後接收端可降層 |
-| TURN | 10–15% 的連線走 TURN | 1 TB | 儀表板追蹤比例 |
+| TURN | 10–15% 的連線走 TURN | 1 TB（和 SFU 共用） | TURN 與 SFU 之間的流量不重複計費（Cloudflare 定價頁），計的是 TURN 到瀏覽器的流出；保護把走 TURN 的接收端 ×1.1（框架開銷） |
 | Workers／DO | 每房一個 DO，每秒數則訊息 | 免費方案 | 和牌桌同等級 |
 | R2 | 聊天檔案 24 小時、錄影有效期 | 10 GB | 雲端錄影是主要用量，M2 才有 |
 

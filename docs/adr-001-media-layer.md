@@ -58,7 +58,7 @@ LongTalk 的核心是 2–8 人（M0／M1）的音訊、視訊與螢幕分享，
 - **每個 session 同一時間只能有一次 SDP 交換**：`CloudflareRealtimeTransport` 把所有變更排成一個佇列。
 - 錯誤看三層：HTTP 狀態、頂層 `errorCode`、每條軌的 `errorCode`。
 - **simulcast**：發布端 `sendEncodings` 用 rid `f`／`h`／`q`（1、½、¼ 解析度）；接收端 `preferredRid` 搭配 `priorityOrdering`／`ridNotAvailable: 'asciibetical'`，字母越前面越優先，所以 `f` 是最高層。`Layer` 對應：`high→f`、`medium→h`、`low→q`。
-- **TURN**（`e2-t07`）：`POST https://rtc.live.cloudflare.com/v1/turn/keys/{TURN Key ID}/credentials/generate-ice-servers`，標頭 `Authorization: Bearer <TURN Key API Token>`，body `{"ttl": 秒數}`，回 `{ iceServers: [...] }` 直接給 `RTCPeerConnection`。清單可能含 port 53 的 URL，瀏覽器會擋，不用 trickle ICE 時要濾掉。A2 先只用 `stun:stun.cloudflare.com:3478`。
+- **TURN**（`e2-t07`）：`POST https://rtc.live.cloudflare.com/v1/turn/keys/{TURN Key ID}/credentials/generate-ice-servers`，標頭 `Authorization: Bearer <TURN Key API Token>`，body `{"ttl": 秒數}`，回 `{ iceServers: [...] }` 直接給 `RTCPeerConnection`。清單可能含 port 53 的 URL，瀏覽器會擋，不用 trickle ICE 時要濾掉。A2 先只用 `stun:stun.cloudflare.com:3478`。**B3 實作**（`worker/turn.ts`、`POST /api/turn/<roomId>`）：只發給帶成員 session token 的呼叫（RoomDO `sfuAccess` 判斷，房外 401），TTL 3 小時、瀏覽器到 2/3 時向 Worker 再要一次並 `setConfiguration`，重建 PeerConnection 時也重新要；port 53 的 URL 在 Worker 濾掉；沒有 TURN secret 或 Cloudflare 回錯時回 `stun:stun.cloudflare.com:3478`（`turn: false`），通話照常。定價：SFU 與 TURN 共用 1,000 GB，TURN 與 SFU 之間的流量不重複計費。
 - **錄製**：Realtime SFU 沒有內建錄影。WebSocket adapter（GA）能把音訊以 PCM、視訊以 JPEG 幀送到自己的 WebSocket 端點：適合即時逐字稿（E8），不適合錄完整視訊。雲端錄影的選項（自架合成 vs RealtimeKit 錄影）留給 `e8-t04`。這回答了 E2「未決問題」的第一題。
 
 ## `MediaTransport` 介面（定稿）
@@ -92,7 +92,7 @@ interface MediaTransport {
 
 - **要自己做的**：房間與軌清單（RoomDO，A3／B1）、desired／actual 訂閱對齊（`e2-t04`）、重連（`e2-t08`）、選層策略（`e2-t12`、`e2-t15`）、統計（`e2-t13`）。這些 LiveKit SDK 會送，Realtime 不會；已經排進 E2 的 task。
 - **Worker 代理是信任邊界**：A2 的 `/api/sfu/*` 還沒綁房間成員。**B1（`e2-t03`）已綁定**：路徑帶房間 id，RoomDO 的 `sfuAccess` 只接受該房成員的 session token（不然 401）；建立 session 後 `bindSfu` 把它記成該成員的（同一成員再建一個就取代舊的，舊 session 的軌清單清掉），之後對這個 session 的呼叫只接受它的主人（不然 403）；pull 的每條軌都必須是同房成員正在發布的（不然 404 `track_not_in_room`）。push 的軌種類從 offer 的 m-line 讀出，給免費額度保護用（`DEPLOY.md` §6）。
-- **兩個 secret**：`REALTIME_APP_ID`、`REALTIME_APP_SECRET`（`DEPLOY.md` §5）；TURN 另外兩個（`e2-t07`）。
+- **兩個 secret**：`REALTIME_APP_ID`、`REALTIME_APP_SECRET`（`DEPLOY.md` §5）；TURN 另外兩個：`REALTIME_TURN_KEY_ID`、`REALTIME_TURN_KEY_API_TOKEN`（`e2-t07`，B3）。
 - **元件不碰 WebRTC**（規則 2）：會議室頁只透過 `src/room/RoomMedia.ts`（發布、desired／actual 訂閱對齊）與 `MediaTransport`；A2 的 `/dev/realtime` spike 在 B1 移除。
 
 ## 切換條件（何時改用 LiveKit）
