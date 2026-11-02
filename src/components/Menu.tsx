@@ -232,6 +232,7 @@ const Heading = styled.div`
 
 const Check = styled.span`
   display: inline-block;
+  flex: none;
   width: 1.25em;
 `
 
