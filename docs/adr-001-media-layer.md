@@ -58,6 +58,7 @@ LongTalk 的核心是 2–8 人（M0／M1）的音訊、視訊與螢幕分享，
 - **每個 session 同一時間只能有一次 SDP 交換**：`CloudflareRealtimeTransport` 把所有變更排成一個佇列。一次交換要到「SFU 的 answer 已套用」或「我們對 SFU offer 的 answer 已被 `/renegotiate` 接受」才算結束（Cloudflare〈Negotiation and session lifecycle〉）。
 - 錯誤看三層：HTTP 狀態、頂層 `errorCode`、每條軌的 `errorCode`。
 - **三人以上才出現的規則**（#13，C1 截圖時發現同房第 3 人起常有人的鏡頭別人收不到）：
+  - **送出的視訊只提供 VP8**（`setCodecPreferences`，含 RTX）。PeerConnection 已經收著別人的視訊時再 push 自己的鏡頭，Chrome 會給新的 m-section 重新編 payload type（H264 97、VP9 的 RTX 99），SFU 的 answer 卻沿用它先前 offer 的編號（H264 125、RTX 36），offer 裡沒有這些編號，瀏覽器拒絕套用（`Failed to set remote video description send parameters`）。這是三人房第三人鏡頭送不出去的主因，Playwright 的 headless Chromium 每次都中。只給 VP8 時 answer 沿用 offer 的編號；所有瀏覽器都能解 VP8。之後要 H264／VP9／AV1 時要先驗證這點（或改成發布與訂閱各用一條 PeerConnection，Cloudflare 的 video-room 範例就這樣做）。
   - **只要回應帶 SFU 的 offer（`requiresImmediateRenegotiation: true`）就先回答**，不管頂層或軌有沒有錯；不回答的話 session 一直等 answer，之後所有呼叫都回 406「expecting a remote answer」。
   - **發布端要等 sender 真的送出封包（`outbound-rtp.bytesSent > 0`）才把軌告訴房間**（Cloudflare 自己的 partytracks 也這樣做）。太早告訴的話，訂閱端 pull 一條還沒有封包的軌：SFU 會卡住那個 pull 約 8 秒（期間訂閱端自己的佇列也停住，連它的 push 都延後）再回 `empty_track_error`。實測（正式站，4 個 headless Chrome）：一個成員的第一條 PeerConnection 沒連上，push 照樣回 200，其他人 pull 它的軌卡 8 秒後失敗，舊版重試 3 次就放棄。現在 10 秒送不出封包就當連線壞了，transport `failed` 重建。
   - **pull 的 mid 從「那條軌」的結果讀**（比對發布者 session 與 trackName），找不到對應的 transceiver 就是兩邊對 SDP 的認知不同，transport `failed` 重建。

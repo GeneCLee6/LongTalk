@@ -258,6 +258,35 @@ describe('CloudflareRealtimeTransport in a busy room', () => {
     ])
   })
 
+  it('offers only VP8 for video it sends, so the answer keeps the offer payload types', async () => {
+    const codecs = [
+      { mimeType: 'video/H264', clockRate: 90000 },
+      { mimeType: 'video/VP8', clockRate: 90000 },
+      { mimeType: 'video/rtx', clockRate: 90000 },
+      { mimeType: 'video/VP9', clockRate: 90000 },
+    ]
+    vi.stubGlobal('RTCRtpSender', { getCapabilities: () => ({ codecs, headerExtensions: [] }) })
+    const preferences: unknown[] = []
+    const pc = new MockPc()
+    const addTransceiver = pc.addTransceiver.bind(pc)
+    pc.addTransceiver = (track: unknown) =>
+      Object.assign(addTransceiver(track), {
+        setCodecPreferences: (c: unknown) => preferences.push(c),
+      })
+    const sfu = new ScriptedSfu()
+    const alice = new CloudflareRealtimeTransport({
+      apiBase: '/api/sfu/abcdefghij',
+      token: () => 'T'.repeat(43),
+      fetch: sfu.fetch,
+      createPeerConnection: () => pc as unknown as RTCPeerConnection,
+    })
+    await alice.connect()
+    await alice.publish(audio, { kind: 'mic' })
+    await alice.publish(video, { kind: 'cam' })
+    vi.unstubAllGlobals()
+    expect(preferences).toEqual([[codecs[1], codecs[2]]])
+  })
+
   it('hands a published track back only once it sends, so the first pull of it works', async () => {
     const sfu = new ScriptedSfu()
     const alice = transport(sfu)
