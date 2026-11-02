@@ -61,11 +61,9 @@ describe('protocol', () => {
       sessionId: 's',
       tracks: [],
     })
-    expect(parseClientMessage('{"t":"stats","sessionId":"s","bytesReceived":1234}')).toEqual({
-      t: 'stats',
-      sessionId: 's',
-      bytesReceived: 1234,
-    })
+    expect(
+      parseClientMessage('{"t":"stats","sessionId":"s","bytesReceived":1234,"relay":true}'),
+    ).toEqual({ t: 'stats', sessionId: 's', bytesReceived: 1234, relay: true })
   })
 
   it('refuses malformed track lists and stats', () => {
@@ -87,10 +85,13 @@ describe('protocol', () => {
       },
       { t: 'tracks', sessionId: 's', tracks: 'mic' },
       { t: 'tracks', sessionId: 's', tracks: [null] },
-      { t: 'stats', sessionId: 's', bytesReceived: -1 },
-      { t: 'stats', sessionId: 's', bytesReceived: 1.5 },
-      { t: 'stats', sessionId: 's', bytesReceived: '10' },
-      { t: 'stats', bytesReceived: 10 },
+      { t: 'stats', sessionId: 's', bytesReceived: -1, relay: false },
+      { t: 'stats', sessionId: 's', bytesReceived: 1.5, relay: false },
+      { t: 'stats', sessionId: 's', bytesReceived: '10', relay: false },
+      { t: 'stats', bytesReceived: 10, relay: false },
+      // v5: `relay` is required and a boolean
+      { t: 'stats', sessionId: 's', bytesReceived: 10 },
+      { t: 'stats', sessionId: 's', bytesReceived: 10, relay: 'yes' },
     ]
     for (const message of bad) expect(parseClientMessage(JSON.stringify(message))).toBeNull()
   })

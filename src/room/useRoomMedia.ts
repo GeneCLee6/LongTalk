@@ -1,34 +1,55 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ClientMessage, MemberTrack, RoomView } from '../../shared/protocol.ts'
 import type { MediaTransport } from '../media/MediaTransport.ts'
-import { idleRoomMedia, RoomMedia, type LocalTracks, type RoomMediaState } from './RoomMedia.ts'
+import { watchNetwork } from './network.ts'
+import {
+  idleRoomMedia,
+  RoomMedia,
+  type IceConfig,
+  type LocalTracks,
+  type RoomMediaState,
+} from './RoomMedia.ts'
 
 export interface UseRoomMediaOptions {
-  /** True once the room welcomed us (the SFU proxy needs the session token by then) */
+  /**
+   * True once the room welcomed us (the SFU proxy needs the session token by then), and while the
+   * socket reconnects: the media connection does not depend on the socket
+   */
   enabled: boolean
-  /** A new transport for each run; called inside an effect */
+  /** A new transport for each session (rebuilds make more); called inside an effect */
   createTransport: () => MediaTransport
+  /** ICE servers before each session (TURN credentials, e2-t07) */
+  iceConfig?: () => Promise<IceConfig | null>
   /**
    * What to send (null per kind when off); null while the devices are still opening. Changing
    * it later toggles or switches without a new session.
    */
   local: LocalTracks | null
   send: (message: ClientMessage) => void
-  /** This member's id, so its own tracks are never subscribed */
+  /** This member's id, so its own tracks are never subscribed; a new id is a new run */
   you: string | null
   view: RoomView | null
+  /** How many times the room welcomed us: a new welcome re-reports what we publish */
+  welcomes?: number
+}
+
+export interface RoomMediaHandle extends RoomMediaState {
+  /** After `failed`: build a new session */
+  retry: () => void
 }
 
 const noSubscribe = () => () => {}
 const idle = () => idleRoomMedia
 
 /**
- * The room's media (e2-t03, e2-t04): while enabled, one RoomMedia publishes `local` and receives
- * every other member's tracks from the room view. A new RoomMedia (and transport) per run, closed
- * on cleanup, so StrictMode's mount / unmount / mount leaves exactly one session publishing.
+ * The room's media (e2-t03, e2-t04, e2-t08): while enabled, one RoomMedia publishes `local` and
+ * receives every other member's tracks from the room view, rebuilding its session when the media
+ * connection fails. A new RoomMedia per run (and per member id: the room forgot us after a long
+ * outage), closed on cleanup, so StrictMode's mount / unmount / mount leaves exactly one session
+ * publishing.
  */
-export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaState {
-  const { enabled, local, you, view } = options
+export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
+  const { enabled, local, you, view, welcomes = 0 } = options
   const [media, setMedia] = useState<RoomMedia | null>(null)
   // Read when a run starts, without restarting it when they change
   const latest = useRef(options)
@@ -40,16 +61,22 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaState {
   // go to the running RoomMedia (setLocal) instead of starting a new session
   const ready = local !== null
   useEffect(() => {
-    if (!enabled || !ready) return
-    const { createTransport, send, view: startView, local: startLocal } = latest.current
-    const run = new RoomMedia({ transport: createTransport(), send })
+    if (!enabled || !ready || you === null) return
+    const { view: startView, local: startLocal } = latest.current
+    const run = new RoomMedia({
+      createTransport: () => latest.current.createTransport(),
+      iceConfig: () => latest.current.iceConfig?.() ?? Promise.resolve(null),
+      send: (message) => latest.current.send(message),
+    })
     setMedia(run)
     void run.start(startLocal ?? { mic: null, cam: null }, startView?.usage ?? 'normal')
+    const unwatch = watchNetwork({ online: () => run.nudge(), visible: () => run.nudge() })
     return () => {
+      unwatch()
       void run.close()
       setMedia((current) => (current === run ? null : current))
     }
-  }, [enabled, ready])
+  }, [enabled, ready, you])
 
   const mic = local?.mic ?? null
   const cam = local?.cam ?? null
@@ -74,5 +101,12 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaState {
     media?.setUsage(usage)
   }, [media, usage])
 
-  return useSyncExternalStore(media?.subscribe ?? noSubscribe, media?.getState ?? idle)
+  // Every welcome after the first is a rejoin: tell the room what we publish again
+  useEffect(() => {
+    if (welcomes > 1) media?.rejoined()
+  }, [media, welcomes])
+
+  const state = useSyncExternalStore(media?.subscribe ?? noSubscribe, media?.getState ?? idle)
+  const retry = useCallback(() => media?.retry(), [media])
+  return useMemo(() => ({ ...state, retry }), [state, retry])
 }

@@ -3,10 +3,11 @@ import type { UsageState } from '../shared/usage.ts'
 import type { RoomDO } from './room.ts'
 import { handleRooms } from './rooms.ts'
 import { handleSfu, type SfuEnv } from './sfu.ts'
+import { handleTurn, type TurnEnv } from './turn.ts'
 import type { UsageDO } from './usage-do.ts'
 import { USAGE_OBJECT, type UsageEnv } from './usage.ts'
 
-export interface Env extends SfuEnv, UsageEnv {
+export interface Env extends SfuEnv, TurnEnv, UsageEnv {
   ASSETS: Fetcher
   ROOM: DurableObjectNamespace<RoomDO>
   /** One object for the whole deployment: the month's Realtime egress (e11-t13) */
@@ -63,6 +64,9 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       room: (roomId) => env.ROOM.get(env.ROOM.idFromName(roomId)),
       usage: () => cachedUsageState(env),
     })
+  }
+  if (url.pathname.startsWith('/api/turn/')) {
+    return handleTurn(request, env, { room: (roomId) => env.ROOM.get(env.ROOM.idFromName(roomId)) })
   }
   if (url.pathname === '/api/usage') {
     if (request.method !== 'GET') {

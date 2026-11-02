@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientMessage, MemberTrack } from '../../shared/protocol.ts'
 import { FakeSfu, type FakeTransport } from '../../src/media/FakeTransport.ts'
 import { MediaTransportError } from '../../src/media/MediaTransport.ts'
-import { LOW_QUALITY_VIDEO, RoomMedia } from '../../src/room/RoomMedia.ts'
+import { Backoff } from '../../src/room/backoff.ts'
+import {
+  LOW_QUALITY_VIDEO,
+  RoomMedia,
+  type IceConfig,
+  type RoomMediaOptions,
+} from '../../src/room/RoomMedia.ts'
 
 /** A MediaStreamTrack as far as RoomMedia and FakeTransport care */
 function fakeTrack(kind: 'audio' | 'video') {
@@ -91,7 +97,7 @@ describe('RoomMedia: publishing (e2-t03)', () => {
     ;(a.transport as FakeTransport).bytesReceived = 4321
     await vi.advanceTimersByTimeAsync(10_000)
     expect(a.sent.filter((m) => m.t === 'stats')).toEqual([
-      { t: 'stats', sessionId: 'fake-session-1', bytesReceived: 4321 },
+      { t: 'stats', sessionId: 'fake-session-1', bytesReceived: 4321, relay: false },
     ])
     await a.media.close()
     await vi.advanceTimersByTimeAsync(30_000)
@@ -380,5 +386,215 @@ describe('RoomMedia: turning off, on and switching (e2-t05, e2-t06)', () => {
     await a.media.setLocal({ mic: null, cam: null })
     expect(a.media.getState().error).toBe('sfu_error')
     expect(mutedFlags(a)).toEqual({ mic: false })
+  })
+})
+
+describe('RoomMedia: rebuilding the session (e2-t08) and TURN (e2-t07)', () => {
+  /** A member whose RoomMedia makes a new transport for every session */
+  function rebuildable(sfu: FakeSfu, options: Partial<RoomMediaOptions> = {}) {
+    const transports: FakeTransport[] = []
+    const sent: ClientMessage[] = []
+    const media = new RoomMedia({
+      createTransport: () => {
+        const transport = sfu.createTransport()
+        transports.push(transport)
+        return transport
+      },
+      send: (m) => sent.push(m),
+      backoff: new Backoff({ random: () => 0.5, giveUpAfterMs: 60_000 }),
+      ...options,
+    })
+    return { media, sent, transports, current: () => transports.at(-1)! }
+  }
+
+  it('rebuilds a failed session: new transport, tracks published again and reported', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = rebuildable(sfu)
+    const mic = fakeTrack('audio')
+    const cam = fakeTrack('video')
+    await a.media.start({ mic, cam })
+    a.current().simulateState('failed')
+    expect(a.media.getState().status).toBe('reconnecting')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(a.transports).toHaveLength(2)
+    expect(a.transports[0].state).toBe('closed')
+    expect(a.media.getState()).toMatchObject({ status: 'connected', error: null })
+    expect(listed(a)).toEqual([
+      { sessionId: 'fake-session-2', trackName: 'mic-1', kind: 'mic', muted: false },
+      { sessionId: 'fake-session-2', trackName: 'cam-2', kind: 'cam', muted: false },
+    ])
+    expect(a.current().sending.get('cam-2')).toBe(cam)
+  })
+
+  it('keeps a muted microphone muted across a rebuild', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = rebuildable(sfu)
+    const cam = fakeTrack('video')
+    await a.media.start({ mic: fakeTrack('audio'), cam })
+    await a.media.setLocal({ mic: null, cam })
+    a.current().simulateState('failed')
+    await vi.advanceTimersByTimeAsync(1000)
+    // A kind that sends nothing is not published again until it is turned on
+    expect(listed(a).map((t) => t.kind)).toEqual(['cam'])
+  })
+
+  it('subscribes again to what is desired after a rebuild', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = rebuildable(sfu)
+    const b = member(sfu)
+    await b.media.start({ mic: fakeTrack('audio'), cam: null })
+    await a.media.start({ mic: null, cam: null })
+    a.media.setDesired(listed(b))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(Object.keys(a.media.getState().received)).toHaveLength(1)
+    a.current().simulateState('failed')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(a.transports).toHaveLength(2)
+    expect(Object.keys(a.media.getState().received)).toHaveLength(1)
+    expect(a.current().subscriptions.size).toBe(1)
+  })
+
+  it('waits for a dropped connection to come back by itself before rebuilding', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = rebuildable(sfu, { disconnectGraceMs: 4000 })
+    await a.media.start({ mic: fakeTrack('audio'), cam: null })
+    a.current().simulateState('reconnecting')
+    expect(a.media.getState().status).toBe('reconnecting')
+    await vi.advanceTimersByTimeAsync(3000)
+    a.current().simulateState('connected')
+    expect(a.media.getState().status).toBe('connected')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(a.transports).toHaveLength(1)
+    // Stays down this time: rebuilt after the grace and the first backoff delay
+    a.current().simulateState('reconnecting')
+    await vi.advanceTimersByTimeAsync(4000 + 1000)
+    expect(a.transports).toHaveLength(2)
+    expect(a.media.getState().status).toBe('connected')
+  })
+
+  it('backs off while it cannot connect, and gives up into failed until retry', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    let offline = false
+    const create = sfu.createTransport.bind(sfu)
+    vi.spyOn(sfu, 'createTransport').mockImplementation(() => {
+      const transport = create()
+      if (offline) {
+        vi.spyOn(transport, 'connect').mockRejectedValue(new MediaTransportError('sfu_error'))
+      }
+      return transport
+    })
+    const a = rebuildable(sfu)
+    await a.media.start({ mic: fakeTrack('audio'), cam: null })
+    offline = true
+    a.current().simulateState('failed')
+    const times: number[] = []
+    const start = Date.now()
+    let seen = a.transports.length
+    while (a.media.getState().status === 'reconnecting' && Date.now() - start < 120_000) {
+      await vi.advanceTimersByTimeAsync(500)
+      if (a.transports.length > seen) {
+        seen = a.transports.length
+        times.push(Date.now() - start)
+      }
+    }
+    expect(times.slice(0, 4)).toEqual([1000, 3000, 7000, 15_000])
+    expect(a.media.getState()).toMatchObject({ status: 'failed', error: 'sfu_error' })
+    // No hot loop after giving up
+    const count = a.transports.length
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(a.transports).toHaveLength(count)
+    offline = false
+    a.media.retry()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(a.media.getState().status).toBe('connected')
+    expect(listed(a).map((t) => t.kind)).toEqual(['mic'])
+  })
+
+  it('tries at once when nudged (online, foreground) instead of waiting', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = rebuildable(sfu)
+    await a.media.start({ mic: null, cam: null })
+    a.current().simulateState('failed')
+    expect(a.transports).toHaveLength(1)
+    a.media.nudge()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(a.transports).toHaveLength(2)
+    expect(a.media.getState().status).toBe('connected')
+    // The cancelled delay does not build a third
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(a.transports).toHaveLength(2)
+  })
+
+  it('does not rebuild after an error a new session would not fix', async () => {
+    const sfu = new FakeSfu()
+    const create = sfu.createTransport.bind(sfu)
+    vi.spyOn(sfu, 'createTransport').mockImplementation(() => {
+      const transport = create()
+      vi.spyOn(transport, 'connect').mockRejectedValue(new MediaTransportError('unauthorized'))
+      return transport
+    })
+    const a = rebuildable(sfu)
+    await a.media.start({ mic: null, cam: null })
+    expect(a.media.getState()).toMatchObject({ status: 'failed', error: 'unauthorized' })
+    a.media.retry()
+    expect(a.transports).toHaveLength(1)
+  })
+
+  it('reports its tracks again when the room welcomes it back', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: fakeTrack('audio'), cam: null })
+    const before = a.sent.length
+    a.media.rejoined()
+    expect(a.sent).toHaveLength(before + 1)
+    expect(a.sent.at(-1)).toMatchObject({ t: 'tracks', sessionId: 'fake-session-1' })
+  })
+
+  it('connects with the ICE servers it is given and refreshes them before they expire', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const turn = { urls: ['turn:turn.example:3478'], username: 'u', credential: 'c' }
+    const iceConfig = vi.fn(async (): Promise<IceConfig> => ({
+      connect: { iceServers: [turn], iceTransportPolicy: 'relay' },
+      refreshAfterMs: 60_000,
+    }))
+    const a = rebuildable(sfu, { iceConfig })
+    await a.media.start({ mic: null, cam: null })
+    expect(a.current().connectOptions).toEqual({
+      iceServers: [turn],
+      iceTransportPolicy: 'relay',
+    })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(iceConfig).toHaveBeenCalledTimes(2)
+    expect(a.current().iceServerUpdates).toEqual([[turn]])
+    // A rebuilt session asks again
+    a.current().simulateState('failed')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(iceConfig).toHaveBeenCalledTimes(3)
+  })
+
+  it('connects with the default servers when the ICE servers cannot be fetched', async () => {
+    const sfu = new FakeSfu()
+    const a = rebuildable(sfu, { iceConfig: () => Promise.reject(new Error('offline')) })
+    await a.media.start({ mic: null, cam: null })
+    expect(a.media.getState().status).toBe('connected')
+    expect(a.current().connectOptions).toEqual({})
+  })
+
+  it('reports whether its media goes through a relay', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = rebuildable(sfu, { statsIntervalMs: 10_000 })
+    await a.media.start({ mic: null, cam: null })
+    a.current().usingRelay = true
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(a.sent.filter((m) => m.t === 'stats').at(-1)).toMatchObject({ relay: true })
+    expect(a.media.getState().usingRelay).toBe(true)
   })
 })

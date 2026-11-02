@@ -30,8 +30,10 @@ import {
 // (/api/sfu/<roomId>/*, worker/sfu.ts), which holds the App Secret and only serves a member of
 // the room: every call carries the member's session token.
 //
-// B1: publish mic/cam and pull the room's tracks (e2-t03, e2-t04). Reconnection (e2-t08), TURN
-// credentials (e2-t07) and simulcast publishing (e2-t11) build on it.
+// B1: publish mic/cam and pull the room's tracks (e2-t03, e2-t04). B3: ICE servers with TURN
+// credentials from the Worker (e2-t07, ConnectOptions) and refreshed ones (setIceServers);
+// `disconnected` is reported as `reconnecting` and `failed` as `failed`, and RoomMedia rebuilds
+// the session (e2-t08). Simulcast publishing (e2-t11) builds on it.
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }]
 // Realtime expects complete SDP (no trickle ICE); gathering rarely needs this long
@@ -81,6 +83,7 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     this.#setState('connecting')
     const pc = this.#createPc({
       iceServers: options.iceServers ?? DEFAULT_ICE_SERVERS,
+      iceTransportPolicy: options.iceTransportPolicy ?? 'all',
       bundlePolicy: 'max-bundle',
     })
     this.#pc = pc
@@ -237,6 +240,16 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     return stats
   }
 
+  setIceServers(iceServers: RTCIceServer[]): void {
+    const pc = this.#pc
+    if (!pc || this.state === 'closed') return
+    try {
+      pc.setConfiguration({ ...pc.getConfiguration(), iceServers })
+    } catch {
+      // Refused (a closed connection): the next session asks for new servers anyway
+    }
+  }
+
   on<E extends MediaTransportEvent>(
     event: E,
     handler: (payload: MediaTransportEvents[E]) => void,
@@ -330,7 +343,7 @@ export class CloudflareRealtimeTransport implements MediaTransport {
   }
 
   #onPcState(pcState: RTCPeerConnectionState): void {
-    if (this.state === 'closed') return
+    if (this.state === 'closed' || this.state === 'failed') return
     if (pcState === 'connected') this.#setState('connected')
     else if (pcState === 'disconnected') this.#setState('reconnecting')
     else if (pcState === 'failed') this.#setState('failed')

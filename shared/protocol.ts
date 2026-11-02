@@ -23,10 +23,17 @@
 //    keeps the track published (the sender stops sending, nothing is renegotiated) and sends
 //    `tracks` again with `muted: true`; everyone sees it in `Member.tracks`. A member with no
 //    track of a kind (never opened, or refused) counts as muted for that kind.
+// 7. Reconnect (B3): a socket that drops (not one closed with a 44xx code but `stale`) is opened
+//    again by the browser with exponential backoff and jitter, joining with the same token, so
+//    within RECONNECT_GRACE_MS it is the same member with the same tracks; the browser sends
+//    `tracks` again after every `welcome`, for anything it changed while the socket was down.
+//    `stats` also says whether the browser's media goes through a TURN relay (`relay`), which the
+//    free-tier guard counts with TURN's overhead (shared/usage.ts).
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
 // v3 → v4 (B2): `MemberTrack.muted`, and `muted` on every entry of `tracks`.
+// v4 → v5 (B3): `stats.relay`; the browser reconnects on its own (also after `stale`).
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -35,7 +42,7 @@ import type { JsonValue, PatchOp } from './patch.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 4
+export const PROTOCOL_VERSION = 5
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -58,7 +65,11 @@ export const MAX_CLIENT_MESSAGE_CHARS = 4_096
 /** A display name's length in characters (code points), after normalizeName */
 export const MAX_NAME_CHARS = 40
 
-/** WebSocket close codes the server uses; the browser must not retry on the 44xx ones */
+/**
+ * WebSocket close codes the server uses. The browser does not reconnect after the 44xx ones but
+ * `stale` (a socket the server stopped hearing from, e.g. a phone that slept: the member is
+ * reconnecting and comes back with its token)
+ */
 export const CloseCode = {
   /** The browser speaks another protocol version: reload the page */
   versionMismatch: 4400,
@@ -166,8 +177,11 @@ export type TracksMessage = {
   tracks: { trackName: string; kind: TrackKind; muted: boolean }[]
 }
 
-/** The transport's cumulative bytes received on `sessionId` (the SFU's egress to this browser) */
-export type StatsMessage = { t: 'stats'; sessionId: string; bytesReceived: number }
+/**
+ * The transport's cumulative bytes received on `sessionId` (the SFU's egress to this browser),
+ * and whether the selected candidate pair goes through a TURN relay (B3)
+ */
+export type StatsMessage = { t: 'stats'; sessionId: string; bytesReceived: number; relay: boolean }
 
 export type ClientMessage =
   JoinMessage | ResyncMessage | LeaveMessage | TracksMessage | StatsMessage
@@ -243,8 +257,14 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     case 'stats':
       return isSfuId(value.sessionId) &&
         Number.isSafeInteger(value.bytesReceived) &&
-        (value.bytesReceived as number) >= 0
-        ? { t: 'stats', sessionId: value.sessionId, bytesReceived: value.bytesReceived as number }
+        (value.bytesReceived as number) >= 0 &&
+        typeof value.relay === 'boolean'
+        ? {
+            t: 'stats',
+            sessionId: value.sessionId,
+            bytesReceived: value.bytesReceived as number,
+            relay: value.relay,
+          }
         : null
     default:
       return null

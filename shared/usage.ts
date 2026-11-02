@@ -11,6 +11,13 @@
 //   everyone receives every other member's tracks) × the bitrate assumed for its kind.
 // The estimate does not trust the browsers, so a browser that reports nothing cannot hide its
 // traffic; the reports catch what the estimate gets wrong (a camera sending more than assumed).
+//
+// TURN (e2-t07): a browser behind a strict NAT receives through Cloudflare's TURN relay. TURN
+// shares the 1,000 GB allowance, but traffic between Realtime TURN and the SFU "is not charged
+// twice" (Cloudflare's pricing page): what is billed is TURN's egress to the browser, which is the
+// same media plus TURN's framing (and TCP/TLS when the relay runs over turns:443). So both
+// numbers count a relayed receiver's bytes × RELAY_OVERHEAD; the browser says in `stats` whether
+// its selected candidate pair is relayed.
 import type { TrackKind } from './protocol.ts'
 
 /**
@@ -46,6 +53,13 @@ export const ASSUMED_BITRATE: Record<TrackKind, number> = {
   screen: 2_500_000,
   screenAudio: 64_000,
 }
+
+/**
+ * What a relayed receiver's egress is counted at, relative to the media it receives: TURN's
+ * ChannelData header is 4 bytes a packet (under 1 %), TCP/TLS framing over turns:443 a few
+ * percent more; rounded up on purpose, like ASSUMED_BITRATE.
+ */
+export const RELAY_OVERHEAD = 1.1
 
 /** How often a browser reports its received bytes over the room socket */
 export const STATS_INTERVAL_MS = 10_000

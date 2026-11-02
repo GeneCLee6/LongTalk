@@ -1,17 +1,20 @@
-import type { ClientMessage, MemberTrack } from '../../shared/protocol.ts'
+import { RECONNECT_GRACE_MS, type ClientMessage, type MemberTrack } from '../../shared/protocol.ts'
 import { STATS_INTERVAL_MS, type UsageState } from '../../shared/usage.ts'
 import {
   MediaTransportError,
   trackKey,
+  type ConnectOptions,
+  type ConnectionState,
   type MediaTransport,
   type MediaTransportErrorCode,
   type PublishedTrack,
   type TrackKind,
 } from '../media/MediaTransport.ts'
+import { Backoff } from './backoff.ts'
 
-// One member's media in the room (e2-t03, e2-t04, e2-t05), on top of a MediaTransport and
-// nothing else (CLAUDE.md rule 2): publishes the local microphone and camera, tells the room what
-// it publishes (`tracks`), and keeps what it receives in line with the room's track list.
+// One member's media in the room (e2-t03, e2-t04, e2-t05, e2-t08), on top of a MediaTransport
+// and nothing else (CLAUDE.md rule 2): publishes the local microphone and camera, tells the room
+// what it publishes (`tracks`), and keeps what it receives in line with the room's track list.
 //
 // What it sends is also a reconciliation: `setLocal` hands over the track to send per kind (null:
 // turned off, muted, or no device). A kind never published is published once a track arrives;
@@ -26,6 +29,14 @@ import {
 // Calling it again with the same list does nothing, so it can run on every room patch. A
 // subscription that fails is retried a few times, then left alone until the track leaves the
 // list and comes back.
+//
+// Rebuilding (e2-t08): when the transport fails, or stays `reconnecting` (ICE disconnected) for
+// DISCONNECT_GRACE_MS, the session is thrown away and a new one built from the factory: new ICE
+// servers (TURN credentials, e2-t07), a new SFU session (the room drops the old one's tracks when
+// the proxy binds the new one), the local tracks published again and reported, and everything
+// desired subscribed again. Failed attempts wait with backoff and jitter (backoff.ts); coming
+// online or to the foreground (`nudge`) tries at once; after RECONNECT_GRACE_MS of failures the
+// status is `failed` until `retry()`.
 //
 // No React here: useRoomMedia (useRoomMedia.ts) wraps it, the tests drive it with FakeTransport.
 
@@ -45,7 +56,14 @@ export interface ReceivedTrack {
   track: MediaStreamTrack
 }
 
-export type RoomMediaStatus = 'idle' | 'connecting' | 'connected' | 'failed' | 'closed'
+/**
+ * - `reconnecting`: the media connection dropped; waiting for it to come back, or building a new
+ *   session
+ * - `failed`: could not connect (not retried: not configured, not a member), or gave up
+ *   rebuilding; `retry()` tries again
+ */
+export type RoomMediaStatus =
+  'idle' | 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'closed'
 
 export interface RoomMediaState {
   status: RoomMediaStatus
@@ -59,20 +77,48 @@ export interface RoomMediaState {
   videoRefused: boolean
   /** The camera sends low quality (the month passed the low-quality threshold) */
   lowQuality: boolean
+  /** The media goes through a TURN relay (the selected candidate pair, e2-t07) */
+  usingRelay: boolean
+}
+
+/** ICE settings for the next session, and when to ask for fresh ones (TURN credentials expire) */
+export interface IceConfig {
+  connect: ConnectOptions
+  /** Ask again after this long, ms; null: never */
+  refreshAfterMs: number | null
 }
 
 export interface RoomMediaOptions {
-  transport: MediaTransport
+  /** The first transport; rebuilding needs `createTransport` */
+  transport?: MediaTransport
+  /** A new transport per session (the first one too, without `transport`) */
+  createTransport?: () => MediaTransport
+  /** ICE servers before each session (TURN, e2-t07); without it the transport's default STUN */
+  iceConfig?: () => Promise<IceConfig | null>
   /** Sends a message to the room over its WebSocket */
   send: (message: ClientMessage) => void
   statsIntervalMs?: number
   /** Wait before retrying a subscription that failed */
   retryDelayMs?: number
+  /** How long a dropped media connection may take to come back by itself before a rebuild */
+  disconnectGraceMs?: number
+  /** A session this long without failing resets the rebuild backoff */
+  stableAfterMs?: number
+  backoff?: Backoff
 }
 
 /** Tries per track before giving up on it until it leaves the list */
 const MAX_SUBSCRIBE_ATTEMPTS = 3
 const RETRY_DELAY_MS = 2_000
+/** ICE `disconnected` often heals by itself within a few seconds (a Wi-Fi hiccup) */
+export const DISCONNECT_GRACE_MS = 4_000
+export const STABLE_AFTER_MS = 20_000
+
+/** Errors that a new session would not fix */
+const FINAL_ERRORS: ReadonlySet<MediaTransportErrorCode> = new Set([
+  'unauthorized',
+  'sfu_not_configured',
+])
 
 /** What a camera sends once the month is past the low-quality threshold */
 export const LOW_QUALITY_VIDEO: MediaTrackConstraints = {
@@ -88,6 +134,7 @@ export const idleRoomMedia: RoomMediaState = {
   received: {},
   videoRefused: false,
   lowQuality: false,
+  usingRelay: false,
 }
 
 const errorCode = (error: unknown): MediaTransportErrorCode =>
@@ -101,25 +148,42 @@ async function lowerQuality(cam: MediaStreamTrack): Promise<void> {
   }
 }
 
+type Timer = ReturnType<typeof setTimeout>
+
 export class RoomMedia {
-  private readonly transport: MediaTransport
+  private transport: MediaTransport
+  private readonly createTransport: (() => MediaTransport) | null
+  private readonly iceConfig: (() => Promise<IceConfig | null>) | null
   private readonly send: (message: ClientMessage) => void
   private readonly statsIntervalMs: number
   private readonly retryDelayMs: number
+  private readonly disconnectGraceMs: number
+  private readonly stableAfterMs: number
+  private readonly backoff: Backoff
   private state: RoomMediaState = { ...idleRoomMedia }
   private readonly listeners = new Set<() => void>()
   private closed = false
   private started = false
+  /** The current transport's session is open (publish and subscribe work) */
+  private ready = false
   private usage: UsageState = 'normal'
   /** What to send, from setLocal */
   private wanted: LocalTracks = { mic: null, cam: null }
   /** What each published track sends now */
-  private readonly sending: LocalTracks = { mic: null, cam: null }
+  private sending: LocalTracks = { mic: null, cam: null }
   /** Local changes run one at a time, in order */
   private localQueue: Promise<void> = Promise.resolve()
   private statsTimer: ReturnType<typeof setInterval> | null = null
-  private readonly retryTimers = new Set<ReturnType<typeof setTimeout>>()
-  private readonly offTransport: (() => void)[] = []
+  private readonly retryTimers = new Set<Timer>()
+  private offTransport: (() => void)[] = []
+  /** A rebuild waiting for its backoff delay */
+  private rebuildTimer: Timer | null = null
+  /** The media connection dropped; a rebuild follows unless it comes back */
+  private disconnectTimer: Timer | null = null
+  private stableTimer: Timer | null = null
+  private iceTimer: Timer | null = null
+  /** Why the last attempt failed, for when the backoff gives up */
+  private lastError: MediaTransportErrorCode | null = null
 
   /** Every other member's tracks, by trackKey (from RoomDO) */
   private desired = new Map<string, MemberTrack>()
@@ -131,21 +195,18 @@ export class RoomMedia {
   private readonly ended = new Set<string>()
 
   constructor(options: RoomMediaOptions) {
-    this.transport = options.transport
+    this.createTransport = options.createTransport ?? null
+    const first = options.transport ?? options.createTransport?.()
+    if (!first) throw new Error('RoomMedia needs a transport or createTransport')
+    this.transport = first
+    this.iceConfig = options.iceConfig ?? null
     this.send = options.send
     this.statsIntervalMs = options.statsIntervalMs ?? STATS_INTERVAL_MS
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS
-    this.offTransport.push(
-      this.transport.on('trackEnded', (ref) => {
-        const key = trackKey(ref)
-        if (!(key in this.state.received)) return
-        if (this.desired.has(key)) this.ended.add(key)
-        this.removeReceived(key)
-      }),
-      this.transport.on('state', (status) => {
-        if (status === 'failed') this.update({ status: 'failed' })
-      }),
-    )
+    this.disconnectGraceMs = options.disconnectGraceMs ?? DISCONNECT_GRACE_MS
+    this.stableAfterMs = options.stableAfterMs ?? STABLE_AFTER_MS
+    this.backoff = options.backoff ?? new Backoff({ giveUpAfterMs: RECONNECT_GRACE_MS })
+    this.attach(first)
   }
 
   getState = (): RoomMediaState => this.state
@@ -165,18 +226,8 @@ export class RoomMedia {
     this.started = true
     this.usage = usage
     this.wanted = local
-    this.update({ status: 'connecting' })
-    try {
-      await this.transport.connect()
-    } catch (error) {
-      if (!this.closed) this.update({ status: 'failed', error: errorCode(error) })
-      return
-    }
-    if (this.closed) return
-    this.update({ status: 'connected' })
-    this.reconcile()
     this.statsTimer = setInterval(() => void this.reportStats(), this.statsIntervalMs)
-    await this.syncLocal()
+    await this.openSession(this.transport, 'connecting')
   }
 
   /**
@@ -188,7 +239,7 @@ export class RoomMedia {
     this.wanted = local
     // Turning the camera off clears the refusal, so asking again tells the member again
     if (local.cam === null && this.state.videoRefused) this.update({ videoRefused: false })
-    if (this.state.status !== 'connected') return this.localQueue
+    if (!this.ready) return this.localQueue
     return this.syncLocal()
   }
 
@@ -230,16 +281,196 @@ export class RoomMedia {
     }
   }
 
+  /**
+   * The room welcomed us again (the socket reconnected): tell it what we publish, in case a
+   * `tracks` message was lost while the socket was down
+   */
+  rejoined(): void {
+    if (this.ready && this.state.published.length > 0) this.reportTracks()
+  }
+
+  /** The browser came online or to the foreground: a rebuild waiting for its delay runs now */
+  nudge(): void {
+    if (this.closed || !this.started) return
+    if (this.rebuildTimer !== null) {
+      this.backoff.restart()
+      void this.rebuild()
+    } else if (this.state.status === 'failed') {
+      this.retry()
+    }
+  }
+
+  /** After `failed`: build a new session from the first delay */
+  retry(): void {
+    if (this.closed || !this.started || this.state.status !== 'failed' || !this.canRebuild()) return
+    this.backoff.reset()
+    void this.rebuild()
+  }
+
   /** Stops everything; the published tracks end on the SFU with the session */
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    this.ready = false
     if (this.statsTimer !== null) clearInterval(this.statsTimer)
+    this.clearSessionTimers()
     for (const timer of this.retryTimers) clearTimeout(timer)
     this.retryTimers.clear()
-    for (const off of this.offTransport) off()
+    this.detach()
     this.update({ status: 'closed', received: {} })
     await this.transport.close()
+  }
+
+  private canRebuild(): boolean {
+    return this.createTransport !== null && !FINAL_ERRORS.has(this.state.error ?? 'sfu_error')
+  }
+
+  private attach(transport: MediaTransport): void {
+    this.detach()
+    this.offTransport = [
+      transport.on('trackEnded', (ref) => {
+        const key = trackKey(ref)
+        if (!(key in this.state.received)) return
+        if (this.desired.has(key)) this.ended.add(key)
+        this.removeReceived(key)
+      }),
+      transport.on('state', (status) => this.onTransportState(transport, status)),
+    ]
+  }
+
+  private detach(): void {
+    for (const off of this.offTransport) off()
+    this.offTransport = []
+  }
+
+  /** Connects `transport` (with fresh ICE servers), then publishes and subscribes */
+  private async openSession(transport: MediaTransport, status: RoomMediaStatus): Promise<void> {
+    this.update({ status })
+    let ice: IceConfig | null = null
+    try {
+      ice = this.iceConfig ? await this.iceConfig().catch(() => null) : null
+      if (this.closed || transport !== this.transport) return
+      await transport.connect(ice?.connect)
+    } catch (error) {
+      if (this.closed || transport !== this.transport) return
+      const code = errorCode(error)
+      if (FINAL_ERRORS.has(code) || !this.createTransport) {
+        this.update({ status: 'failed', error: code })
+        return
+      }
+      this.lastError = code
+      this.rebuildLater()
+      return
+    }
+    if (this.closed || transport !== this.transport) return
+    this.ready = true
+    this.update({ status: 'connected', error: null })
+    this.stableTimer = setTimeout(() => {
+      this.stableTimer = null
+      this.backoff.reset()
+    }, this.stableAfterMs)
+    this.scheduleIceRefresh(transport, ice)
+    this.reconcile()
+    await this.syncLocal()
+  }
+
+  private onTransportState(transport: MediaTransport, status: ConnectionState): void {
+    if (this.closed || transport !== this.transport || !this.ready) return
+    if (status === 'connected') {
+      if (this.disconnectTimer !== null) clearTimeout(this.disconnectTimer)
+      this.disconnectTimer = null
+      if (this.state.status === 'reconnecting') {
+        this.update({ status: 'connected' })
+        this.reconcile()
+      }
+    } else if (status === 'reconnecting') {
+      if (this.disconnectTimer !== null) return
+      this.update({ status: 'reconnecting' })
+      this.disconnectTimer = setTimeout(() => {
+        this.disconnectTimer = null
+        this.lastError = 'negotiation_failed'
+        this.rebuildLater()
+      }, this.disconnectGraceMs)
+    } else if (status === 'failed') {
+      this.lastError = 'negotiation_failed'
+      this.rebuildLater()
+    }
+  }
+
+  /** The current session is lost: build a new one after the backoff delay, or give up */
+  private rebuildLater(): void {
+    this.ready = false
+    if (this.disconnectTimer !== null) clearTimeout(this.disconnectTimer)
+    this.disconnectTimer = null
+    if (!this.createTransport) {
+      this.update({ status: 'failed', error: this.lastError ?? 'sfu_error' })
+      return
+    }
+    if (this.rebuildTimer !== null) return
+    const delay = this.backoff.next()
+    if (delay === null) {
+      this.clearSessionTimers()
+      this.update({ status: 'failed', error: this.lastError ?? 'sfu_error' })
+      return
+    }
+    if (this.state.status !== 'reconnecting') this.update({ status: 'reconnecting' })
+    this.rebuildTimer = setTimeout(() => {
+      this.rebuildTimer = null
+      void this.rebuild()
+    }, delay)
+  }
+
+  /** Throws the session away and builds a new one */
+  private async rebuild(): Promise<void> {
+    if (this.closed || !this.createTransport) return
+    this.clearSessionTimers()
+    this.ready = false
+    const old = this.transport
+    this.detach()
+    void old.close().catch(() => undefined)
+    for (const timer of this.retryTimers) clearTimeout(timer)
+    this.retryTimers.clear()
+    this.pending.clear()
+    this.attempts.clear()
+    this.ended.clear()
+    this.sending = { mic: null, cam: null }
+    this.update({
+      status: 'reconnecting',
+      error: null,
+      published: [],
+      received: {},
+      usingRelay: false,
+    })
+    const transport = this.createTransport()
+    this.transport = transport
+    this.attach(transport)
+    await this.openSession(transport, 'reconnecting')
+  }
+
+  /** TURN credentials expire: hand the transport fresh ones before they do */
+  private scheduleIceRefresh(transport: MediaTransport, ice: IceConfig | null): void {
+    const load = this.iceConfig
+    const after = ice?.refreshAfterMs
+    if (!load || after === null || after === undefined) return
+    this.iceTimer = setTimeout(async () => {
+      this.iceTimer = null
+      const next = await load().catch(() => null)
+      if (this.closed || transport !== this.transport || !this.ready) return
+      if (next?.connect.iceServers) transport.setIceServers(next.connect.iceServers)
+      this.scheduleIceRefresh(transport, next ?? ice)
+    }, after)
+  }
+
+  private clearSessionTimers(): void {
+    for (const timer of [
+      this.rebuildTimer,
+      this.disconnectTimer,
+      this.stableTimer,
+      this.iceTimer,
+    ]) {
+      if (timer !== null) clearTimeout(timer)
+    }
+    this.rebuildTimer = this.disconnectTimer = this.stableTimer = this.iceTimer = null
   }
 
   private syncLocal(): Promise<void> {
@@ -249,12 +480,13 @@ export class RoomMedia {
 
   /** Brings what each kind sends in line with `wanted`, the microphone first */
   private async applyLocal(): Promise<void> {
+    const transport = this.transport
     for (const kind of ['mic', 'cam'] as const) {
-      if (this.closed) return
+      if (this.closed || !this.ready || transport !== this.transport) return
       const want = this.wanted[kind]
       const own = this.state.published.find((track) => track.kind === kind)
       if (!own) {
-        if (want) await this.publishLocal(want, kind)
+        if (want) await this.publishLocal(transport, want, kind)
         continue
       }
       if (this.sending[kind] === want) continue
@@ -264,12 +496,12 @@ export class RoomMedia {
       }
       if (kind === 'cam' && want && this.usage !== 'normal') await lowerQuality(want)
       try {
-        await this.transport.replaceTrack(own.trackName, want)
+        await transport.replaceTrack(own.trackName, want)
       } catch (error) {
-        if (!this.closed) this.update({ error: errorCode(error) })
+        if (!this.closed && transport === this.transport) this.update({ error: errorCode(error) })
         continue
       }
-      if (this.closed) return
+      if (this.closed || transport !== this.transport) return
       this.sending[kind] = want
       this.update({
         published: this.state.published.map((track) =>
@@ -280,7 +512,11 @@ export class RoomMedia {
     }
   }
 
-  private async publishLocal(track: MediaStreamTrack, kind: 'mic' | 'cam'): Promise<void> {
+  private async publishLocal(
+    transport: MediaTransport,
+    track: MediaStreamTrack,
+    kind: 'mic' | 'cam',
+  ): Promise<void> {
     if (kind === 'cam') {
       if (this.usage === 'audioOnly') {
         this.update({ videoRefused: true })
@@ -292,13 +528,13 @@ export class RoomMedia {
       }
     }
     try {
-      const published = await this.transport.publish(track, { kind })
-      if (this.closed) return
+      const published = await transport.publish(track, { kind })
+      if (this.closed || transport !== this.transport) return
       this.sending[kind] = track
       this.update({ published: [...this.state.published, { ...published, muted: false }] })
       this.reportTracks()
     } catch (error) {
-      if (this.closed) return
+      if (this.closed || transport !== this.transport) return
       const code = errorCode(error)
       if (code === 'quota_exceeded') this.update({ videoRefused: true })
       else this.update({ error: code })
@@ -306,14 +542,16 @@ export class RoomMedia {
   }
 
   private async subscribeTo(key: string, track: MemberTrack): Promise<void> {
+    const transport = this.transport
     this.pending.add(key)
     try {
-      const remote = await this.transport.subscribe(track)
+      const remote = await transport.subscribe(track)
+      if (transport !== this.transport) return
       this.pending.delete(key)
       if (this.closed) return
       if (!this.desired.has(key)) {
         // Left the list while we were subscribing
-        await this.transport.unsubscribe(track).catch(() => undefined)
+        await transport.unsubscribe(track).catch(() => undefined)
         return
       }
       this.attempts.delete(key)
@@ -329,6 +567,7 @@ export class RoomMedia {
         },
       })
     } catch {
+      if (transport !== this.transport) return
       this.pending.delete(key)
       if (this.closed) return
       this.attempts.set(key, (this.attempts.get(key) ?? 0) + 1)
@@ -355,12 +594,19 @@ export class RoomMedia {
   }
 
   private async reportStats(): Promise<void> {
-    const sessionId = this.transport.sessionId
-    if (this.closed || !sessionId) return
+    const transport = this.transport
+    const sessionId = transport.sessionId
+    if (this.closed || !this.ready || !sessionId) return
     try {
-      const { bytesReceived } = await this.transport.getStats()
-      if (!this.closed)
-        this.send({ t: 'stats', sessionId, bytesReceived: Math.round(bytesReceived) })
+      const { bytesReceived, usingRelay } = await transport.getStats()
+      if (this.closed || transport !== this.transport) return
+      if (usingRelay !== this.state.usingRelay) this.update({ usingRelay })
+      this.send({
+        t: 'stats',
+        sessionId,
+        bytesReceived: Math.round(bytesReceived),
+        relay: usingRelay,
+      })
     } catch {
       // Not connected yet; the next tick tries again
     }

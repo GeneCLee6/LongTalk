@@ -5,6 +5,7 @@ import { normalizeName } from '../../shared/protocol.ts'
 import { isRoomId } from '../../shared/room-id.ts'
 import type { UsageState } from '../../shared/usage.ts'
 import { getRoom } from '../api/rooms.ts'
+import { fetchIceConfig } from '../api/turn.ts'
 import { Button } from '../components/Button.tsx'
 import { MediaControls } from '../components/MediaControls.tsx'
 import { MemberTile } from '../components/MemberTile.tsx'
@@ -205,7 +206,7 @@ function Room({
   choices: JoinChoices
   onLeft: () => void
 }) {
-  const { state, leave, send } = useRoomConnection(roomId, choices.name)
+  const { state, leave, send, retry: retryRoom } = useRoomConnection(roomId, choices.name)
   const gone = state.status === 'notFound'
   useEffect(() => {
     if (gone) clearSession(roomId)
@@ -239,13 +240,23 @@ function Room({
     () => makeTransport(roomId, () => token.current),
     [makeTransport, roomId],
   )
+  // `?ice=relay` forces the media through TURN: a debugging aid for checking TURN (e2-t07)
+  const [relayOnly] = useState(() => new URLSearchParams(location.search).get('ice') === 'relay')
+  const iceConfig = useCallback(
+    () => fetchIceConfig(roomId, token.current, relayOnly),
+    [roomId, relayOnly],
+  )
+  // The room view stays on screen while the socket reconnects; so does the media connection
+  const inRoom = state.status === 'open' || state.status === 'reconnecting'
   const media = useRoomMedia({
-    enabled: state.status === 'open' && state.token !== null,
+    enabled: inRoom && state.token !== null,
     createTransport,
+    iceConfig,
     local: sending,
     send,
     you: state.you,
     view: state.view,
+    welcomes: state.welcomes,
   })
   const usage = state.view?.usage ?? 'normal'
   useUsageNotices(usage, media.videoRefused, show)
@@ -262,17 +273,37 @@ function Room({
 
   if (gone) return <NotFound />
   const members = Object.values(state.view?.members ?? {})
-  const mediaProblem = mediaErrorText(media.error)
+  // Gave up rebuilding the media session (e2-t08): say so, with a retry
+  const mediaLost =
+    media.status === 'failed' &&
+    media.error !== 'sfu_not_configured' &&
+    media.error !== 'unauthorized'
+  const mediaProblem = mediaLost ? null : mediaErrorText(media.error)
+  const selfReconnecting = state.status === 'reconnecting' || media.status === 'reconnecting'
   return (
     <Panel>
       <h1>{strings.room.title(roomId)}</h1>
       <p role="status">{statusText(state)}</p>
-      {state.status === 'open' && media.status === 'connecting' && (
-        <p>{strings.room.mediaConnecting}</p>
+      {state.status === 'lost' && (
+        <Button variant="secondary" onClick={retryRoom}>
+          {strings.common.retry}
+        </Button>
+      )}
+      {inRoom && media.status === 'connecting' && <p>{strings.room.mediaConnecting}</p>}
+      {inRoom && state.status === 'open' && media.status === 'reconnecting' && (
+        <p role="status">{strings.room.mediaReconnecting}</p>
+      )}
+      {mediaLost && (
+        <Alert role="alert">
+          <span>{strings.room.mediaLost}</span>
+          <Button variant="secondary" onClick={media.retry}>
+            {strings.common.retry}
+          </Button>
+        </Alert>
       )}
       {mediaProblem && <p role="alert">{mediaProblem}</p>}
       <DeviceProblems local={local} onRetry={(kind) => void devices?.retry(kind)} />
-      {state.status === 'open' && (
+      {inRoom && (
         <Grid aria-label={strings.room.grid}>
           {members.map((member) => {
             const you = member.id === state.you
@@ -287,7 +318,8 @@ function Room({
                 key={member.id}
                 name={member.name}
                 you={you}
-                reconnecting={member.reconnecting}
+                reconnecting={you ? selfReconnecting : member.reconnecting}
+                relayed={you && media.usingRelay}
                 video={
                   you
                     ? media.videoRefused
@@ -462,14 +494,16 @@ function statusText({ status, view }: RoomConnectionState): string {
       return strings.room.connecting
     case 'open':
       return strings.room.memberCount(Object.keys(view?.members ?? {}).length)
+    case 'reconnecting':
+      return strings.room.reconnectingSelf
+    case 'lost':
+      return strings.room.lost
     case 'full':
       return strings.room.full
     case 'outdated':
       return strings.room.outdated
     case 'replaced':
       return strings.room.replaced
-    case 'closed':
-      return strings.room.closed
   }
 }
 

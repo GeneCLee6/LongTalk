@@ -21,7 +21,12 @@ import {
   type TrackKind,
   type TracksMessage,
 } from '../shared/protocol.ts'
-import { ASSUMED_BITRATE, MAX_REPORTED_BITRATE, type UsageState } from '../shared/usage.ts'
+import {
+  ASSUMED_BITRATE,
+  MAX_REPORTED_BITRATE,
+  RELAY_OVERHEAD,
+  type UsageState,
+} from '../shared/usage.ts'
 
 /**
  * The server estimate counts at most this long between two flushes: the sweep flushes every
@@ -141,6 +146,11 @@ export class RoomHost {
   /** Bytes the browsers reported since the last flush */
   private reported = 0
   private readonly baselines = new Map<string, Baseline>()
+  /**
+   * Members whose last `stats` said their media goes through a TURN relay (e2-t07). Not stored:
+   * after an eviction the next report (STATS_INTERVAL_MS) says it again.
+   */
+  private readonly relayed = new Set<string>()
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -166,6 +176,7 @@ export class RoomHost {
     this.byToken.clear()
     this.conns.clear()
     this.baselines.clear()
+    this.relayed.clear()
     this.reported = 0
     this.usage = usage?.state ?? 'normal'
     this.usageAt = usage?.at ?? this.deps.now()
@@ -355,7 +366,8 @@ export class RoomHost {
   /**
    * Egress since the last call, for UsageDO (shared/usage.ts): what the browsers reported, and
    * the server's estimate (elapsed time × every unmuted track each connected member receives ×
-   * its assumed bitrate). Called by the sweep alarm.
+   * its assumed bitrate, × RELAY_OVERHEAD for a member receiving through TURN). Called by the
+   * sweep alarm.
    */
   takeUsage(): UsageDelta {
     const now = this.deps.now()
@@ -365,14 +377,16 @@ export class RoomHost {
     let bitsPerSecond = 0
     for (const [receiverId, receiver] of this.members) {
       if (receiver.reconnecting) continue
+      let received = 0
       for (const [publisherId, publisher] of this.members) {
         if (publisherId === receiverId) continue
         for (const track of publisher.tracks) {
           // A muted track sends nothing (B2); a member lying about it still shows up in the
           // receivers' own reports
-          if (!track.muted) bitsPerSecond += ASSUMED_BITRATE[track.kind]
+          if (!track.muted) received += ASSUMED_BITRATE[track.kind]
         }
       }
+      bitsPerSecond += this.relayed.has(receiverId) ? received * RELAY_OVERHEAD : received
     }
     const clientBytes = this.reported
     this.reported = 0
@@ -455,10 +469,13 @@ export class RoomHost {
   /**
    * `stats`: counts the growth of the member's cumulative bytesReceived on its current session.
    * Without a baseline (the object was evicted since) the report only becomes the baseline; the
-   * server estimate covers the gap. A report faster than MAX_REPORTED_BITRATE is clamped.
+   * server estimate covers the gap. A report faster than MAX_REPORTED_BITRATE is clamped; a
+   * relayed member's growth counts × RELAY_OVERHEAD (shared/usage.ts).
    */
   private countStats(memberId: string, message: StatsMessage): void {
     if (this.sessions.get(memberId)!.sfu !== message.sessionId) return
+    if (message.relay) this.relayed.add(memberId)
+    else this.relayed.delete(memberId)
     const now = this.deps.now()
     const last = this.baselines.get(memberId)
     this.baselines.set(memberId, {
@@ -470,7 +487,8 @@ export class RoomHost {
     const grown = message.bytesReceived - last.bytes
     if (grown <= 0) return
     const seconds = Math.min(Math.max(now - last.at, 1000), MAX_REPORT_GAP_MS) / 1000
-    this.reported += Math.min(grown, Math.round((MAX_REPORTED_BITRATE / 8) * seconds))
+    const counted = Math.min(grown, Math.round((MAX_REPORTED_BITRATE / 8) * seconds))
+    this.reported += message.relay ? Math.round(counted * RELAY_OVERHEAD) : counted
   }
 
   /**
@@ -535,6 +553,7 @@ export class RoomHost {
     this.sessions.delete(memberId)
     this.members.delete(memberId)
     this.baselines.delete(memberId)
+    this.relayed.delete(memberId)
   }
 
   /** Members are replaced, never mutated: `sent` shares their objects */
