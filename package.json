@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "budget": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/budget.ts",
     "preview": "vite preview",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "react": "^19.3.1",
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.66.0",
     "@cloudflare/workers-types": "^5.20261030.1",
+    "@playwright/test": "1.64.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.6.6",

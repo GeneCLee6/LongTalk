@@ -12,12 +12,8 @@ import { MemberTile } from '../components/MemberTile.tsx'
 import { PreJoin } from '../components/PreJoin.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
 import { useToasts } from '../components/useToasts.ts'
-import {
-  activeDeviceId,
-  canChooseSpeaker,
-  supportsWebRtc,
-  type MediaProblem,
-} from '../media/devices.ts'
+import { canChooseSpeaker, supportsWebRtc } from '../media/capabilities.ts'
+import { activeDeviceId, type MediaProblem } from '../media/devices.ts'
 import { trackKey, type MediaTransportErrorCode } from '../media/MediaTransport.ts'
 import type { RoomConnectionState } from '../room/RoomConnection.ts'
 import type { DeviceNotice, LocalDevicesState, LocalKind } from '../room/LocalDevices.ts'
