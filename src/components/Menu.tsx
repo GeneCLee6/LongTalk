@@ -11,6 +11,12 @@ export interface MenuItem {
   label: string
   onSelect: () => void
   disabled?: boolean
+  /**
+   * A line under the label: why the item cannot be used (e3-t10: 分享螢幕 on a phone). A disabled
+   * item with a hint can still be reached with the arrow keys (aria-disabled), so the reason is
+   * read out; selecting it does nothing.
+   */
+  hint?: string
   tone?: 'neutral' | 'danger'
   /** A choice among several (device menus): a radio item, checked when it is the current one */
   checked?: boolean
@@ -52,7 +58,8 @@ export function Menu({
   const menuId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
-  const enabled = items.flatMap((item, index) => (item.disabled ? [] : [index]))
+  // What the arrow keys go through: every item but a disabled one without a reason to read
+  const enabled = items.flatMap((item, index) => (item.disabled && !item.hint ? [] : [index]))
 
   useEffect(() => {
     if (open) itemRefs.current[focusIndex]?.focus()
@@ -138,15 +145,23 @@ export function Menu({
           role={item.checked === undefined ? 'menuitem' : 'menuitemradio'}
           aria-checked={item.checked}
           tabIndex={index === focusIndex ? 0 : -1}
-          disabled={item.disabled}
+          disabled={item.disabled && !item.hint}
+          aria-disabled={item.disabled && item.hint ? true : undefined}
+          // The hint is inside the button: name it by its label alone, the hint describes it
+          aria-labelledby={item.hint ? `${menuId}-${item.id}-label` : undefined}
+          aria-describedby={item.hint ? `${menuId}-${item.id}-hint` : undefined}
           $danger={item.tone === 'danger'}
           onClick={() => {
+            if (item.disabled) return
             close(true)
             item.onSelect()
           }}
         >
           <Check aria-hidden="true">{item.checked ? '✓' : ''}</Check>
-          {item.label}
+          <span>
+            <span id={item.hint ? `${menuId}-${item.id}-label` : undefined}>{item.label}</span>
+            {item.hint && <Hint id={`${menuId}-${item.id}-hint`}>{item.hint}</Hint>}
+          </span>
         </Item>,
       ])}
     </List>
@@ -217,10 +232,21 @@ const Heading = styled.div`
 
 const Check = styled.span`
   display: inline-block;
+  flex: none;
   width: 1.25em;
 `
 
+const Hint = styled.span`
+  display: block;
+  margin-top: ${space(0.5)};
+  color: ${color.muted};
+  font-size: ${fontSize.toolbarLabel};
+  line-height: 1.4;
+`
+
 const Item = styled.button<{ $danger: boolean }>`
+  display: flex;
+  align-items: baseline;
   padding: ${space(2)} ${space(3)};
   border: none;
   border-radius: ${space(2)};
@@ -230,11 +256,12 @@ const Item = styled.button<{ $danger: boolean }>`
   text-align: left;
   cursor: pointer;
 
-  &:hover:not(:disabled),
+  &:hover:not(:disabled, [aria-disabled='true']),
   &:focus-visible {
     background: ${color.hover};
   }
-  &:disabled {
+  &:disabled,
+  &[aria-disabled='true'] {
     color: ${color.muted};
     cursor: not-allowed;
   }

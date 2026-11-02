@@ -1,8 +1,20 @@
 // Picking what to share (e3-t01): the browser's getDisplayMedia picker, with the options the PRD
 // asks for (E3 需求), and its failures sorted into what the room says about them. Publishing the
 // track is MediaTransport's business (publish({ kind: 'screen' }), CLAUDE.md rule 2). Text and
-// motion modes (contentHint and constraints, e3-t06) and the share's own audio (e3-t04) build on
-// this file. No React here.
+// motion modes (contentHint and constraints, e3-t06) build on this file. No React here.
+//
+// The share's own sound (e3-t04): where the browser can capture it (Chromium on the desktop: a
+// tab's audio everywhere, the whole system's sound on Windows and ChromeOS; capabilities.ts
+// canShareAudio) the picker offers it, the person decides there (its "share audio" switch), and
+// the audio track, if any, comes back next to the video. Choices, and why:
+// - the sound is sent as it is (no echo cancellation, noise suppression or gain control: those
+//   are for voices and spoil music);
+// - the sharer keeps hearing the tab (suppressLocalAudioPlayback: false): a video they share is
+//   one they want to hear too. Their microphone may then pick the tab up from the speakers, and
+//   the others hear it twice (headphones avoid it; the sharing bar says so);
+// - the system's sound leaves out this meeting's own sound where the browser can
+//   (restrictOwnAudio): otherwise everyone would hear the others' voices come back through the
+//   sharer's share.
 
 /** The part of navigator.mediaDevices sharing needs (a stand-in in tests) */
 export interface DisplayMediaLike {
@@ -22,12 +34,19 @@ const browserDevices = (): DisplayMediaLike | undefined =>
 export type ShareProblem = 'cancelled' | 'denied' | 'unsupported' | 'failed'
 
 export type CaptureResult =
-  { ok: true; track: MediaStreamTrack } | { ok: false; problem: ShareProblem }
+  | {
+      ok: true
+      track: MediaStreamTrack
+      /** The tab's or system's sound, when asked for and the person chose to share it */
+      audio: MediaStreamTrack | null
+    }
+  | { ok: false; problem: ShareProblem }
 
 /**
  * What the picker offers (E3): anything but this meeting's own tab (it would show itself
- * endlessly), switching source while sharing, no audio (e3-t04 adds it). Up to 1080p at a low
- * frame rate: text stays sharp and the free tier lasts (the text mode, e3-t06, refines it).
+ * endlessly), switching source while sharing. Up to 1080p at a low frame rate: text stays sharp
+ * and the free tier lasts (the text mode, e3-t06, refines it). No audio here: displayMediaOptions
+ * adds it where the browser can capture it (e3-t04).
  */
 export const DISPLAY_MEDIA_OPTIONS = {
   video: {
@@ -41,6 +60,22 @@ export const DISPLAY_MEDIA_OPTIONS = {
   surfaceSwitching: 'include',
   monitorTypeSurfaces: 'include',
 } as const
+
+/** The share's sound as captured (e3-t04; the choices are explained at the top of this file) */
+export const SHARE_AUDIO_CONSTRAINTS = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+  suppressLocalAudioPlayback: false,
+  restrictOwnAudio: true,
+} as const
+
+/** The picker's options, with the share's sound (tab and system audio) or without it */
+export function displayMediaOptions(audio: boolean) {
+  return audio
+    ? { ...DISPLAY_MEDIA_OPTIONS, audio: SHARE_AUDIO_CONSTRAINTS, systemAudio: 'include' as const }
+    : DISPLAY_MEDIA_OPTIONS
+}
 
 /** A getDisplayMedia failure, as the room explains it */
 export function shareProblem(error: unknown): ShareProblem {
@@ -64,26 +99,40 @@ export function shareProblem(error: unknown): ShareProblem {
 
 /**
  * Opens the browser's picker (must run in a click: the browser asks for a user gesture) and
- * resolves with the chosen screen, window or tab, marked as detail content (text stays sharp).
+ * resolves with the chosen screen, window or tab, marked as detail content (text stays sharp),
+ * and its sound when `audio` asks for it (capabilities.ts canShareAudio) and the person shared
+ * it. A source without sound is no error: `audio` is then null.
  */
 export async function captureScreen(
   devices: DisplayMediaLike | undefined = browserDevices(),
+  audio = false,
 ): Promise<CaptureResult> {
   if (typeof devices?.getDisplayMedia !== 'function') return { ok: false, problem: 'unsupported' }
+  const ask = (withAudio: boolean) =>
+    devices.getDisplayMedia!(displayMediaOptions(withAudio) as DisplayMediaStreamOptions)
   let stream: MediaStream
   try {
-    stream = await devices.getDisplayMedia(DISPLAY_MEDIA_OPTIONS as DisplayMediaStreamOptions)
+    stream = await ask(audio).catch((error: unknown) => {
+      // A browser that cannot take the audio options at all refuses them before the picker
+      // opens (TypeError): ask again without
+      if (audio && (error as { name?: unknown } | null)?.name === 'TypeError') return ask(false)
+      throw error
+    })
   } catch (error) {
     return { ok: false, problem: shareProblem(error) }
   }
   const [track] = stream.getVideoTracks()
-  // Audio is not asked for, but a browser could add some: not sent in D1
-  for (const extra of stream.getTracks()) if (extra !== track) extra.stop()
-  if (!track) return { ok: false, problem: 'failed' }
+  const sound = (audio && stream.getAudioTracks()[0]) || null
+  // Anything else (audio nobody asked for) is not kept running
+  for (const extra of stream.getTracks()) if (extra !== track && extra !== sound) extra.stop()
+  if (!track) {
+    sound?.stop()
+    return { ok: false, problem: 'failed' }
+  }
   try {
     track.contentHint = 'detail'
   } catch {
     // Read-only here: the encoder picks for itself
   }
-  return { ok: true, track }
+  return { ok: true, track, audio: sound }
 }

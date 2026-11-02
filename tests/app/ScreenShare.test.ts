@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ClientMessage, ShareInfo } from '../../shared/protocol.ts'
 import type { CaptureResult } from '../../src/media/share.ts'
-import { ScreenShare, type ShareNotice } from '../../src/room/ScreenShare.ts'
+import { idleShare, ScreenShare, type ShareNotice } from '../../src/room/ScreenShare.ts'
 import { FakeTrack } from './media/fakeMedia.ts'
 
 const YOU = 'm1'
@@ -16,7 +16,7 @@ function setup(results: CaptureResult[] = []) {
     if (next) return next
     const track = new FakeTrack('video', 'screen:1')
     tracks.push(track)
-    return { ok: true, track: track as unknown as MediaStreamTrack }
+    return { ok: true, track: track as unknown as MediaStreamTrack, audio: null }
   })
   const controller = new ScreenShare({
     capture,
@@ -35,7 +35,12 @@ describe('ScreenShare (e3-t02, e3-t03)', () => {
     expect(t.sent).toEqual([{ t: 'share', takeOver: false }])
     expect(t.phase()).toBe('claiming')
     t.controller.setRoom(share(YOU), YOU)
-    expect(t.controller.getState()).toEqual({ phase: 'sharing', track: t.tracks[0] })
+    expect(t.controller.getState()).toEqual({
+      phase: 'sharing',
+      track: t.tracks[0],
+      audio: null,
+      audioOn: true,
+    })
   })
 
   it('stops by the bar or toolbar: unshare, and the capture stops', async () => {
@@ -94,7 +99,7 @@ describe('ScreenShare (e3-t02, e3-t03)', () => {
     await t.controller.request()
     t.controller.setRoom(share('m2'), YOU)
     t.controller.refused('share_busy')
-    expect(t.controller.getState()).toEqual({ phase: 'confirm', track: t.tracks[0] })
+    expect(t.controller.getState()).toMatchObject({ phase: 'confirm', track: t.tracks[0] })
     await t.controller.confirm()
     // No second picker: the screen picked before is claimed
     expect(t.capture).toHaveBeenCalledTimes(1)
@@ -159,9 +164,98 @@ describe('ScreenShare (e3-t02, e3-t03)', () => {
     const picking = u.controller.request()
     u.controller.close()
     const late = new FakeTrack('video', 'screen:2')
-    resolve({ ok: true, track: late as unknown as MediaStreamTrack })
+    const lateAudio = new FakeTrack('audio', 'tab-audio')
+    resolve({
+      ok: true,
+      track: late as unknown as MediaStreamTrack,
+      audio: lateAudio as unknown as MediaStreamTrack,
+    })
     await picking
     expect(late.stopped).toBe(true)
+    expect(lateAudio.stopped).toBe(true)
     expect(u.sent).toEqual([])
+  })
+})
+
+describe("ScreenShare: the share's sound (e3-t04)", () => {
+  /** A capture that hands back a screen and its sound */
+  function withSound() {
+    const video = new FakeTrack('video', 'screen:1')
+    const audio = new FakeTrack('audio', 'tab-audio')
+    const t = setup([
+      {
+        ok: true,
+        track: video as unknown as MediaStreamTrack,
+        audio: audio as unknown as MediaStreamTrack,
+      },
+    ])
+    return { ...t, video, audio }
+  }
+
+  it('keeps the sound with the screen, on at first, and the switch turns it off and on', async () => {
+    const t = withSound()
+    await t.controller.request()
+    t.controller.setRoom(share(YOU), YOU)
+    expect(t.controller.getState()).toMatchObject({
+      phase: 'sharing',
+      audio: t.audio,
+      audioOn: true,
+    })
+    t.controller.toggleAudio()
+    expect(t.controller.getState()).toMatchObject({ audio: t.audio, audioOn: false })
+    // Turned off is not stopped: it can come back
+    expect(t.audio.stopped).toBe(false)
+    t.controller.toggleAudio()
+    expect(t.controller.getState().audioOn).toBe(true)
+    // No message for it: RoomMedia tells the room the track is muted
+    expect(t.sent).toEqual([{ t: 'share', takeOver: false }])
+  })
+
+  it('a source without sound has no switch to press', async () => {
+    const t = setup()
+    await t.controller.request()
+    t.controller.setRoom(share(YOU), YOU)
+    t.controller.toggleAudio()
+    expect(t.controller.getState()).toMatchObject({ audio: null, audioOn: true })
+  })
+
+  it('stops the sound on every way the share ends', async () => {
+    // The bar or the toolbar
+    const a = withSound()
+    await a.controller.request()
+    a.controller.setRoom(share(YOU), YOU)
+    a.controller.stop()
+    expect(a.audio.stopped).toBe(true)
+    // The browser's own stop button
+    const b = withSound()
+    await b.controller.request()
+    b.controller.setRoom(share(YOU), YOU)
+    b.video.end()
+    expect(b.audio.stopped).toBe(true)
+    expect(b.controller.getState()).toEqual(idleShare)
+    // Someone took over
+    const c = withSound()
+    await c.controller.request()
+    c.controller.setRoom(share(YOU), YOU)
+    c.controller.setRoom(share('m2', 2), YOU)
+    expect(c.audio.stopped).toBe(true)
+    expect(c.notices).toEqual([{ type: 'takenOver', by: 'm2' }])
+    // Turned off, then stopped: stopped too, and the next share starts with the sound on
+    const d = withSound()
+    await d.controller.request()
+    d.controller.setRoom(share(YOU), YOU)
+    d.controller.toggleAudio()
+    d.controller.stop()
+    expect(d.audio.stopped).toBe(true)
+    expect(d.controller.getState().audioOn).toBe(true)
+  })
+
+  it('goes on with the screen alone when the sound ends by itself', async () => {
+    const t = withSound()
+    await t.controller.request()
+    t.controller.setRoom(share(YOU), YOU)
+    t.audio.end()
+    expect(t.controller.getState()).toMatchObject({ phase: 'sharing', track: t.video, audio: null })
+    expect(t.sent.filter((m) => m.t === 'unshare')).toHaveLength(0)
   })
 })

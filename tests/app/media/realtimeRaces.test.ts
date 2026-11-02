@@ -497,3 +497,69 @@ describe('RoomMedia: three members joining a few moments apart', () => {
     expect(sfu.conflicts).toBe(0)
   })
 })
+
+describe('RoomMedia: a share with its sound in a busy room (e3-t04)', () => {
+  it('everyone pulls the screen and its sound at once; the switch and the stop need no 406', async () => {
+    const sfu = new ScriptedSfu()
+    const listed = new Map<string, MemberTrack[]>()
+    const members = new Map<string, RoomMedia>()
+    const broadcast = () => {
+      for (const [name, media] of members) {
+        media.setDesired([...listed].filter(([n]) => n !== name).flatMap(([, t]) => t))
+      }
+    }
+    for (const name of ['Alice', 'Bob', 'Carol']) {
+      const media = new RoomMedia({
+        createTransport: () => transport(sfu),
+        send: (message: ClientMessage) => {
+          if (message.t !== 'tracks') return
+          listed.set(
+            name,
+            message.tracks.map((t) => ({ sessionId: message.sessionId, ...t })),
+          )
+          setTimeout(broadcast, 0)
+        },
+        retryDelayMs: 20,
+        retryMaxMs: 100,
+      })
+      members.set(name, media)
+      await media.start({ mic: audio, cam: video })
+    }
+    const kindsReceived = (name: string) =>
+      Object.values(members.get(name)!.getState().received)
+        .map((r) => r.kind)
+        .sort()
+    const sound = { kind: 'audio' } as MediaStreamTrack
+    const bob = members.get('Bob')!
+    const sharing = bob.setScreen(video, sound)
+    await vi.waitFor(
+      () => {
+        for (const name of ['Alice', 'Carol']) {
+          expect(kindsReceived(name), name).toEqual([
+            'cam',
+            'cam',
+            'mic',
+            'mic',
+            'screen',
+            'screenAudio',
+          ])
+        }
+      },
+      { timeout: 4_000 },
+    )
+    await sharing
+    // Turned off: Bob's list says muted, nobody loses the track
+    await bob.setScreen(video, null)
+    expect(listed.get('Bob')!.find((t) => t.kind === 'screenAudio')).toMatchObject({ muted: true })
+    // Stopped: both leave Bob's list and everyone else's reception
+    await bob.setScreen(null)
+    expect(listed.get('Bob')!.map((t) => t.kind)).toEqual(['mic', 'cam'])
+    await vi.waitFor(() => {
+      for (const name of ['Alice', 'Carol']) {
+        expect(kindsReceived(name), name).toEqual(['cam', 'cam', 'mic', 'mic'])
+      }
+    })
+    expect(sfu.conflicts).toBe(0)
+    await Promise.all([...members.values()].map((m) => m.close()))
+  })
+})

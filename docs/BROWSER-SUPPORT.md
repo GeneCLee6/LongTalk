@@ -1,6 +1,6 @@
 # BROWSER-SUPPORT — 瀏覽器支援
 
-最後更新 2026-11-02（B4 初版，`e11-t04`；C2 加剪貼簿與系統分享選單）。完整版（Playwright 多瀏覽器、iOS／Android 實機清單）是 H6 的 `e2-t16`（AC-2.8）。
+最後更新 2026-11-02（B4 初版，`e11-t04`；C2 加剪貼簿與系統分享選單；D2 加分享音訊、不能分享時的說明）。完整版（Playwright 多瀏覽器、iOS／Android 實機清單）是 H6 的 `e2-t16`（AC-2.8）。
 
 目標瀏覽器（`PRD/00-prd.md` §9）：Chrome／Edge 最近兩版、Firefox 最近兩版、Safari 17+（macOS）、iOS Safari 17+、Android Chrome。
 
@@ -19,7 +19,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | WebRTC 通話（`RTCPeerConnection`） | `webrtc` | ● | ○ | ○ | ○ | ○ | ● | 進房前就顯示「這個瀏覽器不能視訊通話，請改用…」（`e2-t09`） |
 | 麥克風、鏡頭（`getUserMedia`） | `getUserMedia` | ● | ○ | ○ | ○ | ○ | ● | 仍可加入，看得到、聽得到別人；提示「網頁需要 HTTPS」 |
-| 螢幕分享（`getDisplayMedia`） | `getDisplayMedia` | ○ | ○ | ○ | ○ | ✕ | ✕ | 尚未實作（D1）；之後沒有就隱藏「分享螢幕」 |
+| 螢幕分享（`getDisplayMedia`） | `getDisplayMedia` | ○ | ○ | ○ | ○ | ✕ | ✕ | 工具列不顯示「分享螢幕」，「更多」第一項是灰色的「分享螢幕」並說明原因：手機寫「手機瀏覽器不能分享螢幕，要分享請用電腦加入」，電腦寫「請改用電腦上的 Chrome、Edge 或 Firefox」（`e3-t10`） |
+| 分享音訊（分頁或系統音訊；偵測 `getSupportedConstraints().suppressLocalAudioPlayback`） | `shareAudio` | ○ | ○ | ✕ | ✕ | ✕ | ✕ | 選擇器不要求音訊，只分享畫面；「你正在分享畫面」條沒有音訊開關（`e3-t04`）。Chrome／Edge：分享分頁可帶分頁音訊，分享整個螢幕在 Windows、ChromeOS 可帶系統音訊（macOS 依 Chrome 與系統版本而定）；分享視窗通常沒有音訊。以上依文件，都還沒實測 |
 | 選擇喇叭（`setSinkId`） | `setSinkId` | ● | ○ | ○（116+） | ? | ✕ | ? | 不顯示喇叭選單，用系統預設輸出 |
 | 不重新協商換軌（`RTCRtpSender.replaceTrack`） | `replaceTrack` | ● | ○ | ○ | ○ | ○ | ? | 靜音、關鏡頭、換裝置都靠它；目前所有目標瀏覽器都有，未另做退路 |
 | 發送參數（`RTCRtpSender.setParameters`，simulcast 與位元率上限） | `senderParameters` | ○ | ○ | ○ | ○ | ○ | ○ | 尚未使用；simulcast 是 M1 的 `e2-t11`（Safari 預計退化為單層） |
@@ -42,8 +43,9 @@ Edge、Firefox、Safari（macOS）、iOS Safari 都還沒有實測。
 
 - **iOS Safari**：不能分享螢幕；分頁進背景時鏡頭會停；聲音要在使用者點擊後才能播放（預先加入頁的「加入」按鈕算一次點擊）；不能選喇叭。手機版面先做「聽與看」（C3）。
 - **Android Chrome**：不能分享螢幕；選喇叭的支援度不確定，app 以偵測結果為準。
-- **Firefox**：116 版起才有 `setSinkId`；分享螢幕時的系統音訊不穩（E3 處理）。
+- **Firefox**：116 版起才有 `setSinkId`；分享螢幕不能帶分頁或系統音訊（`shareAudio` 偵測為否，選擇器不要求音訊）。
 - **Safari（macOS）**：分享螢幕沒有音訊；simulcast 與編碼差異預計在 `e2-t16` 實測。
+- **分享音訊（Chrome／Edge，D2）**：分頁音訊要在選擇器勾「同時分享分頁音訊」（預設勾）；整個螢幕的系統音訊只在 Windows、ChromeOS（macOS 依版本）；分享視窗通常沒有音訊。LongTalk 要求 `restrictOwnAudio`（系統音訊裡不含這個會議分頁自己播的聲音，避免大家聽到自己的回音）與 `suppressLocalAudioPlayback: false`（分享者自己仍聽得到分頁）；不支援的瀏覽器會忽略這兩個選項。以上依文件，要在 `DEPLOY.md` §5 第 10 步實測。
 
 ## 4. 怎麼更新這份
 

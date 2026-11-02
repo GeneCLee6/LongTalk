@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ClientMessage, ErrorCode, ShareInfo } from '../../shared/protocol.ts'
+import { canShareAudio } from '../media/capabilities.ts'
 import { captureScreen } from '../media/share.ts'
 import { idleShare, ScreenShare, type ScreenShareState, type ShareNotice } from './ScreenShare.ts'
 
@@ -23,13 +24,15 @@ export interface ScreenShareHandle extends ScreenShareState {
   cancel: () => void
   /** Stop sharing */
   stop: () => void
+  /** Send the share's sound, or not (the sharing bar's switch, e3-t04) */
+  toggleAudio: () => void
 }
 
 const noSubscribe = () => () => {}
 const idle = () => idleShare
 
 /**
- * This member's screen share (e3-t01 – e3-t03): one ScreenShare per mounted room, closed (the
+ * This member's screen share (e3-t01 – e3-t04): one ScreenShare per mounted room, closed (the
  * capture stopped) on unmount, so StrictMode's mount / unmount / mount leaves one
  */
 export function useScreenShare(options: UseScreenShareOptions): ScreenShareHandle {
@@ -40,8 +43,10 @@ export function useScreenShare(options: UseScreenShareOptions): ScreenShareHandl
   })
   const [controller, setController] = useState<ScreenShare | null>(null)
   useEffect(() => {
+    // The picker offers the tab's or system's sound only where the browser can capture it
+    const audio = canShareAudio()
     const run = new ScreenShare({
-      capture: () => captureScreen(),
+      capture: () => captureScreen(undefined, audio),
       send: (message) => latest.current.send(message),
       notify: (notice) => latest.current.notify(notice),
     })
@@ -72,6 +77,7 @@ export function useScreenShare(options: UseScreenShareOptions): ScreenShareHandl
       confirm: () => void controller?.confirm(),
       cancel: () => controller?.cancel(),
       stop: () => controller?.stop(),
+      toggleAudio: () => controller?.toggleAudio(),
     }),
     [state, controller],
   )

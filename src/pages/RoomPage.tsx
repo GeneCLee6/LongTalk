@@ -352,6 +352,8 @@ function Room({
   })
   const sharePhase = screenShare.phase
   const sharingScreen = sharePhase === 'sharing' ? screenShare.track : null
+  // The share's sound (e3-t04): sent with the screen while the bar's switch is on
+  const sharingAudio = sharePhase === 'sharing' && screenShare.audioOn ? screenShare.audio : null
   useShareStartedNotice(roomShare?.memberId ?? null, state.you, memberName, show)
   // The name of whoever shares, for the take-over question (kept if they stop meanwhile)
   const [sharerName, setSharerName] = useState('')
@@ -372,6 +374,7 @@ function Room({
     iceConfig,
     local: sending,
     screen: sharingScreen,
+    screenAudio: sharingAudio,
     send,
     you: state.you,
     view: state.view,
@@ -441,6 +444,11 @@ function Room({
   // shown back to us (it would mirror endlessly; the presenter view is e3-t08): the bar says it.
   const sharer = roomShare ? state.view?.members[roomShare.memberId] : undefined
   const sharerScreen = sharer?.tracks.find((t) => t.kind === 'screen')
+  // Its sound (e3-t04) plays apart from the share tile, like everyone's microphone
+  const sharerAudioTrack =
+    sharer && sharer.id !== state.you ? sharer.tracks.find((t) => t.kind === 'screenAudio') : null
+  const sharerAudio =
+    (sharerAudioTrack && media.received[trackKey(sharerAudioTrack)]?.track) || null
   const shareTile =
     sharer && sharer.id !== state.you ? (
       <ShareTile
@@ -459,7 +467,16 @@ function Room({
         onLeave={onLeave}
       />
       <StageArea>
-        {sharePhase === 'sharing' && <SharingBar onStop={screenShare.stop} />}
+        {sharePhase === 'sharing' && (
+          <SharingBar
+            onStop={screenShare.stop}
+            audio={
+              screenShare.audio
+                ? { on: screenShare.audioOn, onToggle: screenShare.toggleAudio }
+                : null
+            }
+          />
+        )}
         <StageBox>
           {inRoom && (
             <Stage
@@ -602,6 +619,15 @@ function Room({
               speaker={local.chosen.speaker}
             />
           ),
+        )}
+        {sharer && (
+          <MemberAudio
+            key={`${sharer.id}-share`}
+            name={sharer.name}
+            track={sharerAudio}
+            speaker={local.chosen.speaker}
+            source="share"
+          />
         )}
       </div>
       <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
