@@ -25,7 +25,8 @@ async function openPreJoin(options: Parameters<typeof fakeMediaDevices>[0] = {})
   setMediaDevices(fake.devices)
   window.history.pushState({}, '', `/r/${ROOM_ID}`)
   render(<App />)
-  await screen.findByRole('heading', { name: '準備加入' })
+  // The room page is a lazy chunk: its first load in a busy test run can take a while
+  await screen.findByRole('heading', { name: '準備加入' }, { timeout: 5000 })
   return fake
 }
 
