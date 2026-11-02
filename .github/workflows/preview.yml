@@ -144,6 +144,9 @@ jobs:
     env:
       BASE_URL: ${{ needs.deploy.outputs.url }}
       SFU: ${{ needs.deploy.outputs.sfu }}
+      # The test only drives browsers: keep the deploy credentials out of this job
+      CLOUDFLARE_API_TOKEN: ''
+      CLOUDFLARE_ACCOUNT_ID: ''
     steps:
       - name: Is there a preview with the SFU?
         id: check
