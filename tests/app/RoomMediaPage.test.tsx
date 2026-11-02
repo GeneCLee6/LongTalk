@@ -30,7 +30,7 @@ class RoomSocket {
   sent: ClientMessage[] = []
   onopen: (() => void) | null = null
   onmessage: ((event: { data: string }) => void) | null = null
-  onclose: (() => void) | null = null
+  onclose: ((event: { code: number }) => void) | null = null
   constructor() {
     sockets.push(this)
     queueMicrotask(() => {
@@ -254,5 +254,30 @@ describe('room page: toggles, devices and problems (e2-t05, e2-t06, e2-t09)', ()
     vi.stubGlobal('RTCPeerConnection', undefined)
     visitRoom()
     expect(await screen.findByText(/請改用最新版的 Chrome/, {}, SLOW)).toBeInTheDocument()
+  })
+})
+
+describe('room page: reconnecting (e2-t08)', () => {
+  it('shows that it is reconnecting, keeps the media session, and reports again on rejoin', async () => {
+    const fake = fakeMediaDevices()
+    visitRoom(fake.devices)
+    await screen.findByRole('region', { name: '會議室畫面' }, SLOW)
+    await waitFor(
+      () => expect(sockets.flatMap((s) => s.sent).some((m) => m.t === 'tracks')).toBe(true),
+      SLOW,
+    )
+    const before = sockets.length
+    // The network drops the socket
+    sockets.at(-1)!.onclose?.({ code: 1006 })
+    expect(await screen.findByText('連線中斷，正在重新連線…')).toBeInTheDocument()
+    const own = screen.getByRole('figure', { name: 'Gene（你）' })
+    expect(own).toHaveTextContent('重新連線中')
+    // The backoff's first try (about a second) gets through and the room welcomes us back
+    await waitFor(() => expect(sockets.length).toBe(before + 1), { timeout: 3000 })
+    await waitFor(() => expect(screen.getByText('目前 2 人在線')).toBeInTheDocument())
+    expect(screen.getByRole('figure', { name: 'Gene（你）' })).not.toHaveTextContent('重新連線中')
+    // Still the one SFU session; what it publishes is reported on the new socket
+    expect(sfu.transports.size).toBe(1)
+    await waitFor(() => expect(sockets.at(-1)!.sent.some((m) => m.t === 'tracks')).toBe(true))
   })
 })

@@ -85,6 +85,19 @@ jobs:
           printf '%s' "$REALTIME_APP_ID" | npx wrangler secret put REALTIME_APP_ID --name "$WORKER"
           printf '%s' "$REALTIME_APP_SECRET" | npx wrangler secret put REALTIME_APP_SECRET --name "$WORKER"
 
+      - name: Give the preview the Realtime TURN key (optional)
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          REALTIME_TURN_KEY_ID: ${{ secrets.REALTIME_TURN_KEY_ID }}
+          REALTIME_TURN_KEY_API_TOKEN: ${{ secrets.REALTIME_TURN_KEY_API_TOKEN }}
+        run: |
+          if [ -z "$REALTIME_TURN_KEY_ID" ] || [ -z "$REALTIME_TURN_KEY_API_TOKEN" ]; then
+            echo "::notice::REALTIME_TURN_KEY_ID / REALTIME_TURN_KEY_API_TOKEN are not set; /api/turn answers STUN only on this preview (DEPLOY.md §5)"
+            exit 0
+          fi
+          printf '%s' "$REALTIME_TURN_KEY_ID" | npx wrangler secret put REALTIME_TURN_KEY_ID --name "$WORKER"
+          printf '%s' "$REALTIME_TURN_KEY_API_TOKEN" | npx wrangler secret put REALTIME_TURN_KEY_API_TOKEN --name "$WORKER"
+
       - name: Smoke test
         if: steps.creds.outputs.ready == 'true'
         env:

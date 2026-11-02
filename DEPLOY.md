@@ -84,10 +84,12 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 | --- | --- | --- | --- |
 | `REALTIME_APP_ID` | Worker secret | Cloudflare 儀表板 → Realtime → SFU → 建立 app → **App ID** | `worker/sfu.ts`（A2 起） |
 | `REALTIME_APP_SECRET` | Worker secret | 同一個 app 的 **App Secret**（API token；只顯示一次） | `worker/sfu.ts`（A2 起） |
-| `REALTIME_TURN_KEY_ID` | Worker secret | 儀表板 → Realtime → TURN → 建立 key → **Turn Token ID** | `e2-t07`（B 期，尚未使用） |
-| `REALTIME_TURN_KEY_API_TOKEN` | Worker secret | 同一個 TURN key 的 **API token** | `e2-t07`（B 期，尚未使用） |
+| `REALTIME_TURN_KEY_ID` | Worker secret | 儀表板 → Realtime → TURN → 建立 key → **Turn Token ID** | `worker/turn.ts`（B3 起） |
+| `REALTIME_TURN_KEY_API_TOKEN` | Worker secret | 同一個 TURN key 的 **API token**（只顯示一次） | `worker/turn.ts`（B3 起） |
 
 App ID 不算機密，但和 App Secret 放在一起管理比較不會漏。**沒設定時 `/api/sfu/<roomId>/*` 對房間成員回 503 `sfu_not_configured`**，其餘功能照常（進得了房、看得到成員，只是沒有聲音與畫面）。
+
+**TURN（B3）**：瀏覽器每次建立媒體連線前 `POST /api/turn/<roomId>`（帶 session token，房外 401），Worker 用 TURN key 向 Cloudflare 要 3 小時的短期憑證（key 的 API token 不離開 Worker），濾掉瀏覽器會擋的 port 53。**沒設定 TURN secret（或 Cloudflare 回錯）時只回 STUN**（`{"turn":false}`），通話照常，只是嚴格 NAT／擋 UDP 的網路連不上。檢查：`curl -X POST -H "Authorization: Bearer <token>" https://…/api/turn/<roomId>` 看 `turn` 是 `true`。要確認真的能走 TURN，在會議室網址加 `?ice=relay`（除錯旗標：強制所有路徑走 TURN；沒有 TURN 時無效），自己的名牌會出現「經由轉送伺服器」。
 
 **B1 起代理綁定房間成員**（`worker/sfu.ts`）：每個呼叫都要帶 RoomDO 在 `welcome` 發的 session token（`Authorization: Bearer …`），沒帶或不認得一律 401；SFU session 屬於建立它的成員，動別人的 session 403；只能 pull 同一間房發布的軌（不然 404 `track_not_in_room`）。所以正式站設定 secret 之後，不在房間裡的人用不到 SFU 流量。
 
@@ -95,13 +97,17 @@ App ID 不算機密，但和 App Secret 放在一起管理比較不會漏。**�
 # 正式站（secret 會保留到之後每次部署）
 npx wrangler secret put REALTIME_APP_ID
 npx wrangler secret put REALTIME_APP_SECRET
+npx wrangler secret put REALTIME_TURN_KEY_ID
+npx wrangler secret put REALTIME_TURN_KEY_API_TOKEN
 
 # 本機：寫進 .dev.vars（不進 git）
 REALTIME_APP_ID=...
 REALTIME_APP_SECRET=...
+REALTIME_TURN_KEY_ID=...
+REALTIME_TURN_KEY_API_TOKEN=...
 ```
 
-PR 預覽的 Worker 每個 PR 都是新的：在 GitHub 也設定同名的 `REALTIME_APP_ID`、`REALTIME_APP_SECRET`（`gh secret set …`），`preview.yml` 部署後會把它們寫進該 PR 的 Worker；沒設定就跳過（notice）。建議預覽與正式站用**不同的 Realtime app**，流量分開看。
+PR 預覽的 Worker 每個 PR 都是新的：在 GitHub 也設定同名的 `REALTIME_APP_ID`、`REALTIME_APP_SECRET`、`REALTIME_TURN_KEY_ID`、`REALTIME_TURN_KEY_API_TOKEN`（`gh secret set …`），`preview.yml` 部署後會把它們寫進該 PR 的 Worker；沒設定就跳過（notice；沒有 TURN 的預覽只用 STUN）。建議預覽與正式站用**不同的 Realtime app**，流量分開看。
 
 ### 兩台裝置互通測試（會議室頁）
 
@@ -112,8 +118,10 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
 3. 通過的條件：兩邊的格子都看到並聽到對方。把兩台裝置、瀏覽器、網路（例如 Wi-Fi 與 4G）與結果寫進 PR。
 4. 檢查代理沒有開放給房外：`curl -i -X POST https://…/api/sfu/<roomId>/sessions` 要回 401。
 5. **開關與裝置（B2，AC-2.3）**：一邊按工具列的「靜音」「關閉視訊」，另一邊的名牌要立刻出現紅色麥克風、格子換成名字首字；再打開要恢復畫面與聲音（不用重新整理）。用麥克風、鏡頭旁的 ▴ 選單換裝置（有喇叭選單的瀏覽器也換喇叭），通話不斷；通話中拔掉正在用的 USB 麥克風或鏡頭，要自動換到另一個並跳出通知，沒有別的就出現「中斷了」的提示，接回去會自動恢復。到網址列把鏡頭權限改成「封鎖」再進房，要看到權限說明與「重試」。
+6. **TURN（B3，AC-2.4）**：其中一台開 `…/r/<房間>?ice=relay` 加入，通話照常、自己的名牌出現「經由轉送伺服器」；或在擋 UDP 的網路（公司網路、部分手機熱點）直接加入。
+7. **斷線重連（B3，AC-2.5）**：通話中把一台的 Wi-Fi 關掉 30 秒再打開：它自己看到「連線中斷，正在重新連線…」，另一台的名牌在 RoomDO 發現斷線後標「重新連線中」（瀏覽器判定離線時立刻，網路默默斷掉最多約 60 秒）；網路回來 8 秒內恢復聲音與畫面、還是同一個人（沒有多一格）。手機切到背景再回來、重新整理分頁也要接回同一席位。
 
-常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「媒體伺服器不認得這個分頁」＝ session token 過期（房間把成員移除了），重新整理；一直沒有對方的畫面 ＝ 網路擋 UDP，等 `e2-t07` 的 TURN。
+常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「媒體伺服器不認得這個分頁」＝ session token 過期（房間把成員移除了），重新整理；一直沒有對方的畫面 ＝ 網路擋 UDP，檢查 TURN secret 有沒有設（`/api/turn` 的 `turn` 要是 `true`）。
 
 ## 6. Realtime 免費額度保護（e11-t13，B1）
 
@@ -130,5 +138,6 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
 - **每月 1 日歸零**：以 UTC 月份為準（台灣時間每月 1 日早上 8 點）。
 - **門檻設定**：`wrangler.jsonc` 的 `vars`（頂層與 `env.preview` 各一份），單位 GB（十進位）。改了要重新部署；值不合法時用預設。
 - **查詢**：`GET /api/usage` → `{"month":"2026-10","bytes":123456789,"state":"normal"}`（不快取）。
-- **誤差**：這是估算，不是 Cloudflare 的帳單；TURN 流量（`e2-t07` 之後）也算在瀏覽器回報裡，但伺服器估算沒有另外加。真正的用量以 Cloudflare 儀表板為準，`e11-t09` 成本儀表板會拿這份計數和帳單對照。
+- **TURN（B3）**：SFU 與 TURN 共用 1,000 GB；依 Cloudflare 定價頁，TURN 與 SFU 之間的流量不重複計費，計的是 TURN 到瀏覽器的流出（同一份媒體加上 TURN 框架，經 `turns:443` 時還有 TCP／TLS）。瀏覽器的 `stats` 帶 `relay`（選中的 candidate pair 是否走 TURN），RoomDO 對走 TURN 的接收端，兩個數字都 ×1.1（`RELAY_OVERHEAD`，`shared/usage.ts`）。
+- **誤差**：這是估算，不是 Cloudflare 的帳單。真正的用量以 Cloudflare 儀表板為準，`e11-t09` 成本儀表板會拿這份計數和帳單對照。
 - **重設或手動調整**：目前沒有管理介面；真的需要時把門檻 var 暫時調高或調低後重新部署。

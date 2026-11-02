@@ -12,7 +12,7 @@ import {
   type RoomView,
   type ServerMessage,
 } from '../../shared/protocol.ts'
-import { ASSUMED_BITRATE, MAX_REPORTED_BITRATE } from '../../shared/usage.ts'
+import { ASSUMED_BITRATE, MAX_REPORTED_BITRATE, RELAY_OVERHEAD } from '../../shared/usage.ts'
 import {
   MAX_USAGE_GAP_MS,
   RoomHost,
@@ -432,8 +432,8 @@ describe('RoomHost media (e2-t03) and usage (e11-t13)', () => {
       sessionId,
       tracks: tracks.map((track) => ({ muted: false, ...track })),
     })
-  const statsMessage = (sessionId: string, bytesReceived: number) =>
-    JSON.stringify({ t: 'stats', sessionId, bytesReceived })
+  const statsMessage = (sessionId: string, bytesReceived: number, relay = false) =>
+    JSON.stringify({ t: 'stats', sessionId, bytesReceived, relay })
 
   it('serves the SFU proxy only for a member, and only for its own session', () => {
     const a = t.join('Gene')
@@ -643,6 +643,33 @@ describe('RoomHost media (e2-t03) and usage (e11-t13)', () => {
     t.tick(10_000)
     t.host.message(a.conn, statsMessage('sess-a', 2_000_000 + 10_000_000_000))
     expect(t.host.takeUsage().clientBytes).toBe((MAX_REPORTED_BITRATE / 8) * 10)
+  })
+
+  it('counts a member receiving through TURN with the relay overhead (e2-t07)', () => {
+    const a = t.join('Gene')
+    const b = t.join('Wei')
+    t.host.bindSfu(a.token, 'sess-a')
+    t.host.bindSfu(b.token, 'sess-b')
+    t.host.message(a.conn, tracksMessage('sess-a', [{ trackName: 'cam-1', kind: 'cam' }]))
+    t.host.message(b.conn, tracksMessage('sess-b', [{ trackName: 'cam-2', kind: 'cam' }]))
+    t.host.takeUsage()
+    const perReceiver = (ASSUMED_BITRATE.cam / 8) * 10
+    // Wei says its media goes through TURN: its share of the estimate and its report grow
+    t.host.message(b.conn, statsMessage('sess-b', 1_000_000, true))
+    t.tick(10_000)
+    t.host.message(b.conn, statsMessage('sess-b', 2_000_000, true))
+    expect(t.host.takeUsage()).toEqual({
+      clientBytes: Math.round(2_000_000 * RELAY_OVERHEAD),
+      estimateBytes: Math.round(perReceiver + perReceiver * RELAY_OVERHEAD),
+    })
+    // Back on a direct path: counted as before
+    t.host.message(b.conn, statsMessage('sess-b', 2_500_000, false))
+    t.tick(10_000)
+    expect(t.host.takeUsage()).toEqual({ clientBytes: 500_000, estimateBytes: 2 * perReceiver })
+    // A report for another session does not change it
+    t.host.message(b.conn, statsMessage('sess-x', 0, true))
+    t.tick(10_000)
+    expect(t.host.takeUsage().estimateBytes).toBe(2 * perReceiver)
   })
 
   it('only takes a baseline from the first report after being evicted', () => {

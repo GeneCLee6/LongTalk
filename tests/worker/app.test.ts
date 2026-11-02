@@ -225,3 +225,15 @@ describe('/api/sfu through the router', () => {
     expect(e.ASSETS.fetch).not.toHaveBeenCalled()
   })
 })
+
+describe('/api/turn through the router', () => {
+  it('refuses a caller without a member session token, before any Durable Object', async () => {
+    const e = env({ REALTIME_TURN_KEY_ID: 'k', REALTIME_TURN_KEY_API_TOKEN: 't' })
+    const res = await handleRequest(
+      new Request('https://x/api/turn/abcdefghij', { method: 'POST' }),
+      e,
+    )
+    expect(res.status).toBe(401)
+    expect(e.ASSETS.fetch).not.toHaveBeenCalled()
+  })
+})

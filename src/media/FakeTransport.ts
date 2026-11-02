@@ -2,6 +2,7 @@ import { TransportEmitter } from './emitter.ts'
 import {
   MediaTransportError,
   trackKey,
+  type ConnectOptions,
   type ConnectionState,
   type Layer,
   type MediaTransport,
@@ -56,6 +57,11 @@ export class FakeTransport implements MediaTransport {
   readonly sending = new Map<string, MediaStreamTrack | null>()
   /** What getStats() reports as received; tests move it forward */
   bytesReceived = 0
+  /** What getStats() reports as the path; tests set it (e2-t07) */
+  usingRelay = false
+  /** What connect() was given, and the servers setIceServers() handed over since */
+  connectOptions: ConnectOptions | null = null
+  readonly iceServerUpdates: RTCIceServer[][] = []
   #emitter = new TransportEmitter()
   #ownTracks = new Set<string>()
   #nextTrack = 1
@@ -64,9 +70,10 @@ export class FakeTransport implements MediaTransport {
     this.sfu = sfu
   }
 
-  async connect(): Promise<void> {
+  async connect(options: ConnectOptions = {}): Promise<void> {
     this.#assertOpen()
     if (this.sessionId) return
+    this.connectOptions = options
     this.#setState('connecting')
     this.sessionId = this.sfu.allocateSessionId()
     this.sfu.transports.add(this)
@@ -137,7 +144,16 @@ export class FakeTransport implements MediaTransport {
 
   async getStats(): Promise<TransportStats> {
     this.#requireSession()
-    return { rttMs: 0, usingRelay: false, bytesSent: 0, bytesReceived: this.bytesReceived }
+    return {
+      rttMs: 0,
+      usingRelay: this.usingRelay,
+      bytesSent: 0,
+      bytesReceived: this.bytesReceived,
+    }
+  }
+
+  setIceServers(iceServers: RTCIceServer[]): void {
+    if (this.sessionId && this.state !== 'closed') this.iceServerUpdates.push(iceServers)
   }
 
   on<E extends MediaTransportEvent>(

@@ -48,6 +48,8 @@ export interface PublishOptions {
 export interface ConnectOptions {
   /** STUN and short-lived TURN servers from the Worker (e2-t07) */
   iceServers?: RTCIceServer[]
+  /** `relay` forces every path through TURN (a debugging aid, `?ice=relay`) */
+  iceTransportPolicy?: RTCIceTransportPolicy
 }
 
 /** A snapshot of the connection's health; e2-t13 grows it into per-track stats */
@@ -98,7 +100,10 @@ export interface MediaTransport {
   readonly sessionId: string | null
   readonly state: ConnectionState
 
-  /** Opens the session. Resolves when publish/subscribe can be called. */
+  /**
+   * Opens the session. Resolves when publish/subscribe can be called. A transport that went
+   * `failed` is not reused: the caller builds a new one (RoomMedia, e2-t08).
+   */
   connect(options?: ConnectOptions): Promise<void>
 
   /** Sends a local track to the SFU; report the result to RoomDO so others can subscribe */
@@ -120,6 +125,12 @@ export interface MediaTransport {
   setPreferredLayer(ref: TrackRef, layer: Layer): Promise<void>
 
   getStats(): Promise<TransportStats>
+
+  /**
+   * Fresh ICE servers for the open connection (TURN credentials expire, e2-t07); used by the
+   * next ICE gathering. A no-op before connect().
+   */
+  setIceServers(iceServers: RTCIceServer[]): void
 
   /** Returns a function that removes the handler */
   on<E extends MediaTransportEvent>(

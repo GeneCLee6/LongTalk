@@ -18,6 +18,8 @@ export interface MemberTileProps {
   micMuted?: boolean
   /** The speaker chosen in the room (setSinkId where supported); null: the system default */
   speaker?: string | null
+  /** Our own media goes through a TURN relay (e2-t07): a quiet note on our own nameplate */
+  relayed?: boolean
 }
 
 /** Puts one track into a media element, or clears it (jsdom has no MediaStream) */
@@ -47,6 +49,7 @@ export function MemberTile({
   audio,
   micMuted = false,
   speaker = null,
+  relayed = false,
 }: MemberTileProps) {
   const videoRef = useTrack<HTMLVideoElement>(video)
   const audioRef = useTrack<HTMLAudioElement>(audio)
@@ -77,6 +80,7 @@ export function MemberTile({
         )}
         {label}
         {reconnecting && <Warn> · {strings.room.reconnecting}</Warn>}
+        {relayed && <Quiet> · {strings.room.relayed}</Quiet>}
         {!video && <span className="visually-hidden"> · {strings.room.camOff}</span>}
       </Nameplate>
     </Tile>
@@ -145,4 +149,8 @@ const Muted = styled.span`
 
 const Warn = styled.span`
   color: ${color.warn};
+`
+
+const Quiet = styled.span`
+  color: ${color.muted};
 `
