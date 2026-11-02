@@ -31,10 +31,10 @@ LongTalk 的產品需求都在這個資料夾。三層結構（為什麼是三�
 | [E8](e8-recording-transcript-ai.md) | 錄影、逐字稿與 AI 摘要 | 0／9 | 0／6 | 0 | 3 | planned |
 | [E9](e9-remote-control.md) | 遠端控制 | 0／9 | 0／5 | 0 | 0 | planned（M3） |
 | [E10](e10-scale-breakout.md) | 規模：大房間與分組討論室 | 0／7 | 0／5 | 0 | 0 | planned（M2–M3） |
-| [E11](e11-platform-security-cost-ops.md) | 平台、安全、成本與維運 | 2／12 | 1／10 | 4 | 4 | in progress |
-| | **合計** | **10／130** | **1／74** | **34** | **51** | |
+| [E11](e11-platform-security-cost-ops.md) | 平台、安全、成本與維運 | 2／13 | 1／11 | 5 | 4 | in progress |
+| | **合計** | **10／131** | **1／75** | **35** | **51** | |
 
-里程碑分布：M0 34 個、M1 51 個、M2 29 個、M3 16 個。M2／M3 的 task 刻意只寫一行，動工前那一批再細拆。
+里程碑分布：M0 35 個、M1 51 個、M2 29 個、M3 16 個。M2／M3 的 task 刻意只寫一行，動工前那一批再細拆。
 
 ## Task 格式
 
