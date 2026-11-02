@@ -20,6 +20,7 @@ function setup(
     saveChoice: (kind, id) => saved.push([kind, id]),
     onNotice: (notice) => notices.push(notice),
     createStream: createFakeStream,
+    startRetryMs: 0,
   })
   const state = () => devices.getState()
   const track = (kind: 'mic' | 'cam') => state()[kind].track as unknown as FakeTrack | null
@@ -166,5 +167,27 @@ describe('LocalDevices', () => {
     t.devices.close()
     expect(t.fake.tracks().every((x) => x.stopped)).toBe(true)
     expect(t.fake.listeners.size).toBe(0)
+  })
+})
+
+describe('LocalDevices: opening right after the pre-join preview', () => {
+  it('tries a camera that was briefly not found once more, quietly', async () => {
+    const t = setup()
+    const real = t.fake.getUserMedia.getMockImplementation()!
+    const notFound = Object.assign(new Error('gone'), { name: 'NotFoundError' })
+    // The combined request and the camera on its own fail; the retry finds it
+    t.fake.getUserMedia
+      .mockImplementationOnce(async () => Promise.reject(notFound))
+      .mockImplementationOnce(real)
+      .mockImplementationOnce(async () => Promise.reject(notFound))
+    await t.devices.start({ mic: true, cam: true })
+    expect(t.state().cam).toMatchObject({ on: true, problem: null })
+    expect(t.state().mic.on).toBe(true)
+  })
+
+  it('does not retry a refusal', async () => {
+    const t = setup({ denyAll: true })
+    await t.devices.start({ mic: true, cam: true })
+    expect(t.fake.getUserMedia).toHaveBeenCalledOnce()
   })
 })

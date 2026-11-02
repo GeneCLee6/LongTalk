@@ -60,11 +60,14 @@ export interface LocalDevicesOptions {
   saveChoice?: (kind: keyof DeviceChoices, deviceId: string) => void
   onNotice?: (notice: DeviceNotice) => void
   createStream?: CreateStream
+  /** Wait before the one quiet retry of a device that failed when the room opened it */
+  startRetryMs?: number
 }
 
 const off = (): LocalDevice => ({ on: false, track: null, problem: null, opening: false })
 
 const MEDIA_KIND = { mic: 'audio', cam: 'video' } as const
+const START_RETRY_MS = 600
 
 export class LocalDevices {
   private readonly mediaDevices: MediaDevicesLike | null
@@ -76,10 +79,12 @@ export class LocalDevices {
   private readonly generation = { mic: 0, cam: 0 }
   private readonly endedHandlers = new Map<MediaStreamTrack, () => void>()
   private readonly onDeviceChange = () => void this.deviceChanged()
+  private readonly startRetryMs: number
 
   constructor(options: LocalDevicesOptions) {
     this.options = options
     this.mediaDevices = options.mediaDevices
+    this.startRetryMs = options.startRetryMs ?? START_RETRY_MS
     this.state = {
       ready: false,
       mic: off(),
@@ -139,6 +144,18 @@ export class LocalDevices {
     if (this.closed) return
     this.update(changes)
     await this.refreshDevices()
+    // The pre-join preview released these devices a moment ago; some cameras (and Chrome's fake
+    // one) are briefly not found or busy right after. One quiet try more before showing it.
+    await Promise.all(
+      (['mic', 'cam'] as const).map(async (kind) => {
+        const { problem } = this.state[kind]
+        if (problem !== 'notFound' && problem !== 'inUse') return
+        const before = this.generation[kind]
+        await new Promise((resolve) => setTimeout(resolve, this.startRetryMs))
+        if (this.closed || this.generation[kind] !== before) return
+        await this.open(kind, this.state.chosen[kind], false)
+      }),
+    )
   }
 
   /** The toolbar's microphone or camera button */
