@@ -5,6 +5,7 @@ import {
   canChooseSpeaker,
   canCopy,
   canMeasureLevel,
+  canShareAudio,
   canShareScreen,
   canWebShare,
   detectCapabilities,
@@ -20,6 +21,9 @@ function fullBrowser(): CapabilityEnv {
     ondevicechange = null
     getUserMedia() {}
     getDisplayMedia() {}
+    getSupportedConstraints() {
+      return { deviceId: true, suppressLocalAudioPlayback: true }
+    }
   }
   class RTCRtpSender {
     replaceTrack() {}
@@ -89,11 +93,38 @@ describe('capabilities (e11-t04)', () => {
     expect(canWebShare({ navigator: { share: 'not a function' } })).toBe(false)
   })
 
+  it("shares the tab's or system's sound only where the display-audio constraint is known (D2)", () => {
+    expect(canShareAudio(fullBrowser())).toBe(true)
+    // Firefox and Safari: getDisplayMedia, but no display audio
+    const noDisplayAudio = fullBrowser()
+    noDisplayAudio.navigator = {
+      mediaDevices: { getDisplayMedia() {}, getSupportedConstraints: () => ({ deviceId: true }) },
+    }
+    expect(canShareScreen(noDisplayAudio)).toBe(true)
+    expect(canShareAudio(noDisplayAudio)).toBe(false)
+    // No getSupportedConstraints, or one that throws: no
+    expect(canShareAudio({ navigator: { mediaDevices: { getDisplayMedia() {} } } })).toBe(false)
+    const throwing = {
+      getDisplayMedia() {},
+      getSupportedConstraints() {
+        throw new Error('no')
+      },
+    }
+    expect(canShareAudio({ navigator: { mediaDevices: throwing } })).toBe(false)
+    // A phone: no screen, so no sound of it either
+    const phone = {
+      getUserMedia() {},
+      getSupportedConstraints: () => ({ suppressLocalAudioPlayback: true }),
+    }
+    expect(canShareAudio({ navigator: { mediaDevices: phone } })).toBe(false)
+  })
+
   it('looks at the real globals by default', () => {
     // jsdom: RTCPeerConnection comes from tests/setup.ts; no setSinkId, no mediaDevices
     expect(supportsWebRtc()).toBe(true)
     expect(canChooseSpeaker()).toBe('setSinkId' in HTMLMediaElement.prototype)
     expect(canShareScreen()).toBe(false)
+    expect(canShareAudio()).toBe(false)
   })
 })
 

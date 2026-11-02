@@ -173,6 +173,14 @@ export const strings = {
       failed: '無法分享這個畫面，請再試一次，或改選其他視窗或分頁。',
     },
     audioOnly: '本月的免費流量快用完了，先暫停螢幕分享，大家仍然聽得到你。',
+    // The share's sound (e3-t04): the sharing bar's switch, labelled with what it does
+    audioOn: '關閉分享音訊',
+    audioOff: '開啟分享音訊',
+    withAudioHint: '其他人看得到畫面、聽得到聲音；戴耳機可以避免回音',
+    audioOffHint: '其他人看得到畫面，分享音訊已關閉',
+    // Where the browser cannot share (e3-t10): the 更多 menu explains instead of a button
+    unavailablePhone: '手機瀏覽器不能分享螢幕。要分享，請用電腦加入這間會議室。',
+    unavailableBrowser: '這個瀏覽器不能分享螢幕。請改用電腦上的 Chrome、Edge 或 Firefox。',
   },
   // A part of the app that could not be loaded (e4-t20): a network blip, or a new deployment
   // replaced the files this page was built with

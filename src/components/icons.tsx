@@ -85,6 +85,26 @@ export function ScreenShareIcon() {
   )
 }
 
+/** A speaker with sound waves: the share's sound is on */
+export function SoundIcon() {
+  return (
+    <svg {...common}>
+      <path d="M11 5 6 9H3v6h3l5 4V5Z" />
+      <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
+    </svg>
+  )
+}
+
+/** A speaker struck through: the share's sound is off */
+export function SoundOffIcon() {
+  return (
+    <svg {...common}>
+      <path d="M11 5 6 9H3v6h3l5 4V5Z" />
+      <path d="m16 9 6 6M22 9l-6 6" />
+    </svg>
+  )
+}
+
 /** A speech bubble: chat */
 export function ChatIcon() {
   return (

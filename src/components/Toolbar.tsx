@@ -10,7 +10,7 @@ import { Menu, type MenuItem } from './Menu.tsx'
 export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
   /** Members in the room, on the participants button */
   memberCount: number
-  /** Show 分享螢幕 (getDisplayMedia exists; not on phones) */
+  /** This browser can share the screen (getDisplayMedia exists; not on phones) */
   canShareScreen: boolean
   /** We share the screen now: the button stops it (e3-t03) */
   sharing?: boolean
@@ -18,7 +18,7 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
   onToggleShare: () => void
   /** A button whose feature is not there yet was pressed: say it is coming */
   onComingSoon: (feature: string) => void
-  /** What 更多 offers (rename the room, change my name, share the link) */
+  /** What 更多 offers (rename the room, change my name, share the link); share comes first */
   moreItems: MenuItem[]
   /** Leave the room (on phones the top bar has the button instead) */
   onLeave: () => void
@@ -32,8 +32,13 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
  *
  * On a phone (e4-t07) it is one row of icons within a thumb's reach: microphone, camera, chat,
  * participants, more (DESIGN.md §4.3's fifth key, reactions, comes with E5; participants holds
- * its place until then). No screen sharing (phones cannot), and 離開 moves to the top bar's right
- * end, away from the thumb, so nobody leaves by accident.
+ * its place until then), and 離開 moves to the top bar's right end, away from the thumb, so nobody
+ * leaves by accident.
+ *
+ * Where there is no 分享螢幕 button (e3-t10, AC-3.6) 更多 says why, as its first item, greyed
+ * out with the reason under it: phone browsers cannot share; neither can a desktop browser
+ * without getDisplayMedia. A desktop window as narrow as a phone gets the phone layout but can
+ * share: there 分享螢幕 (or 停止分享) moves into 更多 instead.
  */
 export function Toolbar({
   memberCount,
@@ -46,6 +51,24 @@ export function Toolbar({
   ...media
 }: ToolbarProps) {
   const phone = usePhoneLayout() !== null
+  const shareLabel = sharing ? strings.screenShare.stop : strings.toolbar.share
+  const shareItem: MenuItem | null = !canShareScreen
+    ? {
+        id: 'share-screen',
+        label: strings.toolbar.share,
+        disabled: true,
+        hint: phone ? strings.screenShare.unavailablePhone : strings.screenShare.unavailableBrowser,
+        onSelect: () => undefined,
+      }
+    : phone
+      ? {
+          id: 'share-screen',
+          label: shareLabel,
+          tone: sharing ? 'danger' : 'neutral',
+          onSelect: onToggleShare,
+        }
+      : null
+  const more = shareItem ? [shareItem, ...moreItems] : moreItems
   const soon = (feature: string) => ({
     'aria-disabled': true,
     title: strings.toolbar.comingSoon(feature),
@@ -55,7 +78,7 @@ export function Toolbar({
     <MediaControls {...media}>
       {canShareScreen && !phone && (
         <IconButton
-          label={sharing ? strings.screenShare.stop : strings.toolbar.share}
+          label={shareLabel}
           icon={<ScreenShareIcon />}
           showLabel
           tone={sharing ? 'danger' : 'neutral'}
@@ -76,11 +99,11 @@ export function Toolbar({
         showLabel
         {...soon(strings.toolbar.participants)}
       />
-      {moreItems.length > 0 && (
+      {more.length > 0 && (
         <Menu
           label={strings.toolbar.more}
           icon={<MoreIcon />}
-          items={moreItems}
+          items={more}
           placement="above"
           align="end"
           showLabel

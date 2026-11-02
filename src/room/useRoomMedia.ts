@@ -27,6 +27,8 @@ export interface UseRoomMediaOptions {
   local: LocalTracks | null
   /** The screen to share once the room named us the sharer (D1); null when not sharing */
   screen?: MediaStreamTrack | null
+  /** The screen's sound to send (D2): null when there is none or the sharer turned it off */
+  screenAudio?: MediaStreamTrack | null
   send: (message: ClientMessage) => void
   /** This member's id, so its own tracks are never subscribed; a new id is a new run */
   you: string | null
@@ -51,7 +53,7 @@ const idle = () => idleRoomMedia
  * publishing.
  */
 export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
-  const { enabled, local, you, view, welcomes = 0, screen = null } = options
+  const { enabled, local, you, view, welcomes = 0, screen = null, screenAudio = null } = options
   const [media, setMedia] = useState<RoomMedia | null>(null)
   // Read when a run starts, without restarting it when they change
   const latest = useRef(options)
@@ -87,8 +89,8 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
   }, [media, mic, cam])
 
   useEffect(() => {
-    void media?.setScreen(screen)
-  }, [media, screen])
+    void media?.setScreen(screen, screenAudio)
+  }, [media, screen, screenAudio])
 
   const members = view?.members
   const desired = useMemo<MemberTrack[]>(

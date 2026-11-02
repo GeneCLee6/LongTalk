@@ -782,3 +782,119 @@ describe('RoomMedia: sharing the screen (e3-t01)', () => {
     await media.close()
   })
 })
+
+describe("RoomMedia: the screen's sound (e3-t04)", () => {
+  const kinds = (m: { sent: ClientMessage[] }) => listed(m).map((t) => t.kind)
+  const own = (m: { sent: ClientMessage[] }, kind: string) => listed(m).find((t) => t.kind === kind)
+
+  it('publishes the sound after the screen, as a track of its own that others receive', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    const b = member(sfu)
+    await a.media.start({ mic: fakeTrack('audio'), cam: null })
+    await b.media.start({ mic: null, cam: null })
+    const screen = fakeTrack('video')
+    const sound = fakeTrack('audio')
+    await a.media.setScreen(screen, sound)
+    expect(kinds(a)).toEqual(['mic', 'screen', 'screenAudio'])
+    expect(own(a, 'screenAudio')).toMatchObject({ muted: false })
+    expect(a.transport.sending.get(own(a, 'screenAudio')!.trackName)).toBe(sound)
+    b.media.setDesired(listed(a))
+    await settle()
+    expect(Object.values(b.media.getState().received).map((r) => r.kind)).toEqual([
+      'mic',
+      'screen',
+      'screenAudio',
+    ])
+  })
+
+  it('turning it off and on replaces what it sends and tells the room it is muted', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: null, cam: null })
+    const screen = fakeTrack('video')
+    const sound = fakeTrack('audio')
+    await a.media.setScreen(screen, sound)
+    const name = own(a, 'screenAudio')!.trackName
+    const publish = vi.spyOn(a.transport, 'publish')
+    await a.media.setScreen(screen, null)
+    expect(own(a, 'screenAudio')).toMatchObject({ trackName: name, muted: true })
+    expect(a.transport.sending.get(name)).toBeNull()
+    // The screen goes on, untouched
+    expect(own(a, 'screen')).toMatchObject({ muted: false })
+    await a.media.setScreen(screen, sound)
+    expect(own(a, 'screenAudio')).toMatchObject({ trackName: name, muted: false })
+    expect(a.transport.sending.get(name)).toBe(sound)
+    // No renegotiation for the switch
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('a share without sound publishes no sound track; turned off from the start, none until on', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: null, cam: null })
+    const screen = fakeTrack('video')
+    await a.media.setScreen(screen)
+    expect(kinds(a)).toEqual(['screen'])
+    await a.media.setScreen(screen, null)
+    expect(kinds(a)).toEqual(['screen'])
+    await a.media.setScreen(screen, fakeTrack('audio'))
+    expect(kinds(a)).toEqual(['screen', 'screenAudio'])
+  })
+
+  it('unpublishes the sound with the screen, and before a screen picked again', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: null, cam: null })
+    await a.media.setScreen(fakeTrack('video'), fakeTrack('audio'))
+    const first = own(a, 'screenAudio')!.trackName
+    // Picked again (another source, its own sound)
+    const again = fakeTrack('audio')
+    await a.media.setScreen(fakeTrack('video'), again)
+    expect(kinds(a)).toEqual(['screen', 'screenAudio'])
+    expect(own(a, 'screenAudio')!.trackName).not.toBe(first)
+    expect(a.transport.sending.get(own(a, 'screenAudio')!.trackName)).toBe(again)
+    // Stopped: both go, and the sound never outlives the screen
+    await a.media.setScreen(null, again)
+    expect(kinds(a)).toEqual([])
+    expect(sfu.published.size).toBe(0)
+  })
+
+  it('no sound goes out in an audio-only month: the screen itself is refused', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: fakeTrack('audio'), cam: null }, 'audioOnly')
+    await a.media.setScreen(fakeTrack('video'), fakeTrack('audio'))
+    expect(kinds(a)).toEqual(['mic'])
+    expect(a.media.getState().screenRefused).toBe(true)
+  })
+
+  it('shares the screen and its sound, as they were, on the new session after a rebuild', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const transports: FakeTransport[] = []
+    const sent: ClientMessage[] = []
+    const media = new RoomMedia({
+      createTransport: () => {
+        const transport = sfu.createTransport()
+        transports.push(transport)
+        return transport
+      },
+      send: (m) => sent.push(m),
+      backoff: new Backoff({ random: () => 0.5, giveUpAfterMs: 60_000 }),
+    })
+    const screen = fakeTrack('video')
+    const sound = fakeTrack('audio')
+    await media.start({ mic: null, cam: null })
+    await media.setScreen(screen, sound)
+    transports[0].simulateState('failed')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(transports).toHaveLength(2)
+    expect(listed({ sent })).toEqual([
+      expect.objectContaining({ sessionId: 'fake-session-2', kind: 'screen', muted: false }),
+      expect.objectContaining({ sessionId: 'fake-session-2', kind: 'screenAudio', muted: false }),
+    ])
+    expect([...transports[1].sending.values()]).toEqual([screen, sound])
+    await media.close()
+  })
+})

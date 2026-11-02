@@ -15,6 +15,12 @@ import type { CaptureResult, ShareProblem } from '../media/share.ts'
 //    over, the host stopped it) stops the capture too, with a notice.
 //
 // A share the room still lists for us when we have no screen (a reload while sharing) is ended.
+//
+// The share's sound (e3-t04): when the picker handed back the tab's or system's audio, it goes
+// with the screen (`audio`) and the sharer turns it off and on from the sharing bar (`audioOn`,
+// sent or not by RoomMedia, which tells the room it is muted like a microphone). It stops with
+// the screen, on every way the share ends.
+//
 // No React here: useScreenShare wraps it.
 
 /**
@@ -31,6 +37,10 @@ export interface ScreenShareState {
   phase: SharePhase
   /** The captured screen, while claiming, confirming a take-over or sharing */
   track: MediaStreamTrack | null
+  /** The screen's sound (tab or system audio), when the picker gave any (e3-t04) */
+  audio: MediaStreamTrack | null
+  /** Whether the sound is sent now (the sharing bar's switch); on when sharing starts */
+  audioOn: boolean
 }
 
 export type ShareNotice =
@@ -51,7 +61,12 @@ export interface ScreenShareOptions {
   notify: (notice: ShareNotice) => void
 }
 
-export const idleShare: ScreenShareState = { phase: 'idle', track: null }
+export const idleShare: ScreenShareState = {
+  phase: 'idle',
+  track: null,
+  audio: null,
+  audioOn: true,
+}
 
 export class ScreenShare {
   private readonly options: ScreenShareOptions
@@ -80,7 +95,7 @@ export class ScreenShare {
   request(): Promise<void> {
     if (this.closed || this.state.phase !== 'idle') return Promise.resolve()
     if (this.share && this.share.memberId !== this.you) {
-      this.update({ phase: 'confirm', track: null })
+      this.update({ ...idleShare, phase: 'confirm' })
       return Promise.resolve()
     }
     return this.pick(false)
@@ -89,9 +104,8 @@ export class ScreenShare {
   /** Take over: yes. Opens the picker, or claims with the screen already picked */
   confirm(): Promise<void> {
     if (this.closed || this.state.phase !== 'confirm') return Promise.resolve()
-    const { track } = this.state
-    if (!track) return this.pick(true)
-    this.claim(track, true)
+    if (!this.state.track) return this.pick(true)
+    this.claim(true)
     return Promise.resolve()
   }
 
@@ -110,6 +124,12 @@ export class ScreenShare {
     if (phase !== 'idle' && phase !== 'picking') this.release()
   }
 
+  /** The sharing bar's switch: send the share's sound, or not (e3-t04) */
+  toggleAudio = (): void => {
+    if (this.closed || !this.state.audio) return
+    this.update({ ...this.state, audioOn: !this.state.audioOn })
+  }
+
   /** The room view's share and our member id, on every change */
   setRoom(share: ShareInfo | null, you: string | null): void {
     this.share = share
@@ -122,7 +142,7 @@ export class ScreenShare {
     if (this.state.phase !== 'claiming') return
     if (code === 'share_busy') {
       // Someone started sharing between our press and our claim: ask, keeping what was picked
-      this.update({ phase: 'confirm', track: this.state.track })
+      this.update({ ...this.state, phase: 'confirm' })
     } else if (code === 'audio_only') {
       this.release()
       this.options.notify({ type: 'audioOnly' })
@@ -142,10 +162,13 @@ export class ScreenShare {
   }
 
   private async pick(takeOver: boolean): Promise<void> {
-    this.update({ phase: 'picking', track: null })
+    this.update({ ...idleShare, phase: 'picking' })
     const result = await this.options.capture()
     if (this.closed) {
-      if (result.ok) result.track.stop()
+      if (result.ok) {
+        result.track.stop()
+        result.audio?.stop()
+      }
       return
     }
     if (!result.ok) {
@@ -157,12 +180,20 @@ export class ScreenShare {
     }
     // The browser's own "stop sharing" button ends the track
     result.track.addEventListener('ended', this.stop)
-    this.claim(result.track, takeOver)
+    result.audio?.addEventListener('ended', this.audioEnded)
+    this.update({ ...idleShare, phase: 'picking', track: result.track, audio: result.audio })
+    this.claim(takeOver)
   }
 
-  private claim(track: MediaStreamTrack, takeOver: boolean): void {
+  /** The sound ended on its own (its source went away): the screen goes on without it */
+  private readonly audioEnded = (): void => {
+    if (this.state.audio) this.update({ ...this.state, audio: null })
+  }
+
+  /** Asks the room for the share, with what was picked */
+  private claim(takeOver: boolean): void {
     this.takeOver = takeOver
-    this.update({ phase: 'claiming', track })
+    this.update({ ...this.state, phase: 'claiming' })
     this.options.send({ t: 'share', takeOver })
     this.evaluate()
   }
@@ -172,7 +203,7 @@ export class ScreenShare {
     const { phase } = this.state
     const ours = this.share !== null && this.you !== null && this.share.memberId === this.you
     if (ours) {
-      if (phase === 'claiming') this.update({ phase: 'sharing', track: this.state.track })
+      if (phase === 'claiming') this.update({ ...this.state, phase: 'sharing' })
       else if (
         (phase === 'idle' || phase === 'picking') &&
         this.unsharedSince !== this.share!.since
@@ -192,10 +223,14 @@ export class ScreenShare {
 
   /** Stops the capture and goes idle */
   private release(): void {
-    const { track } = this.state
+    const { track, audio } = this.state
     if (track) {
       track.removeEventListener('ended', this.stop)
       track.stop()
+    }
+    if (audio) {
+      audio.removeEventListener('ended', this.audioEnded)
+      audio.stop()
     }
     if (this.state !== idleShare) this.update(idleShare)
   }

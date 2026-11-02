@@ -14,6 +14,12 @@ export interface Capabilities {
   getUserMedia: boolean
   /** navigator.mediaDevices.getDisplayMedia: sharing the screen (not on phones; D1) */
   getDisplayMedia: boolean
+  /**
+   * The share's own sound (tab or system audio, D2): getDisplayMedia plus the display-audio
+   * constraint `suppressLocalAudioPlayback`, which only browsers that capture that sound know
+   * (Chromium); without it the picker is not asked for audio and the sharing bar has no switch
+   */
+  shareAudio: boolean
   /** HTMLMediaElement.setSinkId: choosing the speaker; without it the speaker menu is hidden */
   setSinkId: boolean
   /** RTCRtpSender.replaceTrack: muting and switching devices without renegotiating (B2) */
@@ -37,6 +43,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'webrtc',
   'getUserMedia',
   'getDisplayMedia',
+  'shareAudio',
   'setSinkId',
   'replaceTrack',
   'senderParameters',
@@ -74,6 +81,20 @@ export function canShareScreen(env: CapabilityEnv = browser()): boolean {
   return has(env.navigator?.mediaDevices, 'getDisplayMedia')
 }
 
+/** Whether the share can carry its tab's or the system's sound (Chromium on the desktop) */
+export function canShareAudio(env: CapabilityEnv = browser()): boolean {
+  if (!canShareScreen(env)) return false
+  const devices = env.navigator?.mediaDevices as {
+    getSupportedConstraints?: () => Record<string, boolean | undefined>
+  }
+  if (typeof devices.getSupportedConstraints !== 'function') return false
+  try {
+    return devices.getSupportedConstraints().suppressLocalAudioPlayback === true
+  } catch {
+    return false
+  }
+}
+
 /** Whether the microphone level can be measured (AudioContext) */
 export function canMeasureLevel(env: CapabilityEnv = browser()): boolean {
   return typeof env.AudioContext === 'function'
@@ -97,6 +118,7 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     webrtc: supportsWebRtc(env),
     getUserMedia: has(devices, 'getUserMedia'),
     getDisplayMedia: canShareScreen(env),
+    shareAudio: canShareAudio(env),
     setSinkId: canChooseSpeaker(env),
     replaceTrack: has(sender, 'replaceTrack'),
     senderParameters: has(sender, 'setParameters'),

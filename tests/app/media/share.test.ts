@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { captureScreen, DISPLAY_MEDIA_OPTIONS, shareProblem } from '../../../src/media/share.ts'
+import {
+  captureScreen,
+  DISPLAY_MEDIA_OPTIONS,
+  displayMediaOptions,
+  shareProblem,
+} from '../../../src/media/share.ts'
 import { FakeStream, FakeTrack, asStream, mediaError } from './fakeMedia.ts'
 
 const named = (name: string, message = '') => Object.assign(new Error(message), { name })
@@ -17,11 +22,61 @@ describe('captureScreen (e3-t01)', () => {
       preferCurrentTab: false,
       surfaceSwitching: 'include',
     })
-    expect(result).toEqual({ ok: true, track: video })
+    expect(result).toEqual({ ok: true, track: video, audio: null })
     expect((video as unknown as { contentHint: string }).contentHint).toBe('detail')
     // Audio nobody asked for is not kept running
     expect(audio.stopped).toBe(true)
     expect(video.stopped).toBe(false)
+  })
+
+  it("asks for the tab's or system's sound where the browser can capture it (e3-t04)", async () => {
+    const video = new FakeTrack('video', 'screen:1')
+    const audio = new FakeTrack('audio', 'tab-audio')
+    const getDisplayMedia = vi.fn(async () => asStream(new FakeStream([video, audio])))
+    const result = await captureScreen({ getDisplayMedia }, true)
+    expect(getDisplayMedia).toHaveBeenCalledWith(displayMediaOptions(true))
+    expect(displayMediaOptions(true)).toMatchObject({
+      ...DISPLAY_MEDIA_OPTIONS,
+      // Sent as it is, the sharer still hears the tab, and the meeting's own sound is left out
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        suppressLocalAudioPlayback: false,
+        restrictOwnAudio: true,
+      },
+      systemAudio: 'include',
+    })
+    expect(result).toEqual({ ok: true, track: video, audio })
+    expect(audio.stopped).toBe(false)
+  })
+
+  it('a source without sound shares the screen alone, with no error', async () => {
+    const video = new FakeTrack('video', 'window:1')
+    const getDisplayMedia = vi.fn(async () => asStream(new FakeStream([video])))
+    expect(await captureScreen({ getDisplayMedia }, true)).toEqual({
+      ok: true,
+      track: video,
+      audio: null,
+    })
+  })
+
+  it('asks again without sound when the browser refuses the audio options outright', async () => {
+    const video = new FakeTrack('video', 'screen:1')
+    const getDisplayMedia = vi
+      .fn()
+      .mockRejectedValueOnce(named('TypeError', 'audio not supported'))
+      .mockResolvedValueOnce(asStream(new FakeStream([video])))
+    expect(await captureScreen({ getDisplayMedia }, true)).toEqual({
+      ok: true,
+      track: video,
+      audio: null,
+    })
+    expect(getDisplayMedia).toHaveBeenLastCalledWith(DISPLAY_MEDIA_OPTIONS)
+    // Without audio asked for, a TypeError is still "unsupported"
+    const refusing = { getDisplayMedia: vi.fn(async () => Promise.reject(named('TypeError'))) }
+    expect(await captureScreen(refusing)).toEqual({ ok: false, problem: 'unsupported' })
+    expect(refusing.getDisplayMedia).toHaveBeenCalledTimes(1)
   })
 
   it('is unsupported without getDisplayMedia (phones)', async () => {

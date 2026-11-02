@@ -29,6 +29,13 @@ import { Backoff } from './backoff.ts'
 // like the camera's (CloudflareRealtimeTransport). Once the month is audio-only it is not
 // published (`screenRefused`).
 //
+// The screen's sound (D2, e3-t04, kind `screenAudio`) goes with it: setScreen's second track
+// (null: none, or the sharer turned it off). It is published once the screen is, after it (an
+// audio track of its own, through the same transport), the first time there is sound to send;
+// turning it off and on after that replaces what it sends, like the microphone, and the room is
+// told it is muted. It is unpublished with the screen, and before a screen picked again. In an
+// audio-only month the screen is refused, and so its sound never goes out either.
+//
 // Subscriptions are a desired / actual reconciliation, the only way anything gets subscribed:
 // `setDesired` hands over every other member's tracks from RoomDO; `reconcile` subscribes to what
 // is desired and not yet received, and unsubscribes what is received and no longer desired.
@@ -188,6 +195,9 @@ export class RoomMedia {
   /** The screen to share, from setScreen (D1), and the one published now */
   private wantedScreen: MediaStreamTrack | null = null
   private sendingScreen: MediaStreamTrack | null = null
+  /** The screen's sound to send, from setScreen (D2), and what its published track sends now */
+  private wantedScreenAudio: MediaStreamTrack | null = null
+  private sendingScreenAudio: MediaStreamTrack | null = null
   /** Local changes run one at a time, in order */
   private localQueue: Promise<void> = Promise.resolve()
   private statsTimer: ReturnType<typeof setInterval> | null = null
@@ -267,12 +277,15 @@ export class RoomMedia {
   }
 
   /**
-   * The screen to share (D1), or null to stop sharing: published, or unpublished, once the
-   * session is open. Resolves once it is applied.
+   * The screen to share (D1), or null to stop sharing, and its sound to send (D2; null: none, or
+   * turned off): published, or unpublished, once the session is open. Resolves once it is
+   * applied.
    */
-  setScreen(track: MediaStreamTrack | null): Promise<void> {
-    if (track === this.wantedScreen) return this.localQueue
+  setScreen(track: MediaStreamTrack | null, audio: MediaStreamTrack | null = null): Promise<void> {
+    if (track === null) audio = null
+    if (track === this.wantedScreen && audio === this.wantedScreenAudio) return this.localQueue
     this.wantedScreen = track
+    this.wantedScreenAudio = audio
     if (track === null && this.state.screenRefused) this.update({ screenRefused: false })
     if (!this.ready) return this.localQueue
     return this.syncLocal()
@@ -476,6 +489,7 @@ export class RoomMedia {
     this.ended.clear()
     this.sending = { mic: null, cam: null }
     this.sendingScreen = null
+    this.sendingScreenAudio = null
     this.update({
       status: 'reconnecting',
       error: null,
@@ -559,7 +573,11 @@ export class RoomMedia {
   /** Publishes the screen to share, or unpublishes the one that is no longer shared (D1) */
   private async applyScreen(transport: MediaTransport): Promise<void> {
     const want = this.wantedScreen
-    if (want === this.sendingScreen) return
+    if (want === this.sendingScreen) return this.applyScreenAudio(transport)
+    // The screen's sound belongs to the screen that goes: it goes first
+    await this.unpublishOwn(transport, 'screenAudio')
+    if (this.closed || transport !== this.transport) return
+    this.sendingScreenAudio = null
     const own = this.state.published.find((track) => track.kind === 'screen')
     if (own) {
       // Another screen (picked again) or none: the old one goes; a new one is published below
@@ -601,7 +619,78 @@ export class RoomMedia {
       }
       this.update({ error: code })
       if (!FINAL_ERRORS.has(code) && transport.state !== 'failed') this.retryPublish()
+      return
     }
+    await this.applyScreenAudio(transport)
+  }
+
+  /**
+   * The screen's sound (D2), once the screen is published: published the first time there is
+   * sound to send, then turned off and on by replacing what it sends (`muted` to the room)
+   */
+  private async applyScreenAudio(transport: MediaTransport): Promise<void> {
+    if (this.closed || transport !== this.transport) return
+    const own = this.state.published.find((track) => track.kind === 'screenAudio')
+    if (!this.sendingScreen) {
+      // No screen out (stopped, refused, or not published yet): no sound either
+      if (own) await this.unpublishOwn(transport, 'screenAudio')
+      if (transport === this.transport) this.sendingScreenAudio = null
+      return
+    }
+    const want = this.wantedScreenAudio
+    if (!own) {
+      if (!want) return
+      try {
+        const published = await transport.publish(want, { kind: 'screenAudio' })
+        if (this.closed || transport !== this.transport) return
+        if (this.wantedScreen !== this.sendingScreen) {
+          // The screen stopped while its sound was being published
+          await transport.unpublish(published.trackName).catch(() => undefined)
+          return
+        }
+        this.sendingScreenAudio = want
+        this.update({
+          published: [...this.state.published, { ...published, muted: false }],
+          error: null,
+        })
+        this.reportTracks()
+      } catch (error) {
+        if (this.closed || transport !== this.transport) return
+        const code = errorCode(error)
+        this.update({ error: code })
+        if (!FINAL_ERRORS.has(code) && transport.state !== 'failed') this.retryPublish()
+      }
+      return
+    }
+    if (this.sendingScreenAudio === want) return
+    try {
+      await transport.replaceTrack(own.trackName, want)
+    } catch (error) {
+      if (!this.closed && transport === this.transport) this.update({ error: errorCode(error) })
+      return
+    }
+    if (this.closed || transport !== this.transport) return
+    this.sendingScreenAudio = want
+    this.update({
+      published: this.state.published.map((track) =>
+        track.kind === 'screenAudio' ? { ...track, muted: want === null } : track,
+      ),
+    })
+    this.reportTracks()
+  }
+
+  /** Unpublishes this member's track of `kind`, if there is one, and tells the room */
+  private async unpublishOwn(transport: MediaTransport, kind: TrackKind): Promise<void> {
+    const own = this.state.published.find((track) => track.kind === kind)
+    if (!own) return
+    try {
+      await transport.unpublish(own.trackName)
+    } catch {
+      // The session is closing or broken: a rebuild starts without it anyway
+    }
+    if (this.closed || transport !== this.transport) return
+    this.update({ published: this.state.published.filter((track) => track !== own) })
+    this.reportTracks()
   }
 
   private async publishLocal(

@@ -6,16 +6,20 @@ import { strings } from '../src/strings.ts'
 // apart, and must each see and hear the other two through the real Realtime SFU (three, because
 // two never showed the lost-video races fixed after C1); muting and turning the camera off must
 // show on the other side, and turning them back on must bring the media back. Then screen sharing
-// (D1): one member shares, the others see the share in the main area; another takes over after
-// the question; the share stops from the bar and everyone is back in the gallery. Runs against a
+// (D1): one member shares, the others see the share in the main area and hear its sound (D2);
+// the sharer turns the sound off from the bar and the others hear silence; another takes over
+// after the question; the share stops from the bar and everyone is back in the gallery. Runs
+// against a
 // deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
 // `e2e`).
 //
 // The screen is a stand-in: headless Chromium has no screen to capture and no picker to click, so
-// getDisplayMedia is replaced (addInitScript) by a canvas captureStream of a moving picture. What
-// is tested is everything after the picker: the room's share state, publishing (VP8, like the
-// camera), the layout and the stop paths. The real picker is on the owner's two-device checklist
-// (DEPLOY.md §5).
+// getDisplayMedia is replaced (addInitScript) by a canvas captureStream of a moving picture, and,
+// when the room asks for audio (Chromium can share a tab's sound, e3-t04), an oscillator's tone
+// as the tab's sound. What is tested is everything after the picker: the room's share state,
+// publishing (VP8, like the camera; the sound as a track of its own), the layout, the sound
+// switch and the stop paths. The real picker, real tab and system audio and echo are on the
+// owner's two-device checklist (DEPLOY.md §5).
 //
 // Every member is a context of the one Chromium (its own storage: a different member). Separate
 // browser processes were tried and were worse: Chrome's fake camera was then often missing
@@ -55,7 +59,7 @@ async function join(browser: Browser, roomUrl: string, name: string): Promise<Me
   })
   // The screen to share: a moving picture on a canvas instead of the browser's picker (above)
   await context.addInitScript(() => {
-    navigator.mediaDevices.getDisplayMedia = async () => {
+    navigator.mediaDevices.getDisplayMedia = async (options?: DisplayMediaStreamOptions) => {
       const canvas = document.createElement('canvas')
       canvas.width = 1280
       canvas.height = 720
@@ -74,7 +78,20 @@ async function join(browser: Browser, roomUrl: string, name: string): Promise<Me
       draw()
       const timer = setInterval(draw, 1000 / 15)
       const stream = canvas.captureStream(15)
-      stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer))
+      // The tab's sound, when asked for: a steady tone (Chrome's picker shares it by default)
+      const sound = options?.audio ? new AudioContext() : null
+      if (sound) {
+        const tone = sound.createOscillator()
+        const out = sound.createMediaStreamDestination()
+        tone.connect(out)
+        tone.start()
+        void sound.resume()
+        stream.addTrack(out.stream.getAudioTracks()[0])
+      }
+      stream.getVideoTracks()[0].addEventListener('ended', () => {
+        clearInterval(timer)
+        void sound?.close()
+      })
       return stream
     }
   })
@@ -215,9 +232,17 @@ async function expectSeesShare(viewer: Member, sharer: Member) {
 }
 
 /** The loudest sample of `other`'s microphone that `viewer` plays, over 1.5 seconds */
-async function audioPeak(viewer: Member, other: Member): Promise<number> {
+function audioPeak(viewer: Member, other: Member): Promise<number> {
   // Sound plays apart from the tiles (MemberAudio, e4-t07), one element per member
-  const audio = viewer.page.locator(`audio[data-member="${other.name}"]`)
+  return peakOf(viewer.page.locator(`audio[data-member="${other.name}"]`))
+}
+
+/** The loudest sample of the sound of `sharer`'s share that `viewer` plays (D2, e3-t04) */
+function sharePeak(viewer: Member, sharer: Member): Promise<number> {
+  return peakOf(viewer.page.locator(`audio[data-share-audio="${sharer.name}"]`))
+}
+
+async function peakOf(audio: ReturnType<Page['locator']>): Promise<number> {
   if ((await audio.count()) === 0) return 0
   return audio.evaluate(async (element: HTMLAudioElement) => {
     const stream = element.srcObject
@@ -357,10 +382,38 @@ interop(
         await expect(stage(bob)).toHaveAttribute('data-mode', 'grid')
         await expectSeesShare(alice, bob)
         await expectSeesShare(carol, bob)
+        // The share's sound, apart from Bob's microphone (muted above): both hear it
+        for (const viewer of [alice, carol]) {
+          await expect
+            .poll(() => sharePeak(viewer, bob), {
+              message: `${viewer.name} hears the sound of ${bob.name}'s share`,
+            })
+            .toBeGreaterThan(AUDIBLE)
+        }
         // Everyone's camera is still in the strip
         await expect
           .poll(() => framesPerSecond(alice, carol))
           .toBeGreaterThanOrEqual(VIDEO_FRAMES_PER_SECOND)
+      },
+    )
+
+    await interop.step(
+      "Bob turns the share's sound off from the bar: silence, the screen goes on (D2)",
+      async () => {
+        const bar = bob.page.getByRole('region', { name: strings.screenShare.youAreSharing })
+        await bar.getByRole('button', { name: strings.screenShare.audioOn }).click()
+        await expect(bar.getByRole('button', { name: strings.screenShare.audioOff })).toBeVisible()
+        await expect
+          .poll(() => sharePeak(alice, bob), { message: "Alice hears the share's sound stop" })
+          .toBeLessThan(AUDIBLE)
+        await expect
+          .poll(() => shareFramesPerSecond(alice, bob))
+          .toBeGreaterThanOrEqual(SHARE_FRAMES_PER_SECOND)
+        // And back on
+        await bar.getByRole('button', { name: strings.screenShare.audioOff }).click()
+        await expect
+          .poll(() => sharePeak(alice, bob), { message: "Alice hears the share's sound again" })
+          .toBeGreaterThan(AUDIBLE)
       },
     )
 
@@ -380,6 +433,11 @@ interop(
       await expect(toolbarButton(bob, strings.toolbar.share)).toBeVisible()
       await expectSeesShare(alice, carol)
       await expectSeesShare(bob, carol)
+      // Bob's share took its sound with it; Carol's has its own
+      await expect(alice.page.locator(`audio[data-share-audio="${bob.name}"]`)).toHaveCount(0)
+      await expect
+        .poll(() => sharePeak(alice, carol), { message: "Alice hears the sound of Carol's share" })
+        .toBeGreaterThan(AUDIBLE)
     })
 
     await interop.step('Carol stops from the bar: everyone is back in the gallery', async () => {
