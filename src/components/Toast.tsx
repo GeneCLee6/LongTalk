@@ -43,7 +43,8 @@ const enter = keyframes`
 
 const Region = styled.section`
   position: fixed;
-  top: ${space(4)};
+  /* Below the room's top bar (44 px), so the status there stays readable */
+  top: ${space(14)};
   right: ${space(4)};
   z-index: ${layer.toast};
   pointer-events: none;

@@ -1,6 +1,6 @@
 import styled from 'styled-components'
 import { strings } from '../strings.ts'
-import { space } from '../styles/tokens.ts'
+import { breakpoint, space } from '../styles/tokens.ts'
 import { IconButton } from './IconButton.tsx'
 import { ChatIcon, LeaveIcon, MoreIcon, PeopleIcon, ScreenShareIcon } from './icons.tsx'
 import { MediaControls, type MediaControlsProps } from './MediaControls.tsx'
@@ -39,12 +39,14 @@ export function Toolbar({
   return (
     <MediaControls {...media}>
       {canShareScreen && (
-        <IconButton
-          label={strings.toolbar.share}
-          icon={<ScreenShareIcon />}
-          showLabel
-          {...soon(strings.toolbar.share)}
-        />
+        <WideOnly>
+          <IconButton
+            label={strings.toolbar.share}
+            icon={<ScreenShareIcon />}
+            showLabel
+            {...soon(strings.toolbar.share)}
+          />
+        </WideOnly>
       )}
       <IconButton
         label={strings.toolbar.chat}
@@ -52,14 +54,16 @@ export function Toolbar({
         showLabel
         {...soon(strings.toolbar.chat)}
       />
-      <IconButton
-        label={strings.toolbar.participantsCount(memberCount)}
-        caption={strings.toolbar.participants}
-        icon={<PeopleIcon />}
-        badge={memberCount}
-        showLabel
-        {...soon(strings.toolbar.participants)}
-      />
+      <WideOnly>
+        <IconButton
+          label={strings.toolbar.participantsCount(memberCount)}
+          caption={strings.toolbar.participants}
+          icon={<PeopleIcon />}
+          badge={memberCount}
+          showLabel
+          {...soon(strings.toolbar.participants)}
+        />
+      </WideOnly>
       {moreItems.length > 0 && (
         <Menu
           label={strings.toolbar.more}
@@ -82,6 +86,18 @@ export function Toolbar({
     </MediaControls>
   )
 }
+
+/**
+ * Left out on phones until C3's phone toolbar (DESIGN.md §4.3: mic, camera, reactions, chat,
+ * more): screen sharing is not there on phones anyway, the head count is in the top bar
+ */
+const WideOnly = styled.span`
+  display: contents;
+
+  @media (max-width: ${breakpoint.phone}) {
+    display: none;
+  }
+`
 
 const Leave = styled.span`
   display: inline-flex;

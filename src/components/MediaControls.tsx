@@ -128,4 +128,15 @@ const Group = styled.div`
   display: inline-flex;
   align-items: center;
   gap: ${space(1)};
+
+  /* The device menus' chevrons: narrow on phones, so the toolbar fits one row */
+  @media (max-width: ${breakpoint.phone}) {
+    gap: 0;
+
+    [aria-haspopup] {
+      min-width: 28px;
+      padding-left: 0;
+      padding-right: 0;
+    }
+  }
 `
