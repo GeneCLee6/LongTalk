@@ -1,4 +1,5 @@
 import type {
+  ApiError,
   CloseTracksResponse,
   NewSessionResponse,
   SessionDescription,
@@ -34,10 +35,30 @@ import {
 // credentials from the Worker (e2-t07, ConnectOptions) and refreshed ones (setIceServers);
 // `disconnected` is reported as `reconnecting` and `failed` as `failed`, and RoomMedia rebuilds
 // the session (e2-t08). Simulcast publishing (e2-t11) builds on it.
+//
+// Negotiation rules, learned in rooms of three or more (docs/adr-001-media-layer.md):
+// - one SDP exchange at a time per session (the queue); an exchange is over only once the SFU's
+//   answer is applied, or our answer to the SFU's offer is accepted by /renegotiate;
+// - an SFU offer is answered whenever a response carries one, whatever else it says, or the
+//   session waits for that answer and refuses every later call (406);
+// - a published track is handed back (and so reported to the room) only once its sender is
+//   sending: pulling a track that carries no packets yet fails (empty_track_error);
+// - a pulled track's mid is read from the result for that track (publisher session and name);
+// - an exchange that broke half-way leaves the browser and the SFU disagreeing about the SDP:
+//   the transport goes `failed`, so that RoomMedia builds a new session instead of retrying calls
+//   that can only be refused.
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }]
 // Realtime expects complete SDP (no trickle ICE); gathering rarely needs this long
 const ICE_GATHERING_TIMEOUT_MS = 1500
+/**
+ * How long publish() waits for a new track's first packets (normally a few hundred ms after the
+ * answer, a second or two through TURN) before taking the connection for broken
+ */
+export const FIRST_PACKETS_TIMEOUT_MS = 10_000
+const FIRST_PACKETS_POLL_MS = 100
+/** How long a pulled track's transceiver may take to show up when the SFU sent no offer */
+const TRANSCEIVER_TIMEOUT_MS = 3_000
 
 const LAYER_RID: Record<Layer, SimulcastRid> = { high: 'f', medium: 'h', low: 'q' }
 
@@ -48,6 +69,8 @@ export interface CloudflareRealtimeOptions {
   token: () => string | null
   fetch?: typeof fetch
   createPeerConnection?: (config: RTCConfiguration) => RTCPeerConnection
+  /** Wait for a published track's first packets at most this long (FIRST_PACKETS_TIMEOUT_MS) */
+  firstPacketsTimeoutMs?: number
 }
 
 interface Subscription extends RemoteTrack {
@@ -69,10 +92,12 @@ export class CloudflareRealtimeTransport implements MediaTransport {
   #subscriptions = new Map<string, Subscription>()
 
   #token: () => string | null
+  #firstPacketsTimeoutMs: number
 
   constructor(options: CloudflareRealtimeOptions) {
     this.#apiBase = options.apiBase
     this.#token = options.token
+    this.#firstPacketsTimeoutMs = options.firstPacketsTimeoutMs ?? FIRST_PACKETS_TIMEOUT_MS
     this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init))
     this.#createPc = options.createPeerConnection ?? ((config) => new RTCPeerConnection(config))
   }
@@ -102,8 +127,8 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     this.#setState('connected')
   }
 
-  publish(track: MediaStreamTrack, options: PublishOptions): Promise<PublishedTrack> {
-    return this.#serial(async () => {
+  async publish(track: MediaStreamTrack, options: PublishOptions): Promise<PublishedTrack> {
+    const { published, transceiver } = await this.#serial(async () => {
       const { pc, sessionId } = this.#require()
       const simulcast = options.simulcast && track.kind === 'video'
       const transceiver = pc.addTransceiver(track, {
@@ -116,11 +141,12 @@ export class CloudflareRealtimeTransport implements MediaTransport {
             ]
           : undefined,
       })
+      const trackName = `${options.kind}-${crypto.randomUUID().slice(0, 8)}`
+      let answer: SessionDescription
       try {
         const offer = await this.#localOffer(pc)
         const mid = transceiver.mid
         if (!mid) throw new MediaTransportError('negotiation_failed', 'Transceiver has no mid')
-        const trackName = `${options.kind}-${crypto.randomUUID().slice(0, 8)}`
         const res = await this.#api<TracksResponse>('POST', `/sessions/${sessionId}/tracks`, {
           sessionDescription: offer,
           tracks: [{ location: 'local', mid, trackName }],
@@ -128,15 +154,22 @@ export class CloudflareRealtimeTransport implements MediaTransport {
         assertTracksOk(res)
         if (!res.sessionDescription)
           throw new MediaTransportError('negotiation_failed', 'No answer')
-        await pc.setRemoteDescription(res.sessionDescription)
-        this.#published.set(trackName, transceiver)
-        return { sessionId, trackName, kind: options.kind }
+        answer = res.sessionDescription
       } catch (error) {
-        // Refused (no video this month) or failed: take the offer back and stop the sender
+        // Refused (no video this month) or failed: the SFU took no offer, so take ours back and
+        // stop the sender
         await discard(pc, transceiver)
         throw error
       }
+      // The SFU accepted the offer: from here a failure leaves the two sides disagreeing
+      await this.#exchange(() => pc.setRemoteDescription(answer))
+      this.#published.set(trackName, transceiver)
+      const published: PublishedTrack = { sessionId, trackName, kind: options.kind }
+      return { published, transceiver }
     })
+    // Outside the queue: other calls go on while the first packets are on their way
+    await this.#firstPackets(transceiver)
+    return published
   }
 
   unpublish(trackName: string): Promise<void> {
@@ -161,21 +194,33 @@ export class CloudflareRealtimeTransport implements MediaTransport {
       const existing = this.#subscriptions.get(trackKey(ref))
       if (existing) return toRemote(existing)
       const { pc, sessionId } = this.#require()
-      const res = await this.#api<TracksResponse>('POST', `/sessions/${sessionId}/tracks`, {
-        tracks: [{ location: 'remote', sessionId: ref.sessionId, trackName: ref.trackName }],
-      })
+      const { res, json } = await this.#request<TracksResponse>(
+        'POST',
+        `/sessions/${sessionId}/tracks`,
+        { tracks: [{ location: 'remote', sessionId: ref.sessionId, trackName: ref.trackName }] },
+      )
       // Realtime can ask for a renegotiation even when the track itself failed (empty_track_error:
-      // the publisher is not sending yet). The session then waits for our answer and refuses
-      // every other call until it gets one (found by the e2e test, e2-t10): answer first, then
-      // look at the track
-      if (res.requiresImmediateRenegotiation && res.sessionDescription) {
-        await this.#answer(pc, sessionId, res.sessionDescription)
+      // the publisher is not sending yet), or the call as a whole. The session then waits for our
+      // answer and refuses every other call until it gets one (406; found by the e2e test, e2-t10,
+      // and in rooms of three): answer first, then look at the result
+      const offer = json.sessionDescription
+      if (json.requiresImmediateRenegotiation && offer?.type === 'offer') {
+        await this.#exchange(() => this.#answer(pc, sessionId, offer))
       }
-      assertTracksOk(res)
-      const mid = res.tracks?.[0]?.mid
+      this.#check(res, json)
+      const result =
+        json.tracks?.find((t) => t.sessionId === ref.sessionId && t.trackName === ref.trackName) ??
+        (json.tracks?.length === 1 ? json.tracks[0] : undefined)
+      if (result) assertTracksOk({ tracks: [result] })
+      const mid = result?.mid
       if (!mid) throw new MediaTransportError('not_found', `No track ${trackKey(ref)}`)
-      const transceiver = pc.getTransceivers().find((t) => t.mid === mid)
-      if (!transceiver) throw new MediaTransportError('negotiation_failed', `No transceiver ${mid}`)
+      const transceiver = await this.#transceiver(pc, mid)
+      if (!transceiver) {
+        // The SFU put the track on a mid this PeerConnection does not have: the two sides no
+        // longer agree on the SDP, and only a new session puts that right
+        this.#setState('failed')
+        throw new MediaTransportError('negotiation_failed', `No transceiver ${mid}`)
+      }
       const subscription: Subscription = { ...ref, mid, track: transceiver.receiver.track }
       this.#subscriptions.set(trackKey(ref), subscription)
       const remote = toRemote(subscription)
@@ -285,12 +330,22 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     const mids = transceivers.map((t) => t.mid).filter((mid): mid is string => mid !== null)
     for (const transceiver of transceivers) transceiver.stop()
     const offer = await this.#localOffer(pc)
-    const res = await this.#api<CloseTracksResponse>('PUT', `/sessions/${sessionId}/tracks/close`, {
-      tracks: mids.map((mid) => ({ mid })),
-      sessionDescription: offer,
-      force: false,
-    })
-    if (res.sessionDescription) await pc.setRemoteDescription(res.sessionDescription)
+    let res: CloseTracksResponse
+    try {
+      res = await this.#api<CloseTracksResponse>('PUT', `/sessions/${sessionId}/tracks/close`, {
+        tracks: mids.map((mid) => ({ mid })),
+        sessionDescription: offer,
+        force: false,
+      })
+    } catch (error) {
+      // The SFU took no offer: take ours back so that the next exchange starts from stable
+      if (pc.signalingState === 'have-local-offer') {
+        await pc.setLocalDescription({ type: 'rollback' }).catch(() => undefined)
+      }
+      throw error
+    }
+    const answer = res.sessionDescription
+    if (answer) await this.#exchange(() => pc.setRemoteDescription(answer))
   }
 
   async #localOffer(pc: RTCPeerConnection): Promise<SessionDescription> {
@@ -313,6 +368,17 @@ export class CloudflareRealtimeTransport implements MediaTransport {
   }
 
   async #api<T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: unknown): Promise<T> {
+    const { res, json } = await this.#request<T>(method, path, body)
+    this.#check(res, json)
+    return json
+  }
+
+  /** One call to the proxy; what the response means is #check's business */
+  async #request<T>(
+    method: 'GET' | 'POST' | 'PUT',
+    path: string,
+    body?: unknown,
+  ): Promise<{ res: Response; json: T & ApiError & { error?: string } }> {
     const headers: Record<string, string> = {}
     const token = this.#token()
     if (token) headers.authorization = `Bearer ${token}`
@@ -322,19 +388,83 @@ export class CloudflareRealtimeTransport implements MediaTransport {
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     })
-    const json = (await res.json().catch(() => ({}))) as T & { error?: string; errorCode?: string }
+    const json = (await res.json().catch(() => ({}))) as T & ApiError & { error?: string }
+    return { res, json }
+  }
+
+  /** Throws the error a response stands for, and fails the transport when the session is unusable */
+  #check(res: Response, json: ApiError & { error?: string }): void {
     const proxyError = PROXY_ERRORS[json.error ?? '']
     if (!res.ok && proxyError) throw new MediaTransportError(proxyError, json.error)
-    // The SFU no longer has a usable session: fail, so that RoomMedia builds a new one instead of
-    // retrying calls on a session that will refuse them all
-    if (json.errorCode === 'session_error') this.#setState('failed')
+    // The SFU no longer has a usable session (session_error), or its idea of the SDP state is not
+    // ours (406: it still expects an answer, or the offer/answer order is off): fail, so that
+    // RoomMedia builds a new session instead of retrying calls that it will refuse them all
+    if (json.errorCode === 'session_error' || res.status === 406) this.#setState('failed')
     if (!res.ok || json.errorCode) {
-      throw new MediaTransportError(
-        'sfu_error',
-        `${res.status} ${json.errorCode ?? json.error ?? ''}`,
-      )
+      const detail = [json.errorCode ?? json.error, json.errorDescription].filter(Boolean)
+      throw new MediaTransportError('sfu_error', `${res.status} ${detail.join(': ')}`)
     }
-    return json
+  }
+
+  /**
+   * One step of an SDP exchange the SFU already took part in. Should it fail, the browser and the
+   * SFU disagree about the session description from then on: the transport fails (to be rebuilt).
+   */
+  async #exchange(step: () => Promise<unknown>): Promise<void> {
+    try {
+      await step()
+    } catch (error) {
+      if (this.state !== 'closed') this.#setState('failed')
+      throw error instanceof MediaTransportError
+        ? error
+        : new MediaTransportError('negotiation_failed', String(error))
+    }
+  }
+
+  /**
+   * The transceiver the SFU put a pulled track on: there once its offer is applied. When the SFU
+   * sent no offer, the browser gets a moment to show it.
+   */
+  async #transceiver(pc: RTCPeerConnection, mid: string): Promise<RTCRtpTransceiver | null> {
+    const find = () => pc.getTransceivers().find((t) => t.mid === mid) ?? null
+    const found = find()
+    if (found) return found
+    return new Promise((resolve) => {
+      const done = (value: RTCRtpTransceiver | null) => {
+        clearTimeout(timer)
+        pc.removeEventListener('track', onTrack)
+        resolve(value)
+      }
+      const onTrack = () => {
+        const transceiver = find()
+        if (transceiver) done(transceiver)
+      }
+      const timer = setTimeout(() => done(find()), TRANSCEIVER_TIMEOUT_MS)
+      pc.addEventListener('track', onTrack)
+    })
+  }
+
+  /**
+   * Resolves once a published track's sender has sent its first packets. Until then the SFU has
+   * nothing to forward: a subscriber pulling it waits several seconds and gets
+   * `empty_track_error`, holding up its own session's queue (Cloudflare's partytracks client
+   * waits the same way). A sender that sends nothing for FIRST_PACKETS_TIMEOUT_MS sits on a
+   * connection that never came up: the transport fails, to be rebuilt.
+   */
+  async #firstPackets(transceiver: RTCRtpTransceiver): Promise<void> {
+    const sender = transceiver.sender as RTCRtpSender | undefined
+    if (typeof sender?.getStats !== 'function') return
+    const deadline = Date.now() + this.#firstPacketsTimeoutMs
+    for (;;) {
+      if (this.state === 'closed') throw new MediaTransportError('closed')
+      if (this.state === 'failed') throw new MediaTransportError('negotiation_failed', 'Failed')
+      if (await hasSent(sender)) return
+      if (Date.now() >= deadline) {
+        this.#setState('failed')
+        throw new MediaTransportError('negotiation_failed', 'No packets sent')
+      }
+      await new Promise((resolve) => setTimeout(resolve, FIRST_PACKETS_POLL_MS))
+    }
   }
 
   #serial<T>(task: () => Promise<T>): Promise<T> {
@@ -370,6 +500,19 @@ const PROXY_ERRORS: Partial<Record<string, MediaTransportErrorCode>> = {
   forbidden: 'unauthorized',
   usage_audio_only: 'quota_exceeded',
   track_not_in_room: 'not_found',
+}
+
+async function hasSent(sender: RTCRtpSender): Promise<boolean> {
+  try {
+    const report = await sender.getStats()
+    let sent = false
+    report.forEach((entry: Record<string, unknown>) => {
+      if (entry.type === 'outbound-rtp' && Number(entry.bytesSent ?? 0) > 0) sent = true
+    })
+    return sent
+  } catch {
+    return false
+  }
 }
 
 async function discard(pc: RTCPeerConnection, transceiver: RTCRtpTransceiver): Promise<void> {

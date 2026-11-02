@@ -18,7 +18,10 @@ function fakeTrack(kind: 'audio' | 'video') {
 }
 
 /** One member: a transport on the shared FakeSfu, a RoomMedia, and what it sent to the room */
-function member(sfu: FakeSfu, options: { retryDelayMs?: number; statsIntervalMs?: number } = {}) {
+function member(
+  sfu: FakeSfu,
+  options: { retryDelayMs?: number; retryMaxMs?: number; statsIntervalMs?: number } = {},
+) {
   const transport = sfu.createTransport()
   const sent: ClientMessage[] = []
   const media = new RoomMedia({ transport, send: (m) => sent.push(m), ...options })
@@ -61,6 +64,22 @@ describe('RoomMedia: publishing (e2-t03)', () => {
         ],
       },
     ])
+  })
+
+  it('tries a publish that failed again later, and clears the error once it goes', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = member(sfu, { retryDelayMs: 1000 })
+    const publish = vi.spyOn(a.transport, 'publish')
+    publish.mockRejectedValueOnce(new MediaTransportError('sfu_error', '503 backend_error'))
+    await a.media.start({ mic: null, cam: fakeTrack('video') })
+    expect(a.media.getState()).toMatchObject({ error: 'sfu_error', published: [] })
+    expect(a.sent.filter((m) => m.t === 'tracks')).toEqual([])
+    await vi.advanceTimersByTimeAsync(1200)
+    expect(publish).toHaveBeenCalledTimes(2)
+    expect(a.media.getState()).toMatchObject({ error: null })
+    expect(listed(a).map((t) => t.kind)).toEqual(['cam'])
+    await a.media.close()
   })
 
   it('joins with nothing to publish and still receives', async () => {
@@ -188,10 +207,10 @@ describe('RoomMedia: desired / actual subscriptions (e2-t04)', () => {
     expect((a.transport as FakeTransport).subscriptions.size).toBe(0)
   })
 
-  it('retries a failed subscription a few times, then waits for the list to change', async () => {
+  it('retries a failed subscription with growing waits for as long as it is listed', async () => {
     vi.useFakeTimers()
     const sfu = new FakeSfu()
-    const a = member(sfu, { retryDelayMs: 1000 })
+    const a = member(sfu, { retryDelayMs: 1000, retryMaxMs: 4000 })
     await a.media.start({ mic: null, cam: null })
     const ghost: MemberTrack = {
       sessionId: 'nobody',
@@ -201,13 +220,63 @@ describe('RoomMedia: desired / actual subscriptions (e2-t04)', () => {
     }
     const subscribe = vi.spyOn(a.transport, 'subscribe')
     a.media.setDesired([ghost])
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(subscribe).toHaveBeenCalledTimes(3)
-    // Gone from the list and back: a fresh start
+    await vi.advanceTimersByTimeAsync(0)
+    expect(subscribe).toHaveBeenCalledTimes(1)
+    // About 1, 2, 4 s, then every 4 s (± jitter): no giving up after a few tries (fix after C1)
+    await vi.advanceTimersByTimeAsync(7_000 * 1.15)
+    expect(subscribe).toHaveBeenCalledTimes(4)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(subscribe.mock.calls.length).toBeGreaterThanOrEqual(4 + 13)
+    // Gone from the list: no more tries
     a.media.setDesired([])
+    const tries = subscribe.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(subscribe).toHaveBeenCalledTimes(tries)
+    // Back on the list: a fresh start, at once
     a.media.setDesired([ghost])
     await vi.advanceTimersByTimeAsync(0)
-    expect(subscribe).toHaveBeenCalledTimes(4)
+    expect(subscribe).toHaveBeenCalledTimes(tries + 1)
+    await a.media.close()
+  })
+
+  it('picks up a publisher that only becomes ready much later, without the list changing', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = member(sfu, { retryDelayMs: 1000, retryMaxMs: 4000 })
+    const b = member(sfu)
+    await a.media.start({ mic: null, cam: null })
+    await b.media.start({ mic: null, cam: null })
+    a.media.setDesired([
+      { sessionId: b.transport.sessionId!, trackName: 'cam-1', kind: 'cam', muted: false },
+    ])
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(a.media.getState().received).toEqual({})
+    await b.transport.publish(fakeTrack('video'), { kind: 'cam' })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(Object.keys(a.media.getState().received)).toHaveLength(1)
+    await a.media.close()
+  })
+
+  it('retries at once when the publisher reports the track again', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = member(sfu, { retryDelayMs: 10_000 })
+    const b = member(sfu)
+    await a.media.start({ mic: null, cam: null })
+    await b.media.start({ mic: null, cam: null })
+    const listedMic: MemberTrack = {
+      sessionId: b.transport.sessionId!,
+      trackName: 'mic-1',
+      kind: 'mic',
+      muted: false,
+    }
+    a.media.setDesired([listedMic])
+    await vi.advanceTimersByTimeAsync(0)
+    await b.transport.publish(fakeTrack('audio'), { kind: 'mic' })
+    // Muted and unmuted: a new report of the same track, long before the retry is due
+    a.media.setDesired([{ ...listedMic, muted: true }])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(Object.keys(a.media.getState().received)).toHaveLength(1)
     await a.media.close()
   })
 
@@ -225,7 +294,7 @@ describe('RoomMedia: desired / actual subscriptions (e2-t04)', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(a.media.getState().received).toEqual({})
     await b.transport.publish(fakeTrack('audio'), { kind: 'mic' })
-    await vi.advanceTimersByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(1200)
     expect(Object.keys(a.media.getState().received)).toHaveLength(1)
     await a.media.close()
   })

@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
 /**
- * End-to-end interop test (e2-t10, AC-2.2): two Chromium contexts with Chrome's fake camera and
+ * End-to-end interop test (e2-t10, AC-2.2): three Chromium browsers with Chrome's fake camera and
  * microphone meet in one room on a deployed Worker, so the media goes through the real Realtime
  * SFU. CI runs it against the pull request's preview Worker (preview.yml, job `e2e`).
  *
@@ -21,7 +21,7 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   // One retry absorbs a cold Durable Object or SFU hiccup; a second failure is a real failure
   retries: process.env.CI ? 1 : 0,
-  // The two members share one room: never run tests side by side against the same preview
+  // The members share one room: never run tests side by side against the same preview
   workers: 1,
   timeout: 120_000,
   expect: { timeout: 30_000 },

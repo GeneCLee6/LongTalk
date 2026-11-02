@@ -1,18 +1,33 @@
-import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import {
+  expect,
+  test,
+  type Browser,
+  type BrowserContext,
+  type LaunchOptions,
+  type Page,
+} from '@playwright/test'
 import { strings } from '../src/strings.ts'
 
-// e2-t10 (AC-2.2): two browsers with Chrome's fake camera and microphone (a moving picture and a
-// beep) open one room through the home page, join through the pre-join screen, and must see and
-// hear each other through the real Realtime SFU; muting and turning the camera off must show on
-// the other side, and turning them back on must bring the media back. Runs against a deployed
-// Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job `e2e`).
+// e2-t10 (AC-2.2): three browsers with Chrome's fake camera and microphone (a moving picture and
+// a beep) open one room through the home page, join through the pre-join screen a few seconds
+// apart, and must each see and hear the other two through the real Realtime SFU (three, because
+// two never showed the lost-video races fixed after C1); muting and turning the camera off must
+// show on the other side, and turning them back on must bring the media back. Runs against a
+// deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
+// `e2e`).
+//
+// Every member is its own browser process, like separate people: Chrome's fake capture device
+// belongs to the browser, and under load a crash of it takes every context's camera with it.
 
 const VIDEO_FRAMES_PER_SECOND = 5
+/** Joins this far apart: the next member arrives while the last one is still negotiating */
+const JOIN_GAP_MS = 3_000
 /** Chrome's fake microphone beeps at full scale; silence is exactly 0 */
 const AUDIBLE = 0.05
 
 interface Member {
   name: string
+  browser: Browser
   context: BrowserContext
   page: Page
 }
@@ -31,7 +46,10 @@ async function openRoom(browser: Browser): Promise<string> {
 
 /** A new browser (its own storage: a different member) that joins through the pre-join screen */
 async function join(browser: Browser, roomUrl: string, name: string): Promise<Member> {
-  const context = await browser.newContext()
+  const context = await browser.newContext({
+    locale: 'zh-TW',
+    permissions: ['camera', 'microphone'],
+  })
   const page = await context.newPage()
   page.on('console', (message) => {
     if (message.type() === 'error') console.log(`[${name}] ${message.text().slice(0, 300)}`)
@@ -40,7 +58,7 @@ async function join(browser: Browser, roomUrl: string, name: string): Promise<Me
   await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill(name)
   await page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
   await expect(page.getByRole('region', { name: strings.room.grid })).toBeVisible()
-  return { name, context, page }
+  return { name, browser, context, page }
 }
 
 const tile = (viewer: Member, other: Member) =>
@@ -114,14 +132,15 @@ async function expectReceiving(viewer: Member, other: Member) {
  * closes their SFU session at once) and, after a failure, leaves a screenshot in the report
  */
 const interop = test.extend<{ room: { url: string; join: (name: string) => Promise<Member> } }>({
-  room: async ({ browser }, provide, testInfo) => {
+  room: async ({ browser, playwright, launchOptions, channel }, provide, testInfo) => {
     const url = await openRoom(browser)
     testInfo.annotations.push({ type: 'room', description: url })
     const members: Member[] = []
+    const options: LaunchOptions = { ...launchOptions, channel }
     await provide({
       url,
       join: async (name) => {
-        const member = await join(browser, url, name)
+        const member = await join(await playwright.chromium.launch(options), url, name)
         members.push(member)
         return member
       },
@@ -137,19 +156,28 @@ const interop = test.extend<{ room: { url: string; join: (name: string) => Promi
         .click({ timeout: 5_000 })
         .catch(() => undefined)
       await member.context.close()
+      await member.browser.close()
     }
   },
 })
 
 interop(
-  'two browsers see and hear each other, and see mute and camera off (AC-2.2)',
+  'three browsers joining a few seconds apart all see and hear each other, and see mute and camera off (AC-2.2)',
   async ({ room }) => {
+    interop.setTimeout(180_000)
     const alice = await room.join('Alice')
+    await new Promise((resolve) => setTimeout(resolve, JOIN_GAP_MS))
     const bob = await room.join('Bob')
+    await new Promise((resolve) => setTimeout(resolve, JOIN_GAP_MS))
+    const carol = await room.join('Carol')
+    const members = [alice, bob, carol]
 
-    await interop.step('both ways: video frames and audio', async () => {
-      await expectReceiving(bob, alice)
-      await expectReceiving(alice, bob)
+    await interop.step('every way: video frames and audio', async () => {
+      for (const viewer of members) {
+        for (const other of members) {
+          if (viewer !== other) await expectReceiving(viewer, other)
+        }
+      }
     })
 
     await interop.step('Alice mutes: Bob sees the muted microphone and hears silence', async () => {

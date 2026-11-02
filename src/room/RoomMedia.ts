@@ -27,8 +27,10 @@ import { Backoff } from './backoff.ts'
 // `setDesired` hands over every other member's tracks from RoomDO; `reconcile` subscribes to what
 // is desired and not yet received, and unsubscribes what is received and no longer desired.
 // Calling it again with the same list does nothing, so it can run on every room patch. A
-// subscription that fails is retried a few times, then left alone until the track leaves the
-// list and comes back.
+// subscription that fails ("not there yet": the publisher's first packets have not reached the
+// SFU; or a refused call) is retried with backoff, 2, 4, 8 s up to every RETRY_MAX_MS, for as long
+// as the track is listed: the publisher may only become ready later. A change to the listed track
+// (its publisher reported it again) retries at once. A publish that fails is retried the same way.
 //
 // Rebuilding (e2-t08): when the transport fails, or stays `reconnecting` (ICE disconnected) for
 // DISCONNECT_GRACE_MS, the session is thrown away and a new one built from the factory: new ICE
@@ -98,8 +100,10 @@ export interface RoomMediaOptions {
   /** Sends a message to the room over its WebSocket */
   send: (message: ClientMessage) => void
   statsIntervalMs?: number
-  /** Wait before retrying a subscription that failed */
+  /** Wait before the first retry of a subscription or publish that failed; doubles after that */
   retryDelayMs?: number
+  /** Longest wait between retries */
+  retryMaxMs?: number
   /** How long a dropped media connection may take to come back by itself before a rebuild */
   disconnectGraceMs?: number
   /** A session this long without failing resets the rebuild backoff */
@@ -107,9 +111,9 @@ export interface RoomMediaOptions {
   backoff?: Backoff
 }
 
-/** Tries per track before giving up on it until it leaves the list */
-const MAX_SUBSCRIBE_ATTEMPTS = 3
 const RETRY_DELAY_MS = 2_000
+/** A track that is still not there is tried again this often (a request per track) */
+export const RETRY_MAX_MS = 15_000
 /** ICE `disconnected` often heals by itself within a few seconds (a Wi-Fi hiccup) */
 export const DISCONNECT_GRACE_MS = 4_000
 export const STABLE_AFTER_MS = 20_000
@@ -157,6 +161,7 @@ export class RoomMedia {
   private readonly send: (message: ClientMessage) => void
   private readonly statsIntervalMs: number
   private readonly retryDelayMs: number
+  private readonly retryMaxMs: number
   private readonly disconnectGraceMs: number
   private readonly stableAfterMs: number
   private readonly backoff: Backoff
@@ -174,7 +179,12 @@ export class RoomMedia {
   /** Local changes run one at a time, in order */
   private localQueue: Promise<void> = Promise.resolve()
   private statsTimer: ReturnType<typeof setInterval> | null = null
-  private readonly retryTimers = new Set<Timer>()
+  /** Subscriptions waiting to be retried, by trackKey */
+  private readonly retryTimers = new Map<string, Timer>()
+  /** A publish waiting to be retried */
+  private publishTimer: Timer | null = null
+  /** Publishes that failed in a row */
+  private publishFailures = 0
   private offTransport: (() => void)[] = []
   /** A rebuild waiting for its backoff delay */
   private rebuildTimer: Timer | null = null
@@ -189,7 +199,7 @@ export class RoomMedia {
   private desired = new Map<string, MemberTrack>()
   /** Subscriptions asked for and not settled yet */
   private readonly pending = new Set<string>()
-  /** Failed subscriptions; at MAX_SUBSCRIBE_ATTEMPTS the track is left alone */
+  /** Failed subscriptions in a row, by trackKey: how long the next retry waits */
   private readonly attempts = new Map<string, number>()
   /** Tracks that ended on their own (their publisher stopped them) while still listed */
   private readonly ended = new Set<string>()
@@ -203,6 +213,7 @@ export class RoomMedia {
     this.send = options.send
     this.statsIntervalMs = options.statsIntervalMs ?? STATS_INTERVAL_MS
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS
+    this.retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS
     this.disconnectGraceMs = options.disconnectGraceMs ?? DISCONNECT_GRACE_MS
     this.stableAfterMs = options.stableAfterMs ?? STABLE_AFTER_MS
     this.backoff = options.backoff ?? new Backoff({ giveUpAfterMs: RECONNECT_GRACE_MS })
@@ -255,10 +266,19 @@ export class RoomMedia {
   /** Every other member's tracks, from the room view; reconciles at once */
   setDesired(tracks: readonly MemberTrack[]): void {
     const next = new Map(tracks.map((track) => [trackKey(track), track]))
-    for (const key of [...this.attempts.keys(), ...this.ended]) {
-      if (!next.has(key)) {
-        this.attempts.delete(key)
+    for (const key of new Set([
+      ...this.attempts.keys(),
+      ...this.retryTimers.keys(),
+      ...this.ended,
+    ])) {
+      const before = this.desired.get(key)
+      const now = next.get(key)
+      if (!now) {
+        this.forgetRetry(key)
         this.ended.delete(key)
+      } else if (before && before.muted !== now.muted) {
+        // Its publisher reported it again: whatever kept it from us may be over, try at once
+        this.forgetRetry(key)
       }
     }
     this.desired = next
@@ -270,7 +290,7 @@ export class RoomMedia {
     if (this.closed || this.state.status !== 'connected') return
     for (const [key, track] of this.desired) {
       if (key in this.state.received || this.pending.has(key) || this.ended.has(key)) continue
-      if ((this.attempts.get(key) ?? 0) >= MAX_SUBSCRIBE_ATTEMPTS) continue
+      if (this.retryTimers.has(key)) continue
       void this.subscribeTo(key, track)
     }
     for (const key of Object.keys(this.state.received)) {
@@ -314,8 +334,7 @@ export class RoomMedia {
     this.ready = false
     if (this.statsTimer !== null) clearInterval(this.statsTimer)
     this.clearSessionTimers()
-    for (const timer of this.retryTimers) clearTimeout(timer)
-    this.retryTimers.clear()
+    this.clearRetries()
     this.detach()
     this.update({ status: 'closed', received: {} })
     await this.transport.close()
@@ -428,10 +447,8 @@ export class RoomMedia {
     const old = this.transport
     this.detach()
     void old.close().catch(() => undefined)
-    for (const timer of this.retryTimers) clearTimeout(timer)
-    this.retryTimers.clear()
+    this.clearRetries()
     this.pending.clear()
-    this.attempts.clear()
     this.ended.clear()
     this.sending = { mic: null, cam: null }
     this.update({
@@ -531,13 +548,22 @@ export class RoomMedia {
       const published = await transport.publish(track, { kind })
       if (this.closed || transport !== this.transport) return
       this.sending[kind] = track
-      this.update({ published: [...this.state.published, { ...published, muted: false }] })
+      this.publishFailures = 0
+      this.update({
+        published: [...this.state.published, { ...published, muted: false }],
+        error: null,
+      })
       this.reportTracks()
     } catch (error) {
       if (this.closed || transport !== this.transport) return
       const code = errorCode(error)
-      if (code === 'quota_exceeded') this.update({ videoRefused: true })
-      else this.update({ error: code })
+      if (code === 'quota_exceeded') {
+        this.update({ videoRefused: true })
+        return
+      }
+      this.update({ error: code })
+      // A session that failed is rebuilt (and publishes again); otherwise try again later
+      if (!FINAL_ERRORS.has(code) && transport.state !== 'failed') this.retryPublish()
     }
   }
 
@@ -569,14 +595,46 @@ export class RoomMedia {
     } catch {
       if (transport !== this.transport) return
       this.pending.delete(key)
-      if (this.closed) return
-      this.attempts.set(key, (this.attempts.get(key) ?? 0) + 1)
+      if (this.closed || !this.desired.has(key)) return
+      const attempts = (this.attempts.get(key) ?? 0) + 1
+      this.attempts.set(key, attempts)
       const timer = setTimeout(() => {
-        this.retryTimers.delete(timer)
+        this.retryTimers.delete(key)
         this.reconcile()
-      }, this.retryDelayMs)
-      this.retryTimers.add(timer)
+      }, this.retryWait(attempts))
+      this.retryTimers.set(key, timer)
     }
+  }
+
+  /** The wait before retry number `attempts`: doubling from retryDelayMs up to retryMaxMs */
+  private retryWait(attempts: number): number {
+    const delay = Math.min(this.retryDelayMs * 2 ** (attempts - 1), this.retryMaxMs)
+    return Math.round(delay * (0.85 + Math.random() * 0.3))
+  }
+
+  private retryPublish(): void {
+    if (this.publishTimer !== null) return
+    this.publishFailures += 1
+    this.publishTimer = setTimeout(() => {
+      this.publishTimer = null
+      void this.syncLocal()
+    }, this.retryWait(this.publishFailures))
+  }
+
+  private forgetRetry(key: string): void {
+    const timer = this.retryTimers.get(key)
+    if (timer !== undefined) clearTimeout(timer)
+    this.retryTimers.delete(key)
+    this.attempts.delete(key)
+  }
+
+  private clearRetries(): void {
+    for (const timer of this.retryTimers.values()) clearTimeout(timer)
+    this.retryTimers.clear()
+    this.attempts.clear()
+    if (this.publishTimer !== null) clearTimeout(this.publishTimer)
+    this.publishTimer = null
+    this.publishFailures = 0
   }
 
   private reportTracks(): void {

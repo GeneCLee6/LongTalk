@@ -30,7 +30,7 @@
 
 | 日期 | 瀏覽器 | 方式 | 結果 |
 | --- | --- | --- | --- |
-| 每個 PR | Chromium（Playwright，Linux，headless） | CI `Preview / e2e`：兩個假裝置瀏覽器在 PR 預覽互通（`e2e/interop.spec.ts`） | 互看畫面有幀、聲音音量 > 0、靜音與關鏡頭對方看得到 |
+| 每個 PR | Chromium（Playwright，Linux，headless） | CI `Preview / e2e`：三個假裝置瀏覽器在 PR 預覽互通（`e2e/interop.spec.ts`） | 互看畫面有幀、聲音音量 > 0、靜音與關鏡頭對方看得到 |
 | 2026-11-02 | 電腦 Chrome（Windows，無鏡頭）＋ Android Chrome | 兩台裝置、PR #8 預覽 | 電腦看到並聽到手機；電腦 → 手機的視訊未測 |
 | 2026-11-02 | Chrome（Windows，headless，假裝置） | PR #9、#10 預覽的一次性腳本 | 開關、換裝置、斷線重連都正常（細節在 PR） |
 

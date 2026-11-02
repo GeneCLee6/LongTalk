@@ -55,8 +55,14 @@ LongTalk 的核心是 2–8 人（M0／M1）的音訊、視訊與螢幕分享，
 
 - **一個 session 一條 PeerConnection，同時 push 與 pull**；`bundlePolicy: 'max-bundle'`。
 - **不用 trickle ICE**：送出前等 ICE gathering 完成（上限 1.5 秒）。
-- **每個 session 同一時間只能有一次 SDP 交換**：`CloudflareRealtimeTransport` 把所有變更排成一個佇列。
+- **每個 session 同一時間只能有一次 SDP 交換**：`CloudflareRealtimeTransport` 把所有變更排成一個佇列。一次交換要到「SFU 的 answer 已套用」或「我們對 SFU offer 的 answer 已被 `/renegotiate` 接受」才算結束（Cloudflare〈Negotiation and session lifecycle〉）。
 - 錯誤看三層：HTTP 狀態、頂層 `errorCode`、每條軌的 `errorCode`。
+- **三人以上才出現的規則**（#13，C1 截圖時發現同房第 3 人起常有人的鏡頭別人收不到）：
+  - **只要回應帶 SFU 的 offer（`requiresImmediateRenegotiation: true`）就先回答**，不管頂層或軌有沒有錯；不回答的話 session 一直等 answer，之後所有呼叫都回 406「expecting a remote answer」。
+  - **發布端要等 sender 真的送出封包（`outbound-rtp.bytesSent > 0`）才把軌告訴房間**（Cloudflare 自己的 partytracks 也這樣做）。太早告訴的話，訂閱端 pull 一條還沒有封包的軌：SFU 會卡住那個 pull 約 8 秒（期間訂閱端自己的佇列也停住，連它的 push 都延後）再回 `empty_track_error`。實測（正式站，4 個 headless Chrome）：一個成員的第一條 PeerConnection 沒連上，push 照樣回 200，其他人 pull 它的軌卡 8 秒後失敗，舊版重試 3 次就放棄。現在 10 秒送不出封包就當連線壞了，transport `failed` 重建。
+  - **pull 的 mid 從「那條軌」的結果讀**（比對發布者 session 與 trackName），找不到對應的 transceiver 就是兩邊對 SDP 的認知不同，transport `failed` 重建。
+  - **SDP 交換做到一半失敗**（SFU 已收下 offer 但 answer 套不上、`/renegotiate` 被拒、或任何 406）時，瀏覽器與 SFU 不再一致，重試只會一直被拒：transport `failed`，由 `RoomMedia` 重建 session。
+  - 「還沒好」（`not_found_track_error`、`empty_track_error`、`track_not_in_room`）的訂閱以退避重試（2、4、8 秒，最多每 15 秒一次），軌還在房間清單上就不放棄；發布失敗也一樣重試。
 - **simulcast**：發布端 `sendEncodings` 用 rid `f`／`h`／`q`（1、½、¼ 解析度）；接收端 `preferredRid` 搭配 `priorityOrdering`／`ridNotAvailable: 'asciibetical'`，字母越前面越優先，所以 `f` 是最高層。`Layer` 對應：`high→f`、`medium→h`、`low→q`。
 - **TURN**（`e2-t07`）：`POST https://rtc.live.cloudflare.com/v1/turn/keys/{TURN Key ID}/credentials/generate-ice-servers`，標頭 `Authorization: Bearer <TURN Key API Token>`，body `{"ttl": 秒數}`，回 `{ iceServers: [...] }` 直接給 `RTCPeerConnection`。清單可能含 port 53 的 URL，瀏覽器會擋，不用 trickle ICE 時要濾掉。A2 先只用 `stun:stun.cloudflare.com:3478`。**B3 實作**（`worker/turn.ts`、`POST /api/turn/<roomId>`）：只發給帶成員 session token 的呼叫（RoomDO `sfuAccess` 判斷，房外 401），TTL 3 小時、瀏覽器到 2/3 時向 Worker 再要一次並 `setConfiguration`，重建 PeerConnection 時也重新要；port 53 的 URL 在 Worker 濾掉；沒有 TURN secret 或 Cloudflare 回錯時回 `stun:stun.cloudflare.com:3478`（`turn: false`），通話照常。定價：SFU 與 TURN 共用 1,000 GB，TURN 與 SFU 之間的流量不重複計費。
 - **錄製**：Realtime SFU 沒有內建錄影。WebSocket adapter（GA）能把音訊以 PCM、視訊以 JPEG 幀送到自己的 WebSocket 端點：適合即時逐字稿（E8），不適合錄完整視訊。雲端錄影的選項（自架合成 vs RealtimeKit 錄影）留給 `e8-t04`。這回答了 E2「未決問題」的第一題。
