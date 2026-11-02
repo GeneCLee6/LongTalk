@@ -62,7 +62,7 @@ depends_on: []
 
 - [x] `e11-t01` repo 骨架：Vite／React／TS、`worker/`、`shared/`、wrangler、Vitest、oxlint、`CLAUDE.md`／`RULES.md` · AC-11.1 · #2
 - [x] `e11-t02` CI（lint、typecheck、test、build、budget）、PR 預覽 Worker 與 production 部署、`DEPLOY.md` · AC-11.1, AC-11.2 · #2
-- [x] `e11-t03` 最小遙測：事件 API、Analytics Engine、錯誤回報、`/admin` 骨架（`POST /api/events` 驗證、8 KB、每個 IP 雜湊的速率限制；`TelemetryDO` 每小時／每天計數與最近錯誤；Analytics Engine 綁定 `EVENTS`；未攔截錯誤去重、上限、去個資；`/admin` lazy、`ADMIN_TOKEN` 標頭＋常數時間比對；警示是 `/admin` 上的旗標。AC-11.3 不勾：評分是 D4 `e4-t18`，告警還不會主動通知） · AC-11.3 · #18
+- [x] `e11-t03` 最小遙測：事件 API、Analytics Engine、錯誤回報、`/admin` 骨架（`POST /api/events` 驗證、8 KB、每個 IP 雜湊的速率限制；`TelemetryDO` 每小時／每天計數與最近錯誤；Analytics Engine 綁定 `EVENTS`（程式支援；帳號啟用 Analytics Engine 前先註解掉，`DEPLOY.md` §8）；未攔截錯誤去重、上限、去個資；`/admin` lazy、`ADMIN_TOKEN` 標頭＋常數時間比對；警示是 `/admin` 上的旗標。AC-11.3 不勾：評分是 D4 `e4-t18`，告警還不會主動通知） · AC-11.3 · #18
 - [x] `e11-t04` `BROWSER-SUPPORT.md` 初版與 `capabilities.ts`（`docs/BROWSER-SUPPORT.md`：8 項能力 × 6 個瀏覽器，實測過的才標 ●，其餘標「未實測」；`src/media/capabilities.ts`：`webrtc`、`getUserMedia`、`getDisplayMedia`、`setSinkId`、`replaceTrack`、`senderParameters`、`audioContext`、`deviceChange`，會議室頁與音量表改用它；測試比對文件表格與 `CAPABILITIES`。AC-11.6 不勾：Edge、Firefox、Safari、iOS Safari 都還沒實測，完整版是 `e2-t16`） · AC-11.6 · #11
 - [x] `e11-t13` Realtime 免費額度保護：`UsageDO` 每月流量計數（客戶端 `getStats` 回報與伺服器端以 session 時長×軌數估算取大者）、800 GB 降畫質、950 GB 拒絕新視訊 session、`/api/usage`（2026-10-31 擁有者決定只用免費方案；`e11-t09` 成本儀表板之後接這份計數；做法見 `DEPLOY.md` §6） · AC-11.11 · #8
 

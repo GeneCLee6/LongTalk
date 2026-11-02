@@ -218,7 +218,7 @@ PW_CHANNEL=chrome BASE_URL=… npm run test:e2e   # 用已安裝的 Chrome，不
 | --- | --- | --- |
 | 事件 API | `POST /api/events`（`worker/events.ts`，格式 `shared/telemetry.ts`） | 瀏覽器每 10 秒（或離開頁面時用 `sendBeacon`）送一批 ≤ 20 個事件、≤ 8 KB；只接受同站（`Origin`）；每個用戶端（IP 的雜湊，不存 IP）每 10 分鐘最多 60 個事件、其中錯誤 10 個，超過回 429 |
 | 計數 | `TelemetryDO`（全站一個，`worker/telemetry-do.ts`、`worker/telemetry.ts`） | 每小時（留 48 小時）與每天（留 90 天，資料保留表的遙測 90 天）的計數，最近 20 種用戶端錯誤；變動後 30 秒內寫進 storage（一段時間只寫一次） |
-| Analytics Engine | 綁定 `EVENTS`（`wrangler.jsonc`；正式站 dataset `longtalk_events`、預覽 `longtalk_events_preview`） | 每個收下的事件寫一個 data point，之後要細查時用 SQL API；**`/admin` 不需要它** |
+| Analytics Engine | 綁定 `EVENTS`（`wrangler.jsonc`；正式站 dataset `longtalk_events`、預覽 `longtalk_events_preview`）。**目前註解掉**，等擁有者在帳號啟用 Analytics Engine（下方） | 每個收下的事件寫一個 data point，之後要細查時用 SQL API；**`/admin` 不需要它**，沒有綁定時 Worker 只是不寫 |
 | `/admin` | `src/pages/AdminPage.tsx`（lazy chunk，不在首頁與會議室的 JS 裡）＋ `GET /api/admin/summary` | 輸入 `ADMIN_TOKEN` 才看得到：近 24 小時／7 天的進房數與成功率、失敗原因、重新連線（房間連線／媒體連線）、媒體重建、經由 TURN 的比例、用戶端錯誤、每日表、最近的錯誤、本月 Realtime 流量；最上方是**警示** |
 
 **記哪些事件**：進房成功／失敗（原因：找不到房間、房間已滿、版本過舊、連不上、被另一分頁取代）、重新連線（房間 WebSocket 或媒體）、媒體重建、媒體 session 連上 15 秒後是否走 TURN（算 TURN 比例）、未攔截的錯誤與 Promise rejection（每頁最多 5 種、同一種只報一次、名稱與訊息截短並去掉網址、e-mail、長數字、房號；Worker 收到後再清一次；抽樣比例 `ERROR_SAMPLE_RATE` 目前是 1，量大再調低）。**不記**名字、房號、聊天內容、IP。D4 的離開評分（`e4-t18`）加一種事件即可：Worker 不認得的事件只丟掉那一個、不會讓整批失敗，所以可以先部署瀏覽器。本機開發（`npm run dev`）與測試不送事件。
@@ -240,7 +240,12 @@ PW_CHANNEL=chrome BASE_URL=… npm run test:e2e   # 用已安裝的 Chrome，不
 
 ### Analytics Engine（選用的細查）
 
-Analytics Engine 在 Workers 免費方案可用（有每日寫入額度，M0 的量遠低於它，以 Cloudflare 定價頁為準；PR 預覽部署成功即代表免費方案接受這個綁定）；第一次部署時 dataset 自動建立，不用另外設定。要用 SQL 查，需要一個有 **Account Analytics: Read** 權限的 Cloudflare API token（**不是** Worker secret，只在擁有者自己的電腦用；LongTalk 不需要它也能運作）：
+Analytics Engine 在 Workers 免費方案可用（有每日寫入額度，M0 的量遠低於它，以 Cloudflare 定價頁為準），但**帳號要先啟用一次**：D3 的 PR 預覽帶著綁定部署時，Cloudflare 回 `You need to enable Analytics Engine`（code 10089），所以綁定先註解掉，部署與 `/admin` 都不受影響。要打開：
+
+1. 擁有者到 Cloudflare 儀表板 → Workers & Pages → **Analytics Engine**（`https://dash.cloudflare.com/<ACCOUNT_ID>/workers/analytics-engine`）按啟用（免費方案可用，不用付款資訊；畫面若要求升級付費方案就先不要開，`/admin` 照常用 `TelemetryDO`）。
+2. 開一個 PR，把 `wrangler.jsonc` 裡兩行 `analytics_engine_datasets`（頂層與 `env.preview`）的註解拿掉；PR 預覽部署成功、`/admin` 底下顯示「事件也寫進 Workers Analytics Engine」就是好了。dataset 在第一次寫入時自動建立。
+
+要用 SQL 查，需要一個有 **Account Analytics: Read** 權限的 Cloudflare API token（**不是** Worker secret，只在擁有者自己的電腦用；LongTalk 不需要它也能運作）：
 
 ```sh
 curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engine/sql"   -H "Authorization: Bearer <分析用的 API token>"   -d "SELECT blob1 AS type, blob2 AS detail, SUM(_sample_interval) AS n

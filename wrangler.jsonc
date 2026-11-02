@@ -20,9 +20,11 @@
       { "name": "TELEMETRY", "class_name": "TelemetryDO" }
     ]
   },
-  // Workers Analytics Engine (e11-t03, free plan): every accepted telemetry event, for ad-hoc SQL
-  // (DEPLOY.md §8). Optional: /admin reads TelemetryDO's counters, not this.
-  "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "longtalk_events" }],
+  // Workers Analytics Engine (e11-t03): every accepted telemetry event, for ad-hoc SQL. Off until
+  // the owner enables Analytics Engine on the account (a deploy with the binding fails with code
+  // 10089 before that); then uncomment this and the preview's line below (DEPLOY.md §8). Optional:
+  // /admin reads TelemetryDO's counters, not this.
+  // "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "longtalk_events" }],
   // The free plan only offers SQLite-backed Durable Objects. Migrations only ever add: never edit
   // or remove one that was deployed (DEPLOY.md §4)
   "migrations": [
@@ -50,7 +52,7 @@
           { "name": "TELEMETRY", "class_name": "TelemetryDO" }
         ]
       },
-      "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "longtalk_events_preview" }],
+      // "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "longtalk_events_preview" }],
       "vars": {
         "USAGE_LOW_QUALITY_GB": "800",
         "USAGE_AUDIO_ONLY_GB": "950"
