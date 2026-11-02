@@ -14,6 +14,7 @@ import type { UsageState } from '../../shared/usage.ts'
 import { getRoom } from '../api/rooms.ts'
 import { fetchIceConfig } from '../api/turn.ts'
 import { Button } from '../components/Button.tsx'
+import { ConfirmDialog } from '../components/ConfirmDialog.tsx'
 import {
   PhoneLayoutContext,
   usePhoneLayoutQuery,
@@ -23,6 +24,8 @@ import { MemberAudio } from '../components/MemberAudio.tsx'
 import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
 import { PreJoin } from '../components/PreJoin.tsx'
+import { SharingBar } from '../components/SharingBar.tsx'
+import { ShareTile } from '../components/ShareTile.tsx'
 import { Stage, type StageMode } from '../components/Stage.tsx'
 import { Tile, type TileProps } from '../components/Tile.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
@@ -54,6 +57,8 @@ import { useMicLevel } from '../room/useMicLevel.ts'
 import { useRoomConnection } from '../room/useRoomConnection.ts'
 import type { LocalTracks } from '../room/RoomMedia.ts'
 import { useRoomMedia } from '../room/useRoomMedia.ts'
+import type { ShareNotice } from '../room/ScreenShare.ts'
+import { useScreenShare } from '../room/useScreenShare.ts'
 import { copyRoomLink, roomUrl, shareRoomLink, type LinkOutcome } from '../room/shareLink.ts'
 import { useSpeaking } from '../room/useSpeaking.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
@@ -226,7 +231,14 @@ function Room({
   choices: JoinChoices
   onLeft: () => void
 }) {
-  const { state, leave, send, retry: retryRoom, rename } = useRoomConnection(roomId, choices.name)
+  const {
+    state,
+    leave,
+    send,
+    retry: retryRoom,
+    rename,
+    onError,
+  } = useRoomConnection(roomId, choices.name)
   const gone = state.status === 'notFound'
   useEffect(() => {
     if (gone) clearSession(roomId)
@@ -250,7 +262,7 @@ function Room({
   // Whoever spoke last, for the speaker layout (phones held sideways)
   const [lastHeard, setLastHeard] = useState<string | null>(null)
   const [webShare] = useState(canWebShare)
-  const [screenShare] = useState(canShareScreen)
+  const [screenShareSupported] = useState(canShareScreen)
   const link = roomUrl(roomId)
   const onLinkOutcome = (outcome: LinkOutcome) => {
     if (outcome === 'copied') show(strings.topBar.copied)
@@ -304,6 +316,54 @@ function Room({
     () => fetchIceConfig(roomId, token.current, relayOnly),
     [roomId, relayOnly],
   )
+  // Screen sharing (D1): RoomDO says who shares; the screen is published once it names us
+  const roomShare = state.view?.room.share ?? null
+  const viewMembers = state.view?.members
+  const memberName = useRef<(id: string) => string>(() => '')
+  useEffect(() => {
+    memberName.current = (id) => viewMembers?.[id]?.name ?? ''
+  }, [viewMembers])
+  const onShareNotice = useCallback(
+    (notice: ShareNotice) => {
+      switch (notice.type) {
+        case 'problem':
+          show(strings.screenShare.problems[notice.problem], 'warn')
+          return
+        case 'takenOver':
+          show(strings.screenShare.takenOver(memberName.current(notice.by)))
+          return
+        case 'stopped':
+          show(strings.screenShare.stopped)
+          return
+        case 'audioOnly':
+          show(strings.screenShare.audioOnly, 'warn')
+          return
+      }
+    },
+    [show],
+  )
+  const screenShare = useScreenShare({
+    share: roomShare,
+    you: state.you,
+    send,
+    onError,
+    welcomes: state.welcomes,
+    notify: onShareNotice,
+  })
+  const sharePhase = screenShare.phase
+  const sharingScreen = sharePhase === 'sharing' ? screenShare.track : null
+  useShareStartedNotice(roomShare?.memberId ?? null, state.you, memberName, show)
+  // The name of whoever shares, for the take-over question (kept if they stop meanwhile)
+  const [sharerName, setSharerName] = useState('')
+  const currentSharerName =
+    roomShare && roomShare.memberId !== state.you
+      ? (viewMembers?.[roomShare.memberId]?.name ?? null)
+      : null
+  // Adjusted while rendering (React's pattern for state that follows a value), not in an effect
+  if (currentSharerName !== null && currentSharerName !== sharerName) {
+    setSharerName(currentSharerName)
+  }
+
   // The room view stays on screen while the socket reconnects; so does the media connection
   const inRoom = state.status === 'open' || state.status === 'reconnecting'
   const media = useRoomMedia({
@@ -311,6 +371,7 @@ function Room({
     createTransport,
     iceConfig,
     local: sending,
+    screen: sharingScreen,
     send,
     you: state.you,
     view: state.view,
@@ -318,6 +379,25 @@ function Room({
   })
   const usage = state.view?.usage ?? 'normal'
   useUsageNotices(usage, media.videoRefused, show)
+  // The month turned audio-only while we share: the screen is not sent, so stop sharing
+  const { stop: stopShare } = screenShare
+  useEffect(() => {
+    if (!media.screenRefused) return
+    show(strings.screenShare.audioOnly, 'warn')
+    stopShare()
+  }, [media.screenRefused, show, stopShare])
+  const onToggleShare = () => {
+    if (sharePhase === 'sharing' || sharePhase === 'claiming') {
+      screenShare.stop()
+      return
+    }
+    // Once the month is audio-only the room refuses a share (e11-t13): say so without asking
+    if (usage === 'audioOnly') {
+      show(strings.screenShare.audioOnly, 'warn')
+      return
+    }
+    screenShare.request()
+  }
 
   const toggleCam = () => {
     // Once the month is audio-only a camera that is off stays off (e11-t13): say so without
@@ -357,6 +437,17 @@ function Room({
     state.you,
     lastHeard,
   )
+  // Someone else shares: their screen takes the main area (e3-t05, e4-t08). Our own share is not
+  // shown back to us (it would mirror endlessly; the presenter view is e3-t08): the bar says it.
+  const sharer = roomShare ? state.view?.members[roomShare.memberId] : undefined
+  const sharerScreen = sharer?.tracks.find((t) => t.kind === 'screen')
+  const shareTile =
+    sharer && sharer.id !== state.you ? (
+      <ShareTile
+        name={sharer.name}
+        video={(sharerScreen && media.received[trackKey(sharerScreen)]?.track) || null}
+      />
+    ) : undefined
   return (
     <PhoneLayoutContext.Provider value={phone}>
       <TopBar
@@ -368,76 +459,82 @@ function Room({
         onLeave={onLeave}
       />
       <StageArea>
-        {inRoom && (
-          <Stage
-            mode={stageMode(phone)}
-            speaker={Math.max(
-              0,
-              members.findIndex((member) => member.id === speaker),
-            )}
-          >
-            {members.map((member) => {
-              const you = member.id === state.you
-              const listed = (kind: 'mic' | 'cam') => member.tracks.find((t) => t.kind === kind)
-              const received = (kind: 'mic' | 'cam') => {
-                const track = listed(kind)
-                return (track && media.received[trackKey(track)]?.track) || null
-              }
-              const cam = listed('cam')
-              const mic = listed('mic')
-              const audio = you ? null : remoteAudio(member)
-              return (
-                <MemberTile
-                  key={member.id}
-                  name={member.name}
-                  you={you}
-                  reconnecting={you ? selfReconnecting : member.reconnecting}
-                  relayed={you && media.usingRelay}
-                  video={
-                    you
-                      ? media.videoRefused
-                        ? null
-                        : camSending
-                      : cam && !cam.muted
-                        ? received('cam')
-                        : null
-                  }
-                  // The speaking outline follows our own microphone while it sends, theirs
-                  // while it is on
-                  level={you ? micSending : mic && !mic.muted ? audio : null}
-                  micMuted={you ? micSending === null : (mic?.muted ?? true)}
-                  onHeard={you ? undefined : () => setLastHeard(member.id)}
-                />
-              )
-            })}
-          </Stage>
-        )}
-        <Notices>
-          {state.status === 'lost' && (
-            <Button variant="secondary" onClick={retryRoom}>
-              {strings.common.retry}
-            </Button>
+        {sharePhase === 'sharing' && <SharingBar onStop={screenShare.stop} />}
+        <StageBox>
+          {inRoom && (
+            <Stage
+              share={shareTile}
+              mode={stageMode(phone)}
+              speaker={Math.max(
+                0,
+                members.findIndex((member) => member.id === speaker),
+              )}
+            >
+              {members.map((member) => {
+                const you = member.id === state.you
+                const listed = (kind: 'mic' | 'cam') => member.tracks.find((t) => t.kind === kind)
+                const received = (kind: 'mic' | 'cam') => {
+                  const track = listed(kind)
+                  return (track && media.received[trackKey(track)]?.track) || null
+                }
+                const cam = listed('cam')
+                const mic = listed('mic')
+                const audio = you ? null : remoteAudio(member)
+                return (
+                  <MemberTile
+                    key={member.id}
+                    name={member.name}
+                    you={you}
+                    reconnecting={you ? selfReconnecting : member.reconnecting}
+                    relayed={you && media.usingRelay}
+                    video={
+                      you
+                        ? media.videoRefused
+                          ? null
+                          : camSending
+                        : cam && !cam.muted
+                          ? received('cam')
+                          : null
+                    }
+                    // The speaking outline follows our own microphone while it sends, theirs
+                    // while it is on
+                    level={you ? micSending : mic && !mic.muted ? audio : null}
+                    micMuted={you ? micSending === null : (mic?.muted ?? true)}
+                    onHeard={you ? undefined : () => setLastHeard(member.id)}
+                  />
+                )
+              })}
+            </Stage>
           )}
-          {inRoom && media.status === 'connecting' && <Note>{strings.room.mediaConnecting}</Note>}
-          {inRoom && state.status === 'open' && media.status === 'reconnecting' && (
-            <Note role="status">{strings.room.mediaReconnecting}</Note>
-          )}
-          {mediaLost && (
-            <Alert role="alert">
-              <span>{strings.room.mediaLost}</span>
-              <Button variant="secondary" onClick={media.retry}>
+          <Notices>
+            {state.status === 'lost' && (
+              <Button variant="secondary" onClick={retryRoom}>
                 {strings.common.retry}
               </Button>
-            </Alert>
-          )}
-          {mediaProblem && <Alert role="alert">{mediaProblem}</Alert>}
-          <DeviceProblems local={local} onRetry={(kind) => void devices?.retry(kind)} />
-        </Notices>
+            )}
+            {inRoom && media.status === 'connecting' && <Note>{strings.room.mediaConnecting}</Note>}
+            {inRoom && state.status === 'open' && media.status === 'reconnecting' && (
+              <Note role="status">{strings.room.mediaReconnecting}</Note>
+            )}
+            {mediaLost && (
+              <Alert role="alert">
+                <span>{strings.room.mediaLost}</span>
+                <Button variant="secondary" onClick={media.retry}>
+                  {strings.common.retry}
+                </Button>
+              </Alert>
+            )}
+            {mediaProblem && <Alert role="alert">{mediaProblem}</Alert>}
+            <DeviceProblems local={local} onRetry={(kind) => void devices?.retry(kind)} />
+          </Notices>
+        </StageBox>
       </StageArea>
       <ToolbarArea>
         <Toolbar
           memberCount={members.length}
-          canShareScreen={screenShare}
+          canShareScreen={screenShareSupported}
+          sharing={sharePhase === 'sharing' || sharePhase === 'claiming'}
+          onToggleShare={onToggleShare}
           onComingSoon={(feature) => show(strings.toolbar.comingSoon(feature))}
           moreItems={moreItems}
           onLeave={onLeave}
@@ -457,6 +554,15 @@ function Room({
           speakerSupported={speakerSupported}
         />
       </ToolbarArea>
+      {sharePhase === 'confirm' && (
+        <ConfirmDialog
+          title={strings.screenShare.takeOverTitle}
+          body={strings.screenShare.takeOverBody(sharerName)}
+          confirmLabel={strings.screenShare.takeOver}
+          onConfirm={screenShare.confirm}
+          onCancel={screenShare.cancel}
+        />
+      )}
       {renaming === 'room' && (
         <NameDialog
           title={strings.rename.room}
@@ -527,6 +633,22 @@ function useHostNotice(role: Role | undefined, show: (text: string) => void) {
     if (role === 'host' && previous.current === 'participant') show(strings.room.youAreHost)
     previous.current = role
   }, [role, show])
+}
+
+/** 「<名字> 開始分享畫面」 when someone else starts sharing (not when we do) */
+function useShareStartedNotice(
+  sharerId: string | null,
+  you: string | null,
+  name: { current: (id: string) => string },
+  show: (text: string) => void,
+) {
+  const previous = useRef(sharerId)
+  useEffect(() => {
+    if (sharerId !== null && sharerId !== previous.current && sharerId !== you) {
+      show(strings.screenShare.started(name.current(sharerId)))
+    }
+    previous.current = sharerId
+  }, [sharerId, you, name, show])
 }
 
 /** How long someone speaks before the speaker layout gives them the big tile */
@@ -779,8 +901,11 @@ const Centered = styled.div`
 `
 
 const StageArea = styled.div`
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: ${space(2)};
   min-width: 0;
+  min-height: 0;
   margin: ${space(3)};
 
   /* Phones: the stage gets every pixel, and stays clear of a sideways notch */
@@ -788,6 +913,13 @@ const StageArea = styled.div`
     margin: ${space(2)} max(${space(2)}, env(safe-area-inset-right)) ${space(2)}
       max(${space(2)}, env(safe-area-inset-left));
   }
+`
+
+/** The stage's own box under the sharing bar: the stage fills it, the notices float over it */
+const StageBox = styled.div`
+  position: relative;
+  flex: 1;
+  min-height: 0;
 `
 
 /** Above the stage, centred at the top: what is wrong and how to fix it */

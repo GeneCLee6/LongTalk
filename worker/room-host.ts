@@ -86,6 +86,9 @@ export type SfuTrackRef = { sessionId: string; trackName: string }
 /** Egress counted since the previous flush (shared/usage.ts), in bytes */
 export type UsageDelta = { clientBytes: number; estimateBytes: number }
 
+/** The kinds only the member holding the share may list (D1) */
+const SCREEN_KINDS: ReadonlySet<TrackKind> = new Set(['screen', 'screenAudio'])
+
 /** A live socket the adapter found when it woke up */
 export type OpenSocket = { conn: string; openedAt: number }
 
@@ -102,7 +105,7 @@ export interface RoomStorage {
   clear(): void
 }
 
-/** Stored rooms from before v6 have no name, creator or start time */
+/** Stored rooms from before v6 have no name, creator or start time; from before v7 no share */
 type StoredRoomInfo = RoomInit & Partial<Omit<RoomInfo, keyof RoomInit>>
 
 /** What the alarm did, for the adapter */
@@ -194,7 +197,7 @@ export class RoomHost {
     schedule: Schedule | null = null,
   ): void {
     // Rooms stored before v6 have no name, creator or start time
-    this.info = info ? { name: null, createdBy: null, startedAt: null, ...info } : null
+    this.info = info ? { name: null, createdBy: null, startedAt: null, share: null, ...info } : null
     this.rev = rev
     this.schedule = new Scheduler(schedule)
     this.storedSchedule = JSON.stringify(this.schedule)
@@ -226,6 +229,9 @@ export class RoomHost {
       })
       this.byToken.set(record.token, record.member.id)
     }
+    // A sharer that is no longer a member (a defensive repair: removing a member ends its share)
+    const share = this.info?.share
+    if (share && !this.members.has(share.memberId)) this.info = { ...this.info!, share: null }
     this.sent = info ? this.view() : null
     if (!info) return
     const now = this.deps.now()
@@ -264,7 +270,7 @@ export class RoomHost {
    */
   create(init: RoomInit): boolean {
     if (this.info) return false
-    this.info = { ...init, name: null, createdBy: null, startedAt: null }
+    this.info = { ...init, name: null, createdBy: null, startedAt: null, share: null }
     this.deps.storage.saveRoom(this.info)
     this.usageAt = this.deps.now()
     this.sent = this.view()
@@ -382,7 +388,69 @@ export class RoomHost {
       case 'renameRoom':
         this.renameRoom(connId, conn.member!, message.name)
         return
+      case 'share':
+        this.startShare(connId, conn.member!, message.takeOver)
+        return
+      case 'unshare':
+        if (this.info!.share?.memberId === conn.member) this.endShare()
+        return
     }
+  }
+
+  /**
+   * `share` (D1, e3-t02): one sharer at a time, decided here and nowhere else (CLAUDE.md rule 1).
+   * Granted when nobody shares or the member already does; refused with `share_busy` when someone
+   * else does, unless the member confirmed taking over: then it moves in the same step (no gap a
+   * third member could slip into), and the previous sharer's screen leaves its track list.
+   * Refused with `audio_only` once the month is audio-only (no new video, shared/usage.ts).
+   */
+  private startShare(connId: string, memberId: string, takeOver: boolean): void {
+    const current = this.info!.share
+    if (current?.memberId === memberId) return
+    if (this.usage === 'audioOnly') {
+      this.deps.sockets.send(connId, { t: 'error', code: 'audio_only' })
+      return
+    }
+    if (current && !takeOver) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'share_busy' })
+      return
+    }
+    if (current) this.dropScreen(current.memberId)
+    this.info = { ...this.info!, share: { memberId, since: this.deps.now() } }
+    this.deps.storage.saveRoom(this.info)
+    this.publish()
+  }
+
+  /**
+   * Stops `memberId`'s share on someone else's behalf: the host's control over any share (E1
+   * AC-1.4). The entry point for F1, which puts it on the wire (a host message, permissions in
+   * worker/roles.ts, e1-t06); until then nothing sends it. False when `by` may not (not the host,
+   * nor the sharer) or `memberId` does not share.
+   */
+  stopShare(by: string, memberId: string): boolean {
+    const share = this.info?.share
+    if (!share || share.memberId !== memberId) return false
+    if (by !== memberId && this.members.get(by)?.role !== 'host') return false
+    this.endShare()
+    return true
+  }
+
+  /** Nobody shares from now on; the sharer's screen leaves its track list */
+  private endShare(): void {
+    const share = this.info?.share
+    if (!share) return
+    this.dropScreen(share.memberId)
+    this.info = { ...this.info!, share: null }
+    this.deps.storage.saveRoom(this.info)
+    this.publish()
+  }
+
+  /** Takes a member's screen tracks out of its list (it no longer holds the share) */
+  private dropScreen(memberId: string): void {
+    const member = this.members.get(memberId)
+    if (!member) return
+    const tracks = member.tracks.filter((track) => !SCREEN_KINDS.has(track.kind))
+    if (tracks.length !== member.tracks.length) this.setMember(memberId, { tracks })
   }
 
   /**
@@ -541,12 +609,17 @@ export class RoomHost {
    */
   private setTracks(memberId: string, message: TracksMessage): void {
     if (this.sessions.get(memberId)!.sfu !== message.sessionId) return
-    const tracks: MemberTrack[] = message.tracks.map(({ trackName, kind, muted }) => ({
-      sessionId: message.sessionId,
-      trackName,
-      kind,
-      muted,
-    }))
+    // Only the member holding the share lists a screen (D1): a list from before it lost the share
+    // (taken over, or the host stopped it) must not bring it back
+    const sharing = this.info!.share?.memberId === memberId
+    const tracks: MemberTrack[] = message.tracks
+      .filter(({ kind }) => sharing || !SCREEN_KINDS.has(kind))
+      .map(({ trackName, kind, muted }) => ({
+        sessionId: message.sessionId,
+        trackName,
+        kind,
+        muted,
+      }))
     this.setMember(memberId, { tracks })
     this.publish()
   }
@@ -645,6 +718,11 @@ export class RoomHost {
     if (session) this.byToken.delete(session.token)
     this.sessions.delete(memberId)
     this.members.delete(memberId)
+    // A sharer who left takes the share along (D1)
+    if (this.info?.share?.memberId === memberId) {
+      this.info = { ...this.info, share: null }
+      this.deps.storage.saveRoom(this.info)
+    }
     this.baselines.delete(memberId)
     this.relayed.delete(memberId)
   }

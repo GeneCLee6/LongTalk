@@ -12,6 +12,10 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
   memberCount: number
   /** Show 分享螢幕 (getDisplayMedia exists; not on phones) */
   canShareScreen: boolean
+  /** We share the screen now: the button stops it (e3-t03) */
+  sharing?: boolean
+  /** 分享螢幕 pressed (or 停止分享 while sharing) */
+  onToggleShare: () => void
   /** A button whose feature is not there yet was pressed: say it is coming */
   onComingSoon: (feature: string) => void
   /** What 更多 offers (rename the room, change my name, share the link) */
@@ -22,8 +26,9 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
 
 /**
  * The room's bottom toolbar (e4-t06, DESIGN.md §4.3): microphone and camera (MediaControls),
- * share, chat, participants, more, leave. Share, chat and participants land in D1, D3 and F1:
- * until then they are shown dimmed (aria-disabled) and a press says they are coming.
+ * share, chat, participants, more, leave. Share works from D1 (e3-t03: while sharing it is
+ * 停止分享, in red); chat and participants land in D3 and F1: until then they are shown dimmed
+ * (aria-disabled) and a press says they are coming.
  *
  * On a phone (e4-t07) it is one row of icons within a thumb's reach: microphone, camera, chat,
  * participants, more (DESIGN.md §4.3's fifth key, reactions, comes with E5; participants holds
@@ -33,6 +38,8 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
 export function Toolbar({
   memberCount,
   canShareScreen,
+  sharing = false,
+  onToggleShare,
   onComingSoon,
   moreItems,
   onLeave,
@@ -48,10 +55,11 @@ export function Toolbar({
     <MediaControls {...media}>
       {canShareScreen && !phone && (
         <IconButton
-          label={strings.toolbar.share}
+          label={sharing ? strings.screenShare.stop : strings.toolbar.share}
           icon={<ScreenShareIcon />}
           showLabel
-          {...soon(strings.toolbar.share)}
+          tone={sharing ? 'danger' : 'neutral'}
+          onClick={onToggleShare}
         />
       )}
       <IconButton

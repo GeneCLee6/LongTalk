@@ -5,9 +5,17 @@ import { strings } from '../src/strings.ts'
 // a beep) open one room through the home page, join through the pre-join screen a few seconds
 // apart, and must each see and hear the other two through the real Realtime SFU (three, because
 // two never showed the lost-video races fixed after C1); muting and turning the camera off must
-// show on the other side, and turning them back on must bring the media back. Runs against a
+// show on the other side, and turning them back on must bring the media back. Then screen sharing
+// (D1): one member shares, the others see the share in the main area; another takes over after
+// the question; the share stops from the bar and everyone is back in the gallery. Runs against a
 // deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
 // `e2e`).
+//
+// The screen is a stand-in: headless Chromium has no screen to capture and no picker to click, so
+// getDisplayMedia is replaced (addInitScript) by a canvas captureStream of a moving picture. What
+// is tested is everything after the picker: the room's share state, publishing (VP8, like the
+// camera), the layout and the stop paths. The real picker is on the owner's two-device checklist
+// (DEPLOY.md §5).
 //
 // Every member is a context of the one Chromium (its own storage: a different member). Separate
 // browser processes were tried and were worse: Chrome's fake camera was then often missing
@@ -18,6 +26,8 @@ const VIDEO_FRAMES_PER_SECOND = 5
 const JOIN_GAP_MS = 3_000
 /** Chrome's fake microphone beeps at full scale; silence is exactly 0 */
 const AUDIBLE = 0.05
+/** The stand-in screen draws 15 frames a second; a static screen would send far fewer */
+const SHARE_FRAMES_PER_SECOND = 3
 
 interface Member {
   name: string
@@ -42,6 +52,31 @@ async function join(browser: Browser, roomUrl: string, name: string): Promise<Me
   const context = await browser.newContext({
     locale: 'zh-TW',
     permissions: ['camera', 'microphone'],
+  })
+  // The screen to share: a moving picture on a canvas instead of the browser's picker (above)
+  await context.addInitScript(() => {
+    navigator.mediaDevices.getDisplayMedia = async () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 1280
+      canvas.height = 720
+      const context = canvas.getContext('2d')!
+      let frame = 0
+      const draw = () => {
+        frame += 1
+        context.fillStyle = '#ffffff'
+        context.fillRect(0, 0, canvas.width, canvas.height)
+        context.fillStyle = '#0e7490'
+        context.fillRect((frame * 8) % canvas.width, 200, 160, 160)
+        context.fillStyle = '#0f172a'
+        context.font = '48px sans-serif'
+        context.fillText(`LongTalk share ${frame}`, 80, 120)
+      }
+      draw()
+      const timer = setInterval(draw, 1000 / 15)
+      const stream = canvas.captureStream(15)
+      stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer))
+      return stream
+    }
   })
   // The PeerConnection's states and failed SDP steps, for reading a failure in the CI log
   await context.addInitScript(() => {
@@ -143,6 +178,42 @@ async function framesPerSecond(viewer: Member, other: Member): Promise<number> {
   })
 }
 
+/** The stage: data-mode is `share` while someone else's share is in the main area */
+const stage = (member: Member) => member.page.getByRole('region', { name: strings.room.grid })
+
+/** `sharer`'s screen as `viewer` sees it in the main area */
+const shareVideo = (viewer: Member, sharer: Member) =>
+  viewer.page
+    .getByRole('figure', { name: strings.screenShare.region(sharer.name) })
+    .getByLabel(strings.screenShare.region(sharer.name), { exact: true })
+
+/** Frames `viewer` decoded of `sharer`'s screen in one second (0 when there is none) */
+async function shareFramesPerSecond(viewer: Member, sharer: Member): Promise<number> {
+  const video = shareVideo(viewer, sharer)
+  if ((await video.count()) === 0) return 0
+  return video.evaluate(async (element: HTMLVideoElement) => {
+    if (element.videoWidth === 0) return 0
+    const before = element.getVideoPlaybackQuality().totalVideoFrames
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    return element.getVideoPlaybackQuality().totalVideoFrames - before
+  })
+}
+
+async function expectSeesShare(viewer: Member, sharer: Member) {
+  await expect(stage(viewer), `${viewer.name} has the share layout`).toHaveAttribute(
+    'data-mode',
+    'share',
+  )
+  await expect(
+    viewer.page.getByText(strings.screenShare.label(sharer.name), { exact: true }),
+  ).toBeVisible()
+  await expect
+    .poll(() => shareFramesPerSecond(viewer, sharer), {
+      message: `${viewer.name} decodes frames of ${sharer.name}'s screen`,
+    })
+    .toBeGreaterThanOrEqual(SHARE_FRAMES_PER_SECOND)
+}
+
 /** The loudest sample of `other`'s microphone that `viewer` plays, over 1.5 seconds */
 async function audioPeak(viewer: Member, other: Member): Promise<number> {
   // Sound plays apart from the tiles (MemberAudio, e4-t07), one element per member
@@ -222,7 +293,7 @@ const interop = test.extend<{ room: { url: string; join: (name: string) => Promi
 interop(
   'three browsers joining a few seconds apart all see and hear each other, and see mute and camera off (AC-2.2)',
   async ({ room }) => {
-    interop.setTimeout(180_000)
+    interop.setTimeout(300_000)
     const alice = await room.join('Alice')
     await new Promise((resolve) => setTimeout(resolve, JOIN_GAP_MS))
     const bob = await room.join('Bob')
@@ -273,6 +344,55 @@ interop(
       await expect
         .poll(() => framesPerSecond(alice, bob))
         .toBeGreaterThanOrEqual(VIDEO_FRAMES_PER_SECOND)
+    })
+
+    await interop.step(
+      'Bob shares his screen: Alice and Carol see it in the main area (D1)',
+      async () => {
+        await toolbarButton(bob, strings.toolbar.share).click()
+        await expect(
+          bob.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
+        ).toBeVisible()
+        // Bob is not shown his own screen (no endless mirror): he keeps the gallery
+        await expect(stage(bob)).toHaveAttribute('data-mode', 'grid')
+        await expectSeesShare(alice, bob)
+        await expectSeesShare(carol, bob)
+        // Everyone's camera is still in the strip
+        await expect
+          .poll(() => framesPerSecond(alice, carol))
+          .toBeGreaterThanOrEqual(VIDEO_FRAMES_PER_SECOND)
+      },
+    )
+
+    await interop.step('Carol takes over after the question: Bob stops sharing', async () => {
+      await toolbarButton(carol, strings.toolbar.share).click()
+      const dialog = carol.page.getByRole('alertdialog', {
+        name: strings.screenShare.takeOverTitle,
+      })
+      await expect(dialog).toContainText(bob.name)
+      await dialog.getByRole('button', { name: strings.screenShare.takeOver }).click()
+      await expect(
+        carol.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
+      ).toBeVisible()
+      await expect(
+        bob.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
+      ).toHaveCount(0)
+      await expect(toolbarButton(bob, strings.toolbar.share)).toBeVisible()
+      await expectSeesShare(alice, carol)
+      await expectSeesShare(bob, carol)
+    })
+
+    await interop.step('Carol stops from the bar: everyone is back in the gallery', async () => {
+      await carol.page
+        .getByRole('region', { name: strings.screenShare.youAreSharing })
+        .getByRole('button', { name: strings.screenShare.stop })
+        .click()
+      for (const member of members) {
+        await expect(stage(member)).toHaveAttribute('data-mode', 'grid')
+      }
+      await expect(
+        alice.page.getByRole('figure', { name: strings.screenShare.region(carol.name) }),
+      ).toHaveCount(0)
     })
   },
 )

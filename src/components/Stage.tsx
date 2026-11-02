@@ -15,6 +15,7 @@ import {
   pagedLayout,
   pageRange,
   pagesInView,
+  shareLayout,
   speakerLayout,
   tileAspect,
   type PagesInView,
@@ -36,6 +37,11 @@ export interface StageProps {
   mode?: StageMode
   /** The speaker layout's big tile: an index into the children (pickSpeaker) */
   speaker?: number
+  /**
+   * Someone shares the screen (e3-t05, e4-t08): the share tile takes the main area and every
+   * child goes in the strip beside it, whatever the mode
+   */
+  share?: ReactNode
 }
 
 interface Size {
@@ -75,8 +81,9 @@ const keyOf = (cell: Cells[number], i: number) => (cell as { key?: string | null
  * for the space the stage has, re-laid out on every resize. JS only picks sizes; CSS places the
  * cells and animates the change.
  */
-export function Stage({ children, mode = 'grid', speaker = 0 }: StageProps) {
+export function Stage({ children, mode = 'grid', speaker = 0, share }: StageProps) {
   const cells = Children.toArray(children)
+  if (share) return <ShareStage share={share} cells={cells} />
   if (mode === 'paged') return <PagedStage cells={cells} />
   if (mode === 'speaker' && cells.length > 1) {
     return <SpeakerStage cells={cells} speaker={clampPage(speaker, cells.length)} />
@@ -298,7 +305,7 @@ function SpeakerStage({ cells, speaker }: { cells: Cells; speaker: number }) {
         >
           {main}
         </Cell>
-        <Strip aria-label={strings.stage.strip} $bottom={bottom}>
+        <Strip role="group" aria-label={strings.stage.strip} $bottom={bottom}>
           <StripInner $bottom={bottom}>
             {cells.map((cell, i) =>
               i === speaker ? null : (
@@ -321,6 +328,60 @@ function SpeakerStage({ cells, speaker }: { cells: Cells; speaker: number }) {
     </Area>
   )
 }
+
+/**
+ * Someone shares (e3-t05, e4-t08; DESIGN.md §4.3 「有分享」): the share in the main area, about
+ * three quarters of a wide stage, everyone in a column on the right; on a tall stage (a phone
+ * held upright) the share on top and everyone in a row under it. The strip scrolls when people
+ * do not fit.
+ */
+function ShareStage({ share, cells }: { share: ReactNode; cells: Cells }) {
+  const { ref, size } = useContentSize<HTMLDivElement>()
+  const layout = shareLayout({ count: cells.length, ...size })
+  const measured = layout.main.width > 0
+  const { strip } = layout
+  const bottom = strip?.side === 'bottom'
+  return (
+    <Area ref={ref}>
+      <SpeakerRow aria-label={strings.room.grid} data-mode="share" $bottom={bottom}>
+        <MainCell data-share="" style={measured ? { ...layout.main } : undefined}>
+          {share}
+        </MainCell>
+        {cells.length > 0 && (
+          <Strip role="group" aria-label={strings.stage.strip} $bottom={bottom}>
+            <StripInner $bottom={bottom}>
+              {cells.map((cell, i) => (
+                <Cell
+                  key={keyOf(cell, i)}
+                  style={
+                    measured && strip
+                      ? { width: strip.tileWidth, height: strip.tileHeight }
+                      : undefined
+                  }
+                  $measured={measured}
+                >
+                  {cell}
+                </Cell>
+              ))}
+            </StripInner>
+          </Strip>
+        )}
+      </SpeakerRow>
+    </Area>
+  )
+}
+
+/** The share's box: before the first measurement (and in tests) it fills the stage */
+const MainCell = styled.div`
+  flex: none;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  transition:
+    width ${motion.base} ease-out,
+    height ${motion.base} ease-out;
+`
 
 const Area = styled.div`
   position: absolute;

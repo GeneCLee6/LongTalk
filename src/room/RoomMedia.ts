@@ -23,6 +23,12 @@ import { Backoff } from './backoff.ts'
 // month is audio-only a camera that is not sending stays off: replacing would get round the
 // proxy's refusal of new video.
 //
+// The screen (D1, e3-t01) is the third kind: `setScreen` hands over the captured screen (null:
+// not sharing). Unlike the camera it is published when sharing starts and unpublished when it
+// ends (RoomDO allows one sharer and only lists the sharer's screen); its video goes out as VP8
+// like the camera's (CloudflareRealtimeTransport). Once the month is audio-only it is not
+// published (`screenRefused`).
+//
 // Subscriptions are a desired / actual reconciliation, the only way anything gets subscribed:
 // `setDesired` hands over every other member's tracks from RoomDO; `reconcile` subscribes to what
 // is desired and not yet received, and unsubscribes what is received and no longer desired.
@@ -77,6 +83,8 @@ export interface RoomMediaState {
   received: Readonly<Record<string, ReceivedTrack>>
   /** The camera was not published: the month's free allowance is nearly spent */
   videoRefused: boolean
+  /** The screen was not published, for the same reason (D1) */
+  screenRefused: boolean
   /** The camera sends low quality (the month passed the low-quality threshold) */
   lowQuality: boolean
   /** The media goes through a TURN relay (the selected candidate pair, e2-t07) */
@@ -137,6 +145,7 @@ export const idleRoomMedia: RoomMediaState = {
   published: [],
   received: {},
   videoRefused: false,
+  screenRefused: false,
   lowQuality: false,
   usingRelay: false,
 }
@@ -176,6 +185,9 @@ export class RoomMedia {
   private wanted: LocalTracks = { mic: null, cam: null }
   /** What each published track sends now */
   private sending: LocalTracks = { mic: null, cam: null }
+  /** The screen to share, from setScreen (D1), and the one published now */
+  private wantedScreen: MediaStreamTrack | null = null
+  private sendingScreen: MediaStreamTrack | null = null
   /** Local changes run one at a time, in order */
   private localQueue: Promise<void> = Promise.resolve()
   private statsTimer: ReturnType<typeof setInterval> | null = null
@@ -250,6 +262,18 @@ export class RoomMedia {
     this.wanted = local
     // Turning the camera off clears the refusal, so asking again tells the member again
     if (local.cam === null && this.state.videoRefused) this.update({ videoRefused: false })
+    if (!this.ready) return this.localQueue
+    return this.syncLocal()
+  }
+
+  /**
+   * The screen to share (D1), or null to stop sharing: published, or unpublished, once the
+   * session is open. Resolves once it is applied.
+   */
+  setScreen(track: MediaStreamTrack | null): Promise<void> {
+    if (track === this.wantedScreen) return this.localQueue
+    this.wantedScreen = track
+    if (track === null && this.state.screenRefused) this.update({ screenRefused: false })
     if (!this.ready) return this.localQueue
     return this.syncLocal()
   }
@@ -451,6 +475,7 @@ export class RoomMedia {
     this.pending.clear()
     this.ended.clear()
     this.sending = { mic: null, cam: null }
+    this.sendingScreen = null
     this.update({
       status: 'reconnecting',
       error: null,
@@ -526,6 +551,56 @@ export class RoomMedia {
         ),
       })
       this.reportTracks()
+    }
+    if (this.closed || !this.ready || transport !== this.transport) return
+    await this.applyScreen(transport)
+  }
+
+  /** Publishes the screen to share, or unpublishes the one that is no longer shared (D1) */
+  private async applyScreen(transport: MediaTransport): Promise<void> {
+    const want = this.wantedScreen
+    if (want === this.sendingScreen) return
+    const own = this.state.published.find((track) => track.kind === 'screen')
+    if (own) {
+      // Another screen (picked again) or none: the old one goes; a new one is published below
+      try {
+        await transport.unpublish(own.trackName)
+      } catch {
+        // The session is closing or broken: a rebuild starts without it anyway
+      }
+      if (this.closed || transport !== this.transport) return
+      this.sendingScreen = null
+      this.update({ published: this.state.published.filter((track) => track !== own) })
+      this.reportTracks()
+    }
+    if (!want || this.closed || transport !== this.transport) return
+    if (this.usage === 'audioOnly') {
+      this.update({ screenRefused: true })
+      return
+    }
+    try {
+      const published = await transport.publish(want, { kind: 'screen' })
+      if (this.closed || transport !== this.transport) return
+      if (this.wantedScreen !== want) {
+        // Stopped while it was being published
+        await transport.unpublish(published.trackName).catch(() => undefined)
+        return
+      }
+      this.sendingScreen = want
+      this.update({
+        published: [...this.state.published, { ...published, muted: false }],
+        error: null,
+      })
+      this.reportTracks()
+    } catch (error) {
+      if (this.closed || transport !== this.transport) return
+      const code = errorCode(error)
+      if (code === 'quota_exceeded') {
+        this.update({ screenRefused: true })
+        return
+      }
+      this.update({ error: code })
+      if (!FINAL_ERRORS.has(code) && transport.state !== 'failed') this.retryPublish()
     }
   }
 

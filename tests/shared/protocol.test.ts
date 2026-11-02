@@ -13,7 +13,7 @@ import {
 } from '../../shared/protocol.ts'
 
 const state = {
-  room: { id: 'abcdefghij', createdAt: 1, name: null, createdBy: null, startedAt: null },
+  room: { id: 'abcdefghij', createdAt: 1, name: null, createdBy: null, startedAt: null, share: null },
   members: {
     m1: { id: 'm1', name: 'Gene', role: 'host' as const, joinedAt: 2, reconnecting: false, tracks: [] },
   },
@@ -36,6 +36,20 @@ describe('protocol', () => {
     expect(parseClientMessage(JSON.stringify({ t: 'renameRoom', name: 'x'.repeat(61) }))).toBeNull()
     expect(parseClientMessage('{"t":"renameRoom","name":"‮ "}')).toBeNull()
     expect(parseClientMessage('{"t":"renameRoom"}')).toBeNull()
+  })
+
+  it('parses share and unshare (D1)', () => {
+    expect(parseClientMessage('{"t":"share","takeOver":false}')).toEqual({
+      t: 'share',
+      takeOver: false,
+    })
+    expect(parseClientMessage('{"t":"share","takeOver":true}')).toEqual({
+      t: 'share',
+      takeOver: true,
+    })
+    expect(parseClientMessage('{"t":"share"}')).toBeNull()
+    expect(parseClientMessage('{"t":"share","takeOver":"yes"}')).toBeNull()
+    expect(parseClientMessage('{"t":"unshare"}')).toEqual({ t: 'unshare' })
   })
 
   it('parses the messages a browser may send', () => {
@@ -140,6 +154,7 @@ describe('protocol', () => {
       { t: 'snapshot', rev: 4, state },
       { t: 'patch', rev: 5, ops: [{ op: 'del', path: ['members', 'm1'] }] },
       { t: 'error', code: 'bad_message' },
+      { t: 'error', code: 'share_busy' },
     ]
     for (const message of messages)
       expect(parseServerMessage(JSON.stringify(message))).toEqual(message)

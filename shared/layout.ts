@@ -170,31 +170,69 @@ export function pagedLayout({
   return { ...gridLayout({ ...rest, count: Math.min(Math.floor(count), pageSize) }), pages }
 }
 
-/** The strip beside (or under) the speaker takes about this share of the stage, within bounds */
+/** The strip beside (or under) the big tile takes about this share of the stage, within bounds */
 const STRIP_SHARE = 0.24
 const STRIP_MIN = 112
 const STRIP_MAX = 240
 /** Strip tiles never get smaller than this (px, the short side): past that the strip scrolls */
 const STRIP_TILE_MIN = 72
 
+/** Where the others go beside a big tile: a column right of a wide stage, a row under a tall one */
+export interface Strip {
+  side: 'right' | 'bottom'
+  tileWidth: number
+  tileHeight: number
+}
+
+/**
+ * The strip of `others` equal tiles beside (or under) a big one: about STRIP_SHARE of the stage
+ * (DESIGN.md §4.3: the share takes 75 %), tiles shrinking to fit everyone but not below
+ * STRIP_TILE_MIN (past that the strip scrolls)
+ */
+function stripFor(
+  others: number,
+  width: number,
+  height: number,
+  aspect: number,
+  spacing: number,
+): Strip {
+  const bound = (length: number) =>
+    Math.min(Math.max(Math.round(length * STRIP_SHARE), STRIP_MIN), STRIP_MAX, length / 2)
+  if (width >= height) {
+    // A column on the right: tiles as wide as the strip, or smaller so everyone fits
+    const fitHeight = (height - spacing * (others - 1)) / others
+    const tileHeight = Math.floor(
+      Math.min(bound(width) / aspect, Math.max(fitHeight, STRIP_TILE_MIN)),
+    )
+    return { side: 'right', tileWidth: Math.floor(tileHeight * aspect), tileHeight }
+  }
+  const fitWidth = (width - spacing * (others - 1)) / others
+  const tileWidth = Math.floor(
+    Math.min(bound(height) * aspect, Math.max(fitWidth, STRIP_TILE_MIN * aspect)),
+  )
+  return { side: 'bottom', tileWidth, tileHeight: Math.floor(tileWidth / aspect) }
+}
+
+/** The room the strip leaves for the big tile */
+function besideStrip(width: number, height: number, strip: Strip, spacing: number) {
+  return strip.side === 'right'
+    ? { width: width - strip.tileWidth - spacing, height }
+    : { width, height: height - strip.tileHeight - spacing }
+}
+
 export interface SpeakerLayout {
   /** The speaker's tile */
   main: { width: number; height: number }
   /** Where everyone else goes: a column on the right of a wide stage, a row under a tall one */
-  strip: null | {
-    side: 'right' | 'bottom'
-    tileWidth: number
-    tileHeight: number
-  }
+  strip: Strip | null
 }
 
 const NO_SPEAKER: SpeakerLayout = { main: { width: 0, height: 0 }, strip: null }
 
 /**
- * The speaker layout (a phone held sideways, AC-4.6; later D1's share layout): the speaker's
- * tile as big as the room left by the strip allows, the others in a strip of equal tiles that
- * scrolls when they do not fit. Strip tiles shrink to fit everyone, but not below
- * STRIP_TILE_MIN.
+ * The speaker layout (a phone held sideways, AC-4.6): the speaker's tile as big as the room left
+ * by the strip allows, the others in a strip of equal tiles that scrolls when they do not fit
+ * (stripFor)
  */
 export function speakerLayout({
   count,
@@ -206,35 +244,48 @@ export function speakerLayout({
   const n = Math.floor(count)
   if (!(n > 0) || !(width > 0) || !(height > 0) || !(aspect > 0)) return NO_SPEAKER
   const spacing = Math.max(0, gap)
-  const main = (w: number, h: number) => {
-    const fit = gridLayout({ count: 1, width: w, height: h, aspect, gap: spacing })
+  const main = (box: { width: number; height: number }) => {
+    const fit = gridLayout({ count: 1, ...box, aspect, gap: spacing })
     return { width: fit.tileWidth, height: fit.tileHeight }
   }
-  if (n === 1) return { main: main(width, height), strip: null }
-  const others = n - 1
-  const bound = (length: number) =>
-    Math.min(Math.max(Math.round(length * STRIP_SHARE), STRIP_MIN), STRIP_MAX, length / 2)
-  if (width >= height) {
-    // A column on the right: tiles as wide as the strip, or smaller so everyone fits
-    const fitHeight = (height - spacing * (others - 1)) / others
-    const tileHeight = Math.floor(
-      Math.min(bound(width) / aspect, Math.max(fitHeight, STRIP_TILE_MIN)),
-    )
-    const tileWidth = Math.floor(tileHeight * aspect)
-    return {
-      main: main(width - tileWidth - spacing, height),
-      strip: { side: 'right', tileWidth, tileHeight },
-    }
-  }
-  const fitWidth = (width - spacing * (others - 1)) / others
-  const tileWidth = Math.floor(
-    Math.min(bound(height) * aspect, Math.max(fitWidth, STRIP_TILE_MIN * aspect)),
-  )
-  const tileHeight = Math.floor(tileWidth / aspect)
-  return {
-    main: main(width, height - tileHeight - spacing),
-    strip: { side: 'bottom', tileWidth, tileHeight },
-  }
+  if (n === 1) return { main: main({ width, height }), strip: null }
+  const strip = stripFor(n - 1, width, height, aspect, spacing)
+  return { main: main(besideStrip(width, height, strip, spacing)), strip }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sharing (e3-t05, e4-t08; AC-3.1, AC-4.3): the share takes the main area and everyone is in the
+// strip beside it, on desktops and phones alike (a phone held upright: the share on top, the
+// people in a row under it; held sideways: the share big, the people on the right).
+
+export interface ShareLayout {
+  /**
+   * The main area for the share: all the room the strip leaves, not fitted to an aspect (a shared
+   * window can be any shape; the video letterboxes inside it)
+   */
+  main: { width: number; height: number }
+  /** The people, or null when there are none to show */
+  strip: Strip | null
+}
+
+const NO_SHARE: ShareLayout = { main: { width: 0, height: 0 }, strip: null }
+
+/** The share layout for a share and `count` people tiles in the strip */
+export function shareLayout({
+  count,
+  width,
+  height,
+  aspect = DEFAULT_TILE_ASPECT,
+  gap = DEFAULT_GRID_GAP,
+}: GridInput): ShareLayout {
+  if (!(width > 0) || !(height > 0) || !(aspect > 0)) return NO_SHARE
+  const n = Math.max(0, Math.floor(count))
+  const spacing = Math.max(0, gap)
+  const whole = { width: Math.floor(width), height: Math.floor(height) }
+  if (!(n > 0)) return { main: whole, strip: null }
+  const strip = stripFor(n, width, height, aspect, spacing)
+  const main = besideStrip(width, height, strip, spacing)
+  return { main: { width: Math.floor(main.width), height: Math.floor(main.height) }, strip }
 }
 
 /**

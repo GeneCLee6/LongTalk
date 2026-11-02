@@ -9,6 +9,7 @@ import {
   roomSocketPath,
   viewAsJson,
   type ClientMessage,
+  type ErrorCode,
   type RoomView,
 } from '../../shared/protocol.ts'
 import { Backoff } from './backoff.ts'
@@ -122,6 +123,7 @@ export class RoomConnection {
     welcomes: 0,
   }
   private readonly listeners = new Set<() => void>()
+  private readonly errorListeners = new Set<(code: ErrorCode) => void>()
 
   constructor(roomId: string, join: JoinAs, options: RoomConnectionOptions = {}) {
     const origin =
@@ -135,6 +137,15 @@ export class RoomConnection {
   }
 
   getState = (): RoomConnectionState => this.state
+
+  /**
+   * The room refused something this member sent (`error`: `share_busy`, `forbidden`, …); returns
+   * a function that removes the listener
+   */
+  onError = (listener: (code: ErrorCode) => void): (() => void) => {
+    this.errorListeners.add(listener)
+    return () => this.errorListeners.delete(listener)
+  }
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -309,6 +320,7 @@ export class RoomConnection {
         return
       }
       case 'error':
+        for (const listener of this.errorListeners) listener(message.code)
         return
     }
   }

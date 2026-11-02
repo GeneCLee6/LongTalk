@@ -18,7 +18,14 @@ const fakeTrack = (kind: 'audio' | 'video') =>
 /** RoomDO's part: members, their tracks from `tracks` messages, and a view to subscribe to */
 class FakeRoom {
   view: RoomView = {
-    room: { id: 'abcdefghij', createdAt: 1, name: null, createdBy: null, startedAt: null },
+    room: {
+      id: 'abcdefghij',
+      createdAt: 1,
+      name: null,
+      createdBy: null,
+      startedAt: null,
+      share: null,
+    },
     members: {},
     usage: 'normal',
   }

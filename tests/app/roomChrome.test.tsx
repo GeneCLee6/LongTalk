@@ -65,6 +65,7 @@ describe('Toolbar', () => {
     speakerSupported: false,
     memberCount: 3,
     canShareScreen: true,
+    onToggleShare: vi.fn(),
     onComingSoon: vi.fn(),
     moreItems: [{ id: 'rename-self', label: strings.rename.self, onSelect: vi.fn() }],
     onLeave: vi.fn(),
@@ -86,17 +87,30 @@ describe('Toolbar', () => {
     ])
   })
 
-  it('shows share, chat and participants as coming soon, and says so when pressed', () => {
+  it('shows chat and participants as coming soon, and says so when pressed', () => {
     const p = props()
     render(<Toolbar {...p} />)
-    for (const name of ['分享螢幕', '聊天', '參與者（3 人）']) {
+    for (const name of ['聊天', '參與者（3 人）']) {
       const button = screen.getByRole('button', { name })
       expect(button).toHaveAttribute('aria-disabled', 'true')
       fireEvent.click(button)
     }
-    expect(p.onComingSoon).toHaveBeenNthCalledWith(1, '分享螢幕')
-    expect(p.onComingSoon).toHaveBeenNthCalledWith(3, '參與者')
+    expect(p.onComingSoon).toHaveBeenNthCalledWith(1, '聊天')
+    expect(p.onComingSoon).toHaveBeenNthCalledWith(2, '參與者')
     expect(strings.toolbar.comingSoon('聊天')).toBe('「聊天」即將推出')
+  })
+
+  it('shares the screen, and stops sharing from the same button (D1, e3-t03)', () => {
+    const p = props()
+    const { rerender } = render(<Toolbar {...p} />)
+    const share = screen.getByRole('button', { name: '分享螢幕' })
+    expect(share).not.toHaveAttribute('aria-disabled')
+    fireEvent.click(share)
+    expect(p.onToggleShare).toHaveBeenCalledTimes(1)
+    rerender(<Toolbar {...p} sharing />)
+    fireEvent.click(screen.getByRole('button', { name: '停止分享' }))
+    expect(p.onToggleShare).toHaveBeenCalledTimes(2)
+    expect(p.onComingSoon).not.toHaveBeenCalled()
   })
 
   it('hides screen sharing where the browser cannot (phones)', () => {

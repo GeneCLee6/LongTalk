@@ -28,7 +28,7 @@ import type { Schedule } from '../../worker/scheduler.ts'
 const V = String(PROTOCOL_VERSION)
 const ROOM = { id: 'abcdefghij', createdAt: 1000 }
 /** ROOM as created, before anyone joined */
-const INFO = { ...ROOM, name: null, createdBy: null, startedAt: null }
+const INFO = { ...ROOM, name: null, createdBy: null, startedAt: null, share: null }
 
 /** A browser as the room sees it: keeps its own copy of the view from what it receives */
 class FakeClient {
@@ -970,5 +970,145 @@ describe('RoomHost names (e1-t05)', () => {
     t.host.message(a.conn, '{"t":"leave"}')
     t.host.message(b.conn, JSON.stringify({ t: 'renameRoom', name: '接手了' }))
     expect(b.client.view!.room.name).toBe('接手了')
+  })
+})
+
+describe('RoomHost screen share (e3-t02): one sharer, take-over, host stop', () => {
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    t = setup()
+    t.host.create(ROOM)
+  })
+
+  const share = (conn: string, takeOver = false) =>
+    t.host.message(conn, JSON.stringify({ t: 'share', takeOver }))
+  const tracks = (conn: string, sessionId: string, kinds: string[]) =>
+    t.host.message(
+      conn,
+      JSON.stringify({
+        t: 'tracks',
+        sessionId,
+        tracks: kinds.map((kind) => ({ trackName: `${kind}-1`, kind, muted: false })),
+      }),
+    )
+  const kinds = (view: RoomView | null, id: string) =>
+    view!.members[id].tracks.map((track) => track.kind)
+  /** Three members with SFU sessions; Gene is the host */
+  function three() {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    const c = t.join('阿明')
+    t.host.bindSfu(a.token, 'sa')
+    t.host.bindSfu(b.token, 'sb')
+    t.host.bindSfu(c.token, 'sc')
+    return { a, b, c }
+  }
+
+  it('grants the share to the first member who asks, and tells everyone', () => {
+    const { a, b } = three()
+    t.tick(7)
+    share(b.conn)
+    const granted = { memberId: b.id, since: t.now() }
+    expect(a.client.view!.room.share).toEqual(granted)
+    expect((t.saved.room as RoomInfo).share).toEqual(granted)
+    tracks(b.conn, 'sb', ['mic', 'cam', 'screen'])
+    expect(kinds(a.client.view, b.id)).toEqual(['mic', 'cam', 'screen'])
+    // Asking again changes nothing (a resend after a reconnect)
+    const before = a.client.received.length
+    share(b.conn)
+    expect(a.client.received).toHaveLength(before)
+  })
+
+  it('refuses a second sharer with share_busy unless they confirmed taking over', () => {
+    const { a, b, c } = three()
+    share(b.conn)
+    tracks(b.conn, 'sb', ['mic', 'screen'])
+    share(c.conn)
+    expect(c.client.received.at(-1)).toEqual({ t: 'error', code: 'share_busy' })
+    expect(a.client.view!.room.share?.memberId).toBe(b.id)
+    // Confirmed: the share moves in one patch, and the previous sharer's screen goes with it
+    const rev = a.client.rev
+    share(c.conn, true)
+    expect(a.client.rev).toBe(rev + 1)
+    expect(a.client.view!.room.share?.memberId).toBe(c.id)
+    expect(kinds(a.client.view, b.id)).toEqual(['mic'])
+  })
+
+  it('drops a screen listed by a member who does not hold the share', () => {
+    const { a, b, c } = three()
+    tracks(b.conn, 'sb', ['mic', 'screen'])
+    expect(kinds(a.client.view, b.id)).toEqual(['mic'])
+    share(b.conn)
+    share(c.conn, true)
+    // B's list from before it saw the take-over must not bring its screen back
+    tracks(b.conn, 'sb', ['mic', 'screen', 'screenAudio'])
+    expect(kinds(a.client.view, b.id)).toEqual(['mic'])
+  })
+
+  it('ends the share on unshare, on leave, and once the sharer is gone for good', () => {
+    const { a, b, c } = three()
+    share(b.conn)
+    tracks(b.conn, 'sb', ['mic', 'screen'])
+    // Someone else's unshare does nothing
+    t.host.message(c.conn, '{"t":"unshare"}')
+    expect(a.client.view!.room.share?.memberId).toBe(b.id)
+    t.host.message(b.conn, '{"t":"unshare"}')
+    expect(a.client.view!.room.share).toBeNull()
+    expect(kinds(a.client.view, b.id)).toEqual(['mic'])
+
+    share(c.conn)
+    t.host.message(c.conn, '{"t":"leave"}')
+    expect(a.client.view!.room.share).toBeNull()
+
+    share(b.conn)
+    // Reconnecting keeps the share; gone for RECONNECT_GRACE_MS ends it
+    t.host.closed(b.conn)
+    expect(a.client.view!.room.share?.memberId).toBe(b.id)
+    t.tick(RECONNECT_GRACE_MS + SWEEP_INTERVAL_MS)
+    t.host.message(a.conn, 'ping')
+    t.host.sweep()
+    expect(a.client.view!.members[b.id]).toBeUndefined()
+    expect(a.client.view!.room.share).toBeNull()
+  })
+
+  it('keeps the share across the object being evicted', () => {
+    const { a, b } = three()
+    share(b.conn)
+    const woken = setup('w')
+    woken.host.restore(t.saved.room as RoomInfo, t.saved.rev, t.saved.sessions, [
+      { conn: a.conn, openedAt: woken.now() },
+      { conn: b.conn, openedAt: woken.now() },
+    ])
+    expect(woken.host.view().room.share?.memberId).toBe(b.id)
+    // A stored share whose member is gone is dropped
+    const stale = setup('s')
+    stale.host.restore({ ...INFO, share: { memberId: 'nobody', since: 1 } }, 3, [], [])
+    expect(stale.host.view().room.share).toBeNull()
+  })
+
+  it('lets the host stop anyone’s share (the entry point F1 puts on the wire), nobody else', () => {
+    const { a, b, c } = three()
+    share(b.conn)
+    tracks(b.conn, 'sb', ['mic', 'screen'])
+    expect(t.host.stopShare(c.id, b.id)).toBe(false)
+    expect(t.host.stopShare(a.id, c.id)).toBe(false)
+    expect(a.client.view!.room.share?.memberId).toBe(b.id)
+    expect(t.host.stopShare(a.id, b.id)).toBe(true)
+    expect(c.client.view!.room.share).toBeNull()
+    expect(kinds(c.client.view, b.id)).toEqual(['mic'])
+  })
+
+  it('refuses to start a share in an audio-only month', () => {
+    const { a, b } = three()
+    t.host.setUsage('audioOnly')
+    share(b.conn)
+    expect(b.client.received.at(-1)).toEqual({ t: 'error', code: 'audio_only' })
+    expect(a.client.view!.room.share).toBeNull()
+  })
+
+  it('refuses a share message of the wrong shape', () => {
+    const { b } = three()
+    t.host.message(b.conn, JSON.stringify({ t: 'share' }))
+    expect(b.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
   })
 })

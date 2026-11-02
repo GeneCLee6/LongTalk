@@ -667,3 +667,118 @@ describe('RoomMedia: rebuilding the session (e2-t08) and TURN (e2-t07)', () => {
     expect(a.media.getState().usingRelay).toBe(true)
   })
 })
+
+describe('RoomMedia: sharing the screen (e3-t01)', () => {
+  const kinds = (m: { sent: ClientMessage[] }) => listed(m).map((t) => t.kind)
+
+  it('publishes the screen when sharing starts and unpublishes it when it stops', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    const b = member(sfu)
+    await a.media.start({ mic: fakeTrack('audio'), cam: null })
+    await b.media.start({ mic: null, cam: null })
+    const screen = fakeTrack('video')
+    await a.media.setScreen(screen)
+    expect(kinds(a)).toEqual(['mic', 'screen'])
+    expect(a.transport.sending.get(listed(a)[1].trackName)).toBe(screen)
+    // Everyone else receives it like any track
+    b.media.setDesired(listed(a))
+    await settle()
+    expect(Object.values(b.media.getState().received).map((r) => r.kind)).toEqual(['mic', 'screen'])
+    await a.media.setScreen(null)
+    expect(kinds(a)).toEqual(['mic'])
+    expect(sfu.published.size).toBe(1)
+    b.media.setDesired(listed(a))
+    expect(Object.values(b.media.getState().received).map((r) => r.kind)).toEqual(['mic'])
+  })
+
+  it('shares a screen picked before the session opened once it does', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    void a.media.setScreen(fakeTrack('video'))
+    await a.media.start({ mic: null, cam: null })
+    await settle()
+    expect(kinds(a)).toEqual(['screen'])
+  })
+
+  it('replaces a screen picked again: the old one is unpublished, the new one published', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: null, cam: null })
+    await a.media.setScreen(fakeTrack('video'))
+    const first = listed(a)[0].trackName
+    const again = fakeTrack('video')
+    await a.media.setScreen(again)
+    expect(listed(a)).toHaveLength(1)
+    expect(listed(a)[0].trackName).not.toBe(first)
+    expect(a.transport.sending.get(listed(a)[0].trackName)).toBe(again)
+  })
+
+  it('unpublishes a screen whose share stopped while it was being published', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: null, cam: null })
+    const publishing = a.media.setScreen(fakeTrack('video'))
+    await a.media.setScreen(null)
+    await publishing
+    await settle()
+    expect(sfu.published.size).toBe(0)
+    expect(a.media.getState().published).toEqual([])
+  })
+
+  it('does not publish the screen once the month is audio-only, and says so', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: fakeTrack('audio'), cam: null }, 'audioOnly')
+    await a.media.setScreen(fakeTrack('video'))
+    expect(kinds(a)).toEqual(['mic'])
+    expect(a.media.getState().screenRefused).toBe(true)
+    // Stopping clears it, so the next try says it again
+    await a.media.setScreen(null)
+    expect(a.media.getState().screenRefused).toBe(false)
+    // The proxy's own refusal reads the same
+    const b = member(sfu)
+    sfu.refuseVideo = true
+    await b.media.start({ mic: null, cam: null })
+    await b.media.setScreen(fakeTrack('video'))
+    expect(b.media.getState()).toMatchObject({ screenRefused: true, error: null })
+  })
+
+  it('shares the screen again on the new session after a rebuild', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const transports: FakeTransport[] = []
+    const sent: ClientMessage[] = []
+    const media = new RoomMedia({
+      createTransport: () => {
+        const transport = sfu.createTransport()
+        transports.push(transport)
+        return transport
+      },
+      send: (m) => sent.push(m),
+      backoff: new Backoff({ random: () => 0.5, giveUpAfterMs: 60_000 }),
+    })
+    const screen = fakeTrack('video')
+    await media.start({ mic: fakeTrack('audio'), cam: null })
+    await media.setScreen(screen)
+    transports[0].simulateState('failed')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(transports).toHaveLength(2)
+    expect(listed({ sent })).toEqual([
+      {
+        sessionId: 'fake-session-2',
+        trackName: expect.stringMatching(/^mic-/),
+        kind: 'mic',
+        muted: false,
+      },
+      {
+        sessionId: 'fake-session-2',
+        trackName: expect.stringMatching(/^screen-/),
+        kind: 'screen',
+        muted: false,
+      },
+    ])
+    expect([...transports[1].sending.values()]).toContain(screen)
+    await media.close()
+  })
+})
