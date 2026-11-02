@@ -105,6 +105,12 @@ export interface MediaTransport {
   publish(track: MediaStreamTrack, options: PublishOptions): Promise<PublishedTrack>
   /** Stops sending a track published by this transport */
   unpublish(trackName: string): Promise<void>
+  /**
+   * Sends another local track (a new device) or nothing (null: muted, camera off) on a published
+   * track, without renegotiating: subscribers keep their subscription (B2). Rejects with
+   * `not_found` for a track this transport did not publish.
+   */
+  replaceTrack(trackName: string, track: MediaStreamTrack | null): Promise<void>
 
   /** Starts receiving someone else's track; rejects with `not_found` if it is not published */
   subscribe(ref: TrackRef): Promise<RemoteTrack>

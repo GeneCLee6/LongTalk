@@ -145,6 +145,14 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     })
   }
 
+  async replaceTrack(trackName: string, track: MediaStreamTrack | null): Promise<void> {
+    this.#require()
+    const transceiver = this.#published.get(trackName)
+    if (!transceiver) throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    // RTCRtpSender.replaceTrack needs no SDP exchange, so it does not wait for the queue
+    await transceiver.sender.replaceTrack(track)
+  }
+
   subscribe(ref: TrackRef): Promise<RemoteTrack> {
     return this.#serial(async () => {
       const existing = this.#subscriptions.get(trackKey(ref))

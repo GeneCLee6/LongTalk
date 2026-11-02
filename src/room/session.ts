@@ -2,11 +2,14 @@ import { isSessionToken, normalizeName } from '../../shared/protocol.ts'
 
 // What the browser remembers between visits (AC-1.2, AC-4.2):
 // - the display name, in localStorage: every room, every tab;
+// - the chosen microphone, camera and speaker (e2-t06), in localStorage: the pre-join screen
+//   and the room read and write the same choice;
 // - the room's session token, in sessionStorage: it survives a reload of the tab, but a second
 //   tab (or the next visit) joins as someone new instead of taking the first tab's place.
 // Storage can be missing or throw (private mode, blocked cookies): then nothing is remembered.
 
 const NAME_KEY = 'longtalk.name'
+const DEVICES_KEY = 'longtalk.devices'
 const tokenKey = (roomId: string) => `longtalk.session.${roomId}`
 
 function storage(kind: 'localStorage' | 'sessionStorage'): Storage | null {
@@ -55,4 +58,30 @@ export function saveSession(roomId: string, token: string): void {
 
 export function clearSession(roomId: string): void {
   write('sessionStorage', tokenKey(roomId), null)
+}
+
+/** Which device of each kind the person chose last (null: the browser's default) */
+export type DeviceChoices = Record<'mic' | 'cam' | 'speaker', string | null>
+
+export const defaultDevices = (): DeviceChoices => ({ mic: null, cam: null, speaker: null })
+
+const isDeviceId = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0 && value.length <= 512
+
+export function loadDevices(): DeviceChoices {
+  const choices = defaultDevices()
+  try {
+    const saved = JSON.parse(read('localStorage', DEVICES_KEY) ?? '{}') as Record<string, unknown>
+    for (const kind of ['mic', 'cam', 'speaker'] as const) {
+      if (isDeviceId(saved[kind])) choices[kind] = saved[kind]
+    }
+  } catch {
+    // Unreadable: start from the defaults
+  }
+  return choices
+}
+
+/** Remembers one choice, keeping the others */
+export function saveDevice(kind: keyof DeviceChoices, deviceId: string): void {
+  write('localStorage', DEVICES_KEY, JSON.stringify({ ...loadDevices(), [kind]: deviceId }))
 }

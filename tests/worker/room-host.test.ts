@@ -423,8 +423,15 @@ describe('RoomHost media (e2-t03) and usage (e11-t13)', () => {
     t.host.create(ROOM)
   })
 
-  const tracksMessage = (sessionId: string, tracks: { trackName: string; kind: string }[]) =>
-    JSON.stringify({ t: 'tracks', sessionId, tracks })
+  const tracksMessage = (
+    sessionId: string,
+    tracks: { trackName: string; kind: string; muted?: boolean }[],
+  ) =>
+    JSON.stringify({
+      t: 'tracks',
+      sessionId,
+      tracks: tracks.map((track) => ({ muted: false, ...track })),
+    })
   const statsMessage = (sessionId: string, bytesReceived: number) =>
     JSON.stringify({ t: 'stats', sessionId, bytesReceived })
 
@@ -482,7 +489,7 @@ describe('RoomHost media (e2-t03) and usage (e11-t13)', () => {
     const b = t.join('Wei')
     t.host.bindSfu(b.token, 'sess-b')
     t.host.message(b.conn, tracksMessage('sess-b', [{ trackName: 'mic-1', kind: 'mic' }]))
-    const listed = [{ sessionId: 'sess-b', trackName: 'mic-1', kind: 'mic' }]
+    const listed = [{ sessionId: 'sess-b', trackName: 'mic-1', kind: 'mic', muted: false }]
     expect(a.client.view!.members[b.id].tracks).toEqual(listed)
     expect(b.client.view!.members[b.id].tracks).toEqual(listed)
     expect(t.saved.sessions.find((r) => r.member.id === b.id)).toMatchObject({ sfu: 'sess-b' })
@@ -498,6 +505,68 @@ describe('RoomHost media (e2-t03) and usage (e11-t13)', () => {
     expect(a.client.view!.members[b.id].tracks).toHaveLength(1)
     t.host.message(b.conn, JSON.stringify({ t: 'leave' }))
     expect(a.client.view!.members[b.id]).toBeUndefined()
+  })
+
+  it('syncs mute through the track list without changing the tracks (e2-t05)', () => {
+    const a = t.join('Gene')
+    const b = t.join('Wei')
+    t.host.bindSfu(b.token, 'sess-b')
+    const tracks = [
+      { trackName: 'mic-1', kind: 'mic' },
+      { trackName: 'cam-1', kind: 'cam' },
+    ]
+    t.host.message(b.conn, tracksMessage('sess-b', tracks))
+    t.host.message(
+      b.conn,
+      tracksMessage('sess-b', [
+        { ...tracks[0], muted: true },
+        { ...tracks[1], muted: false },
+      ]),
+    )
+    expect(a.client.view!.members[b.id].tracks).toEqual([
+      { sessionId: 'sess-b', trackName: 'mic-1', kind: 'mic', muted: true },
+      { sessionId: 'sess-b', trackName: 'cam-1', kind: 'cam', muted: false },
+    ])
+    // Only the flag changed: one small patch, and the same tracks can still be pulled
+    const patch = a.client.received.at(-1)
+    expect(patch).toMatchObject({ t: 'patch' })
+    expect(t.host.sfuAccess(a.token, null, [{ sessionId: 'sess-b', trackName: 'mic-1' }])).toEqual({
+      ok: true,
+      memberId: a.id,
+      pulls: ['mic'],
+    })
+    // The same state again sends nothing
+    const before = a.client.received.length
+    t.host.message(
+      b.conn,
+      tracksMessage('sess-b', [
+        { ...tracks[0], muted: true },
+        { ...tracks[1], muted: false },
+      ]),
+    )
+    expect(a.client.received).toHaveLength(before)
+  })
+
+  it('keeps tracks stored by protocol v3 (no `muted`) as unmuted', () => {
+    const a = t.join('Gene')
+    t.host.bindSfu(a.token, 'sess-a')
+    t.host.message(a.conn, tracksMessage('sess-a', [{ trackName: 'mic-1', kind: 'mic' }]))
+    const stored = t.saved.sessions.map((record) => ({
+      ...record,
+      member: {
+        ...record.member,
+        tracks: record.member.tracks.map(({ sessionId, trackName, kind }) => ({
+          sessionId,
+          trackName,
+          kind,
+        })),
+      },
+    })) as unknown as typeof t.saved.sessions
+    const woken = setup()
+    woken.host.restore(ROOM, t.saved.rev, stored, [{ conn: a.conn, openedAt: 0 }])
+    expect(woken.host.view().members[a.id].tracks).toEqual([
+      { sessionId: 'sess-a', trackName: 'mic-1', kind: 'mic', muted: false },
+    ])
   })
 
   it('refuses track lists before join like any other message', () => {
@@ -532,6 +601,23 @@ describe('RoomHost media (e2-t03) and usage (e11-t13)', () => {
     const perReceiver = ((ASSUMED_BITRATE.mic + ASSUMED_BITRATE.cam) / 8) * 15
     expect(t.host.takeUsage()).toEqual({ clientBytes: 0, estimateBytes: 2 * perReceiver })
     expect(t.saved.usage).toEqual({ at: t.now(), state: 'normal' })
+    // A muted camera sends nothing
+    t.host.message(
+      a.conn,
+      tracksMessage('sess-a', [
+        { trackName: 'mic-1', kind: 'mic' },
+        { trackName: 'cam-1', kind: 'cam', muted: true },
+      ]),
+    )
+    t.tick(15_000)
+    expect(t.host.takeUsage().estimateBytes).toBe(2 * (ASSUMED_BITRATE.mic / 8) * 15)
+    t.host.message(
+      a.conn,
+      tracksMessage('sess-a', [
+        { trackName: 'mic-1', kind: 'mic' },
+        { trackName: 'cam-1', kind: 'cam' },
+      ]),
+    )
     // A reconnecting member receives nothing
     t.host.closed(c.conn)
     t.tick(15_000)

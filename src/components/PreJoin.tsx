@@ -52,7 +52,7 @@ function problemMessage(mic: MediaProblem | null, cam: MediaProblem | null): str
     return `${problems.micNotFound}${problems.camNotFound}`
   if (mic === 'notFound') return problems.micNotFound
   if (cam === 'notFound') return problems.camNotFound
-  if (either('unknown')) return problems.unknown
+  if (either('unknown') || either('lost')) return problems.unknown
   return null
 }
 

@@ -41,13 +41,17 @@ describe('RoomMedia: publishing (e2-t03)', () => {
     expect(a.media.getState().published.map((t) => t.kind)).toEqual(['mic', 'cam'])
     const reports = a.sent.filter((m) => m.t === 'tracks')
     expect(reports).toEqual([
-      { t: 'tracks', sessionId: 'fake-session-1', tracks: [{ trackName: 'mic-1', kind: 'mic' }] },
+      {
+        t: 'tracks',
+        sessionId: 'fake-session-1',
+        tracks: [{ trackName: 'mic-1', kind: 'mic', muted: false }],
+      },
       {
         t: 'tracks',
         sessionId: 'fake-session-1',
         tracks: [
-          { trackName: 'mic-1', kind: 'mic' },
-          { trackName: 'cam-2', kind: 'cam' },
+          { trackName: 'mic-1', kind: 'mic', muted: false },
+          { trackName: 'cam-2', kind: 'cam', muted: false },
         ],
       },
     ])
@@ -183,7 +187,12 @@ describe('RoomMedia: desired / actual subscriptions (e2-t04)', () => {
     const sfu = new FakeSfu()
     const a = member(sfu, { retryDelayMs: 1000 })
     await a.media.start({ mic: null, cam: null })
-    const ghost: MemberTrack = { sessionId: 'nobody', trackName: 'cam-1', kind: 'cam' }
+    const ghost: MemberTrack = {
+      sessionId: 'nobody',
+      trackName: 'cam-1',
+      kind: 'cam',
+      muted: false,
+    }
     const subscribe = vi.spyOn(a.transport, 'subscribe')
     a.media.setDesired([ghost])
     await vi.advanceTimersByTimeAsync(10_000)
@@ -204,7 +213,9 @@ describe('RoomMedia: desired / actual subscriptions (e2-t04)', () => {
     await a.media.start({ mic: null, cam: null })
     await b.media.start({ mic: null, cam: null })
     // RoomDO already lists it, the SFU does not have it yet
-    a.media.setDesired([{ sessionId: b.transport.sessionId!, trackName: 'mic-1', kind: 'mic' }])
+    a.media.setDesired([
+      { sessionId: b.transport.sessionId!, trackName: 'mic-1', kind: 'mic', muted: false },
+    ])
     await vi.advanceTimersByTimeAsync(0)
     expect(a.media.getState().received).toEqual({})
     await b.transport.publish(fakeTrack('audio'), { kind: 'mic' })
@@ -267,5 +278,107 @@ describe('RoomMedia: free-tier guard (e11-t13)', () => {
     expect(cam2.applyConstraints).toHaveBeenCalledOnce()
     // A camera already sending keeps sending (only new video is refused)
     expect(later.media.getState().published.map((t) => t.kind)).toEqual(['cam'])
+  })
+})
+
+describe('RoomMedia: turning off, on and switching (e2-t05, e2-t06)', () => {
+  /** The `muted` flags of the last `tracks` report, by kind */
+  const mutedFlags = (m: { sent: ClientMessage[] }) =>
+    Object.fromEntries(listed(m).map((t) => [t.kind, t.muted]))
+
+  it('mutes and unmutes by replacing what the track sends, without publishing again', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    const mic = fakeTrack('audio')
+    const cam = fakeTrack('video')
+    await a.media.start({ mic, cam })
+    const publish = vi.spyOn(a.transport, 'publish')
+    await a.media.setLocal({ mic: null, cam })
+    expect(a.transport.sending.get('mic-1')).toBeNull()
+    expect(mutedFlags(a)).toEqual({ mic: true, cam: false })
+    await a.media.setLocal({ mic: null, cam: null })
+    expect(mutedFlags(a)).toEqual({ mic: true, cam: true })
+    expect(a.media.getState().published.map((t) => t.muted)).toEqual([true, true])
+    // A new camera track (the camera was stopped while off) goes on the same published track
+    const cam2 = fakeTrack('video')
+    await a.media.setLocal({ mic, cam: cam2 })
+    expect(a.transport.sending.get('cam-2')).toBe(cam2)
+    expect(mutedFlags(a)).toEqual({ mic: false, cam: false })
+    expect(publish).not.toHaveBeenCalled()
+    // Same tracks again: nothing to report
+    const reports = a.sent.length
+    await a.media.setLocal({ mic, cam: cam2 })
+    expect(a.sent).toHaveLength(reports)
+  })
+
+  it('switches devices on the published track (e2-t06)', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    const b = member(sfu)
+    await a.media.start({ mic: fakeTrack('audio'), cam: null })
+    await b.media.start({ mic: null, cam: null })
+    b.media.setDesired(listed(a))
+    await settle()
+    const headset = fakeTrack('audio')
+    await a.media.setLocal({ mic: headset, cam: null })
+    expect(a.transport.sending.get('mic-1')).toBe(headset)
+    // The subscriber was not disturbed
+    expect(Object.keys(b.media.getState().received)).toHaveLength(1)
+  })
+
+  it('publishes a kind the first time it is turned on', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: null, cam: null })
+    await a.media.setLocal({ mic: fakeTrack('audio'), cam: null })
+    expect(listed(a)).toEqual([
+      { sessionId: 'fake-session-1', trackName: 'mic-1', kind: 'mic', muted: false },
+    ])
+  })
+
+  it('applies changes made before the session opened once it does', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    const started = a.media.start({ mic: fakeTrack('audio'), cam: null })
+    const later = fakeTrack('audio')
+    void a.media.setLocal({ mic: later, cam: null })
+    await started
+    expect(a.transport.sending.get('mic-1')).toBe(later)
+  })
+
+  it('keeps a stopped camera off once the month is audio-only (e11-t13)', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    const mic = fakeTrack('audio')
+    await a.media.start({ mic, cam: fakeTrack('video') })
+    await a.media.setLocal({ mic, cam: null })
+    a.media.setUsage('audioOnly')
+    await a.media.setLocal({ mic, cam: fakeTrack('video') })
+    expect(a.transport.sending.get('cam-2')).toBeNull()
+    expect(a.media.getState().videoRefused).toBe(true)
+    expect(mutedFlags(a)).toEqual({ mic: false, cam: true })
+    // Turning it off again clears the refusal, so the next try tells the member again
+    await a.media.setLocal({ mic, cam: null })
+    expect(a.media.getState().videoRefused).toBe(false)
+  })
+
+  it('sends a new camera at low quality once the month is past the threshold', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: null, cam: fakeTrack('video') }, 'low')
+    const cam2 = fakeTrack('video')
+    await a.media.setLocal({ mic: null, cam: cam2 })
+    expect(cam2.applyConstraints).toHaveBeenCalledWith(LOW_QUALITY_VIDEO)
+  })
+
+  it('says so when a track cannot be replaced', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    const mic = fakeTrack('audio')
+    await a.media.start({ mic, cam: null })
+    vi.spyOn(a.transport, 'replaceTrack').mockRejectedValue(new MediaTransportError('sfu_error'))
+    await a.media.setLocal({ mic: null, cam: null })
+    expect(a.media.getState().error).toBe('sfu_error')
+    expect(mutedFlags(a)).toEqual({ mic: false })
   })
 })

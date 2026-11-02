@@ -49,6 +49,11 @@ export class FakeTransport implements MediaTransport {
   /** Layers asked for via setPreferredLayer, by trackKey */
   readonly preferredLayers = new Map<string, Layer>()
   readonly subscriptions = new Map<string, RemoteTrack>()
+  /**
+   * What each published track sends now, by trackName (set on publish, changed by replaceTrack;
+   * subscribers keep the track they got, like a real receiver keeps its track)
+   */
+  readonly sending = new Map<string, MediaStreamTrack | null>()
   /** What getStats() reports as received; tests move it forward */
   bytesReceived = 0
   #emitter = new TransportEmitter()
@@ -80,15 +85,25 @@ export class FakeTransport implements MediaTransport {
     }
     this.sfu.published.set(trackKey(published), { ...published, track })
     this.#ownTracks.add(published.trackName)
+    this.sending.set(published.trackName, track)
     return published
   }
 
   async unpublish(trackName: string): Promise<void> {
     const sessionId = this.#requireSession()
     if (!this.#ownTracks.delete(trackName)) return
+    this.sending.delete(trackName)
     const ref = { sessionId, trackName }
     this.sfu.published.delete(trackKey(ref))
     this.sfu.trackRemoved(ref)
+  }
+
+  async replaceTrack(trackName: string, track: MediaStreamTrack | null): Promise<void> {
+    this.#requireSession()
+    if (!this.#ownTracks.has(trackName)) {
+      throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    }
+    this.sending.set(trackName, track)
   }
 
   async subscribe(ref: TrackRef): Promise<RemoteTrack> {

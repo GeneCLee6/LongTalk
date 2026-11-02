@@ -6,16 +6,35 @@ import type { MediaDevicesLike } from '../../../src/media/devices.ts'
 export class FakeTrack {
   readonly kind: 'audio' | 'video'
   readonly deviceId: string
+  readonly label: string
+  readonly id = `track-${Math.random().toString(36).slice(2)}`
   stopped = false
-  constructor(kind: 'audio' | 'video', deviceId: string) {
+  enabled = true
+  readyState: 'live' | 'ended' = 'live'
+  readonly applyConstraints = vi.fn(async () => {})
+  #listeners = new Set<() => void>()
+  constructor(kind: 'audio' | 'video', deviceId: string, label = '') {
     this.kind = kind
     this.deviceId = deviceId
+    this.label = label
   }
   stop() {
     this.stopped = true
+    this.readyState = 'ended'
   }
   getSettings() {
     return { deviceId: this.deviceId }
+  }
+  addEventListener(type: string, listener: () => void) {
+    if (type === 'ended') this.#listeners.add(listener)
+  }
+  removeEventListener(type: string, listener: () => void) {
+    if (type === 'ended') this.#listeners.delete(listener)
+  }
+  /** The device went away (unplugged): the browser ends the track without stop() */
+  end() {
+    this.readyState = 'ended'
+    this.#listeners.forEach((listener) => listener())
   }
 }
 
@@ -63,27 +82,37 @@ export interface FakeDevicesOptions {
   hidden?: boolean
 }
 
+type DeviceConstraint = { exact?: string; ideal?: string }
+
 /** A fake navigator.mediaDevices that hands out FakeStreams and records them */
 export function fakeMediaDevices(options: FakeDevicesOptions = {}) {
   const streams: FakeStream[] = []
   const listeners = new Set<() => void>()
+  const present = new Set<string>(DEVICES.map((device) => device.deviceId))
   let granted = !options.hidden
-  const pick = (constraint: boolean | MediaTrackConstraints | undefined, fallback: string) => {
+  /** The device a constraint opens: an `exact` one must be present, an `ideal` one is preferred */
+  const pick = (constraint: boolean | MediaTrackConstraints | undefined, kind: string) => {
     if (!constraint) return null
-    if (constraint === true) return fallback
-    const id = (constraint.deviceId as { exact: string }).exact
-    return id
+    const available = DEVICES.filter((d) => d.kind === kind && present.has(d.deviceId))
+    const wanted = constraint === true ? {} : (constraint.deviceId as DeviceConstraint)
+    if (wanted.exact !== undefined) {
+      if (!present.has(wanted.exact)) throw mediaError('OverconstrainedError')
+      return DEVICES.find((d) => d.deviceId === wanted.exact)!
+    }
+    const device = available.find((d) => d.deviceId === wanted.ideal) ?? available[0]
+    if (!device) throw mediaError('NotFoundError')
+    return device
   }
   const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
     if (options.denyAll) throw mediaError('NotAllowedError')
-    const audio = pick(constraints.audio, 'mic-1')
-    const video = pick(constraints.video, 'cam-1')
-    if (audio && options.fail?.audio) throw mediaError(options.fail.audio)
-    if (video && options.fail?.video) throw mediaError(options.fail.video)
+    if (constraints.audio && options.fail?.audio) throw mediaError(options.fail.audio)
+    if (constraints.video && options.fail?.video) throw mediaError(options.fail.video)
+    const audio = pick(constraints.audio, 'audioinput')
+    const video = pick(constraints.video, 'videoinput')
     granted = true
     const tracks = [
-      ...(audio ? [new FakeTrack('audio', audio)] : []),
-      ...(video ? [new FakeTrack('video', video)] : []),
+      ...(audio ? [new FakeTrack('audio', audio.deviceId, audio.label)] : []),
+      ...(video ? [new FakeTrack('video', video.deviceId, video.label)] : []),
     ]
     const stream = new FakeStream(tracks)
     streams.push(stream)
@@ -91,7 +120,7 @@ export function fakeMediaDevices(options: FakeDevicesOptions = {}) {
   })
   const enumerateDevices = vi.fn(
     async () =>
-      DEVICES.map((device) =>
+      DEVICES.filter((device) => present.has(device.deviceId)).map((device) =>
         granted ? device : { ...device, deviceId: '', label: '' },
       ) as unknown as MediaDeviceInfo[],
   )
@@ -101,12 +130,28 @@ export function fakeMediaDevices(options: FakeDevicesOptions = {}) {
     addEventListener: (_type, listener) => listeners.add(listener),
     removeEventListener: (_type, listener) => listeners.delete(listener),
   }
+  const fireDeviceChange = () => listeners.forEach((listener) => listener())
+  /** Every track handed out so far, newest last */
+  const tracks = () => streams.flatMap((stream) => stream.tracks)
   return {
     devices,
     getUserMedia,
     enumerateDevices,
     streams,
     listeners,
-    fireDeviceChange: () => listeners.forEach((listener) => listener()),
+    tracks,
+    fireDeviceChange,
+    /** The device is unplugged: its live tracks end, it leaves the lists, `devicechange` fires */
+    unplug(deviceId: string) {
+      present.delete(deviceId)
+      for (const track of tracks()) {
+        if (track.deviceId === deviceId && track.readyState === 'live') track.end()
+      }
+      fireDeviceChange()
+    },
+    plug(deviceId: string) {
+      present.add(deviceId)
+      fireDeviceChange()
+    },
   }
 }

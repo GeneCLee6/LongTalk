@@ -19,9 +19,14 @@
 //    everyone subscribes from it. Every STATS_INTERVAL_MS the browser sends `stats` (bytes it
 //    received), which the room counts towards the month's egress (shared/usage.ts); the month's
 //    state is `RoomView.usage`.
+// 6. Mute (B2): every track in `tracks` carries `muted`. Turning the microphone or camera off
+//    keeps the track published (the sender stops sending, nothing is renegotiated) and sends
+//    `tracks` again with `muted: true`; everyone sees it in `Member.tracks`. A member with no
+//    track of a kind (never opened, or refused) counts as muted for that kind.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
+// v3 → v4 (B2): `MemberTrack.muted`, and `muted` on every entry of `tracks`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -30,7 +35,7 @@ import type { JsonValue, PatchOp } from './patch.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 3
+export const PROTOCOL_VERSION = 4
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -87,6 +92,8 @@ export type MemberTrack = {
   sessionId: string
   trackName: string
   kind: TrackKind
+  /** Published but not sending: the member turned the microphone or camera off (B2) */
+  muted: boolean
 }
 
 /** Realtime session ids and our track names: short, URL-safe */
@@ -156,7 +163,7 @@ export type LeaveMessage = { t: 'leave' }
 export type TracksMessage = {
   t: 'tracks'
   sessionId: string
-  tracks: { trackName: string; kind: TrackKind }[]
+  tracks: { trackName: string; kind: TrackKind; muted: boolean }[]
 }
 
 /** The transport's cumulative bytes received on `sessionId` (the SFU's egress to this browser) */
@@ -251,12 +258,13 @@ function parseTracks(value: Record<string, unknown>): TracksMessage | null {
   const kinds = new Set<TrackKind>()
   for (const item of value.tracks as unknown[]) {
     if (typeof item !== 'object' || item === null) return null
-    const { trackName, kind } = item as Record<string, unknown>
+    const { trackName, kind, muted } = item as Record<string, unknown>
     if (!isSfuId(trackName) || !TRACK_KINDS.includes(kind as TrackKind)) return null
+    if (typeof muted !== 'boolean') return null
     // One track of each kind
     if (kinds.has(kind as TrackKind)) return null
     kinds.add(kind as TrackKind)
-    tracks.push({ trackName, kind: kind as TrackKind })
+    tracks.push({ trackName, kind: kind as TrackKind, muted })
   }
   return { t: 'tracks', sessionId: value.sessionId, tracks }
 }

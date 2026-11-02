@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { Button } from '../../src/components/Button.tsx'
 import { IconButton } from '../../src/components/IconButton.tsx'
+import { MemberTile } from '../../src/components/MemberTile.tsx'
 import { Menu } from '../../src/components/Menu.tsx'
 import { ToastViewport } from '../../src/components/Toast.tsx'
 import { useToasts } from '../../src/components/useToasts.ts'
@@ -107,5 +108,50 @@ describe('Toast', () => {
     fireEvent.click(screen.getByRole('button', { name: 'show' }))
     fireEvent.click(screen.getByRole('button', { name: strings.common.close }))
     expect(screen.queryByText('小明 加入了')).not.toBeInTheDocument()
+  })
+})
+
+describe('Menu with choices (e2-t06)', () => {
+  it('shows radio items under section headings, the current one checked', () => {
+    const onSelect = vi.fn()
+    render(
+      <Menu
+        label="選擇麥克風與喇叭"
+        items={[
+          { id: 'm1', label: 'Built-in', section: '麥克風', checked: true, onSelect },
+          { id: 'm2', label: 'Headset', section: '麥克風', checked: false, onSelect },
+          { id: 's1', label: 'Speakers', section: '喇叭', checked: true, onSelect },
+        ]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '選擇麥克風與喇叭' }))
+    const items = screen.getAllByRole('menuitemradio')
+    expect(items.map((item) => item.getAttribute('aria-checked'))).toEqual([
+      'true',
+      'false',
+      'true',
+    ])
+    expect(screen.getByRole('menu')).toHaveTextContent(/麥克風.*Built-in.*Headset.*喇叭.*Speakers/)
+    fireEvent.click(items[1])
+    expect(onSelect).toHaveBeenCalledOnce()
+  })
+})
+
+describe('MemberTile (e2-t05)', () => {
+  it('marks a muted microphone on the nameplate and plays through the chosen speaker', () => {
+    const setSinkId = vi.fn(async () => {})
+    Object.defineProperty(HTMLMediaElement.prototype, 'setSinkId', {
+      value: setSinkId,
+      configurable: true,
+    })
+    const audio = { kind: 'audio' } as MediaStreamTrack
+    const { rerender } = render(
+      <MemberTile name="Wei" video={null} audio={audio} micMuted speaker="spk-1" />,
+    )
+    expect(screen.getByRole('img', { name: '麥克風已關' })).toBeInTheDocument()
+    expect(setSinkId).toHaveBeenCalledWith('spk-1')
+    rerender(<MemberTile name="Wei" video={null} audio={audio} micMuted={false} speaker={null} />)
+    expect(screen.queryByRole('img', { name: '麥克風已關' })).toBeNull()
+    delete (HTMLMediaElement.prototype as { setSinkId?: unknown }).setSinkId
   })
 })
