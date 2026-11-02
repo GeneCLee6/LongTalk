@@ -8,8 +8,9 @@ import { getRoom } from '../api/rooms.ts'
 import { fetchIceConfig } from '../api/turn.ts'
 import { Button } from '../components/Button.tsx'
 import { MediaControls } from '../components/MediaControls.tsx'
-import { MemberTile } from '../components/MemberTile.tsx'
 import { PreJoin } from '../components/PreJoin.tsx'
+import { Stage } from '../components/Stage.tsx'
+import { Tile, type TileProps } from '../components/Tile.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
 import { useToasts } from '../components/useToasts.ts'
 import { canChooseSpeaker, supportsWebRtc } from '../media/capabilities.ts'
@@ -32,9 +33,10 @@ import { useMicLevel } from '../room/useMicLevel.ts'
 import { useRoomConnection } from '../room/useRoomConnection.ts'
 import type { LocalTracks } from '../room/RoomMedia.ts'
 import { useRoomMedia } from '../room/useRoomMedia.ts'
+import { useSpeaking } from '../room/useSpeaking.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
 import { strings } from '../strings.ts'
-import { color, font, fontSize, radius, space } from '../styles/tokens.ts'
+import { color, font, fontSize, layer, radius, space } from '../styles/tokens.ts'
 
 /** What the pre-join screen hands to the room: the room publishes with the media choices */
 export interface JoinChoices {
@@ -80,9 +82,9 @@ function RoomEntry({ roomId }: { roomId: string }) {
   if (joined) {
     // The room is dark whatever the system scheme (DESIGN.md §1.2)
     return (
-      <Page data-theme="dark">
+      <Shell data-theme="dark">
         <Room roomId={roomId} choices={joined} onLeft={() => navigate('/')} />
-      </Page>
+      </Shell>
     )
   }
   return (
@@ -267,7 +269,13 @@ function Room({
     void devices?.setOn('cam', !local.cam.on)
   }
 
-  if (gone) return <NotFound />
+  if (gone) {
+    return (
+      <Centered>
+        <NotFound />
+      </Centered>
+    )
+  }
   const members = Object.values(state.view?.members ?? {})
   // Gave up rebuilding the media session (e2-t08): say so, with a retry
   const mediaLost =
@@ -277,91 +285,114 @@ function Room({
   const mediaProblem = mediaLost ? null : mediaErrorText(media.error)
   const selfReconnecting = state.status === 'reconnecting' || media.status === 'reconnecting'
   return (
-    <Panel>
-      <h1>{strings.room.title(roomId)}</h1>
-      <p role="status">{statusText(state)}</p>
-      {state.status === 'lost' && (
-        <Button variant="secondary" onClick={retryRoom}>
-          {strings.common.retry}
-        </Button>
-      )}
-      {inRoom && media.status === 'connecting' && <p>{strings.room.mediaConnecting}</p>}
-      {inRoom && state.status === 'open' && media.status === 'reconnecting' && (
-        <p role="status">{strings.room.mediaReconnecting}</p>
-      )}
-      {mediaLost && (
-        <Alert role="alert">
-          <span>{strings.room.mediaLost}</span>
-          <Button variant="secondary" onClick={media.retry}>
-            {strings.common.retry}
-          </Button>
-        </Alert>
-      )}
-      {mediaProblem && <p role="alert">{mediaProblem}</p>}
-      <DeviceProblems local={local} onRetry={(kind) => void devices?.retry(kind)} />
-      {inRoom && (
-        <Grid aria-label={strings.room.grid}>
-          {members.map((member) => {
-            const you = member.id === state.you
-            const listed = (kind: 'mic' | 'cam') => member.tracks.find((t) => t.kind === kind)
-            const received = (kind: 'mic' | 'cam') => {
-              const track = listed(kind)
-              return (track && media.received[trackKey(track)]?.track) || null
-            }
-            const cam = listed('cam')
-            return (
-              <MemberTile
-                key={member.id}
-                name={member.name}
-                you={you}
-                reconnecting={you ? selfReconnecting : member.reconnecting}
-                relayed={you && media.usingRelay}
-                video={
-                  you
-                    ? media.videoRefused
-                      ? null
-                      : camSending
-                    : cam && !cam.muted
-                      ? received('cam')
-                      : null
-                }
-                audio={you ? null : received('mic')}
-                micMuted={you ? micSending === null : (listed('mic')?.muted ?? true)}
-                speaker={local.chosen.speaker}
-              />
-            )
-          })}
-        </Grid>
-      )}
-      <MediaControls
-        micOn={local.mic.on}
-        camOn={local.cam.on}
-        micBusy={!local.ready || local.mic.opening}
-        camBusy={!local.ready || local.cam.opening}
-        onToggleMic={() => void devices?.setOn('mic', !local.mic.on)}
-        onToggleCam={toggleCam}
-        devices={local.devices}
-        selected={{
-          mic: trackDevice(local.mic.track) ?? local.chosen.mic,
-          cam: trackDevice(local.cam.track) ?? local.chosen.cam,
-          speaker: local.chosen.speaker,
-        }}
-        onSelect={(choice, deviceId) => void devices?.select(choice, deviceId)}
-        speakerSupported={speakerSupported}
-      >
-        <Button
-          variant="danger"
-          onClick={() => {
-            leave()
-            onLeft()
+    <>
+      {/* The top bar's place: room name and status (the full top bar is C2, e4-t06) */}
+      <Header>
+        <h1>{strings.room.title(roomId)}</h1>
+        <Status role="status" $tone={state.status === 'open' ? 'normal' : 'warn'}>
+          {statusText(state)}
+        </Status>
+      </Header>
+      <StageArea>
+        {inRoom && (
+          <Stage>
+            {members.map((member) => {
+              const you = member.id === state.you
+              const listed = (kind: 'mic' | 'cam') => member.tracks.find((t) => t.kind === kind)
+              const received = (kind: 'mic' | 'cam') => {
+                const track = listed(kind)
+                return (track && media.received[trackKey(track)]?.track) || null
+              }
+              const cam = listed('cam')
+              const mic = listed('mic')
+              const audio = you ? null : received('mic')
+              return (
+                <MemberTile
+                  key={member.id}
+                  name={member.name}
+                  you={you}
+                  reconnecting={you ? selfReconnecting : member.reconnecting}
+                  relayed={you && media.usingRelay}
+                  video={
+                    you
+                      ? media.videoRefused
+                        ? null
+                        : camSending
+                      : cam && !cam.muted
+                        ? received('cam')
+                        : null
+                  }
+                  audio={audio}
+                  // The speaking outline follows our own microphone while it sends, theirs
+                  // while it is on
+                  level={you ? micSending : mic && !mic.muted ? audio : null}
+                  micMuted={you ? micSending === null : (mic?.muted ?? true)}
+                  speaker={local.chosen.speaker}
+                />
+              )
+            })}
+          </Stage>
+        )}
+        <Notices>
+          {state.status === 'lost' && (
+            <Button variant="secondary" onClick={retryRoom}>
+              {strings.common.retry}
+            </Button>
+          )}
+          {inRoom && media.status === 'connecting' && <Note>{strings.room.mediaConnecting}</Note>}
+          {inRoom && state.status === 'open' && media.status === 'reconnecting' && (
+            <Note role="status">{strings.room.mediaReconnecting}</Note>
+          )}
+          {mediaLost && (
+            <Alert role="alert">
+              <span>{strings.room.mediaLost}</span>
+              <Button variant="secondary" onClick={media.retry}>
+                {strings.common.retry}
+              </Button>
+            </Alert>
+          )}
+          {mediaProblem && <Alert role="alert">{mediaProblem}</Alert>}
+          <DeviceProblems local={local} onRetry={(kind) => void devices?.retry(kind)} />
+        </Notices>
+      </StageArea>
+      {/* The toolbar's place (the full toolbar is C2, e4-t06) */}
+      <ToolbarArea>
+        <MediaControls
+          micOn={local.mic.on}
+          camOn={local.cam.on}
+          micBusy={!local.ready || local.mic.opening}
+          camBusy={!local.ready || local.cam.opening}
+          onToggleMic={() => void devices?.setOn('mic', !local.mic.on)}
+          onToggleCam={toggleCam}
+          devices={local.devices}
+          selected={{
+            mic: trackDevice(local.mic.track) ?? local.chosen.mic,
+            cam: trackDevice(local.cam.track) ?? local.chosen.cam,
+            speaker: local.chosen.speaker,
           }}
+          onSelect={(choice, deviceId) => void devices?.select(choice, deviceId)}
+          speakerSupported={speakerSupported}
         >
-          {strings.toolbar.leave}
-        </Button>
-      </MediaControls>
+          <Button
+            variant="danger"
+            onClick={() => {
+              leave()
+              onLeft()
+            }}
+          >
+            {strings.toolbar.leave}
+          </Button>
+        </MediaControls>
+      </ToolbarArea>
       <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
-    </Panel>
+    </>
   )
+}
+
+/** One member's tile, with the speaking outline from their microphone's level (e4-t05) */
+function MemberTile({ level, ...tile }: TileProps & { level: MediaStreamTrack | null }) {
+  const speaking = useSpeaking(level)
+  return <Tile {...tile} speaking={speaking} />
 }
 
 const trackDevice = (track: MediaStreamTrack | null): string | null =>
@@ -556,9 +587,89 @@ const Alert = styled.div`
   text-align: left;
 `
 
-const Grid = styled.section`
+/**
+ * The room (DESIGN.md §4.3): the top bar's row, the stage, the toolbar's row; the side panel
+ * joins in C2 / D3
+ */
+const Shell = styled.main`
+  height: 100dvh;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  font-family: ${font.ui};
+  background: ${color.bg};
+  color: ${color.fg};
+
+  a {
+    color: ${color.primary};
+  }
+`
+
+const Centered = styled.div`
+  grid-row: 1 / -1;
+  display: grid;
+  place-items: center;
+`
+
+const Header = styled.header`
+  display: flex;
+  align-items: center;
   gap: ${space(3)};
-  width: min(100vw - ${space(8)}, 1100px);
+  min-height: 44px;
+  padding: 0 ${space(4)};
+  border-bottom: 1px solid ${color.line};
+  background: ${color.surface};
+  font-size: ${fontSize.nameplate};
+  color: ${color.muted};
+
+  h1 {
+    margin: 0;
+    font-size: ${fontSize.small};
+    font-weight: 700;
+    color: ${color.fg};
+  }
+`
+
+const Status = styled.p<{ $tone: 'normal' | 'warn' }>`
+  margin: 0;
+  color: ${({ $tone }) => ($tone === 'warn' ? color.warn : color.muted)};
+  font-weight: ${({ $tone }) => ($tone === 'warn' ? 600 : 400)};
+`
+
+const StageArea = styled.div`
+  position: relative;
+  min-width: 0;
+  margin: ${space(3)};
+`
+
+/** Above the stage, centred at the top: what is wrong and how to fix it */
+const Notices = styled.div`
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: ${layer.overlay};
+  display: grid;
+  justify-items: center;
+  gap: ${space(2)};
+  width: min(100%, 640px);
+
+  &:empty {
+    display: none;
+  }
+`
+
+const Note = styled.p`
+  margin: 0;
+  padding: ${space(1)} ${space(3)};
+  border-radius: ${radius.pill};
+  background: ${color.overlay};
+  font-size: ${fontSize.small};
+`
+
+const ToolbarArea = styled.footer`
+  display: flex;
+  justify-content: center;
+  padding: ${space(1)} ${space(3)};
+  border-top: 1px solid ${color.line};
+  background: ${color.surface};
 `

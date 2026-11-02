@@ -1,5 +1,6 @@
-// The microphone level for the pre-join meter (e4-t03), from a Web Audio analyser. Local only;
-// the in-room speaking outline (e4-t05) can reuse it.
+// The microphone level for the pre-join meter (e4-t03), from a Web Audio analyser. The in-room
+// speaking outline (e4-t05, speaking.ts) reads every tile's microphone the same way, on one
+// shared AudioContext.
 import { canMeasureLevel } from './capabilities.ts'
 
 /** Quietest level the meter shows; anything below reads as 0 */
@@ -27,6 +28,9 @@ export interface AudioContextLike {
     getFloatTimeDomainData(array: Float32Array<ArrayBuffer>): void
   }
   close(): Promise<void>
+  /** A context made without a user gesture starts suspended (autoplay policy) */
+  readonly state?: string
+  resume?(): Promise<void>
 }
 
 export interface LevelMeter {
@@ -35,17 +39,14 @@ export interface LevelMeter {
   close(): void
 }
 
-const browserContext = (): AudioContextLike | null =>
+export const browserAudioContext = (): AudioContextLike | null =>
   canMeasureLevel() ? new AudioContext() : null
 
-/** A meter on the stream's audio, or null when it has none or there is no Web Audio */
-export function createLevelMeter(
-  stream: MediaStream,
-  createContext: () => AudioContextLike | null = browserContext,
-): LevelMeter | null {
-  if (stream.getAudioTracks().length === 0) return null
-  const context = createContext()
-  if (!context) return null
+/**
+ * An analyser on the stream's audio in a context the caller owns: closing it disconnects the
+ * source and leaves the context open for the others
+ */
+export function attachLevelMeter(context: AudioContextLike, stream: MediaStream): LevelMeter {
   const source = context.createMediaStreamSource(stream)
   const analyser = context.createAnalyser()
   analyser.fftSize = 1024
@@ -58,6 +59,23 @@ export function createLevelMeter(
     },
     close() {
       source.disconnect()
+    },
+  }
+}
+
+/** A meter on the stream's audio, or null when it has none or there is no Web Audio */
+export function createLevelMeter(
+  stream: MediaStream,
+  createContext: () => AudioContextLike | null = browserAudioContext,
+): LevelMeter | null {
+  if (stream.getAudioTracks().length === 0) return null
+  const context = createContext()
+  if (!context) return null
+  const meter = attachLevelMeter(context, stream)
+  return {
+    read: meter.read,
+    close() {
+      meter.close()
       void context.close().catch(() => {})
     },
   }

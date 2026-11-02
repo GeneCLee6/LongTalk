@@ -1,0 +1,142 @@
+import { describe, expect, it } from 'vitest'
+import {
+  DEFAULT_GRID_GAP,
+  DEFAULT_TILE_ASPECT,
+  gridLayout,
+  MAX_GRID_TILES,
+  PORTRAIT_TILE_ASPECT,
+  tileAspect,
+} from '../../shared/layout.ts'
+
+const ASPECT = 16 / 9
+const GAP = DEFAULT_GRID_GAP
+
+/** Five container shapes (e4 risk table): wide desktop, 16:9, 4:3, square, phone portrait */
+const containers = {
+  ultrawide: { width: 2000, height: 700 },
+  wide: { width: 1280, height: 720 },
+  standard: { width: 1024, height: 768 },
+  square: { width: 800, height: 800 },
+  portrait: { width: 390, height: 700 },
+} as const
+
+const counts = Array.from({ length: MAX_GRID_TILES }, (_, i) => i + 1)
+
+const shape = (count: number, size: { width: number; height: number }) => {
+  const { cols, rows } = gridLayout({ count, ...size })
+  return `${cols}x${rows}`
+}
+
+describe('gridLayout (e4-t04, AC-4.3)', () => {
+  describe.each(Object.entries(containers))('in a %s container', (_, size) => {
+    it.each(counts)('fits %i tiles without overflow, gaps and the aspect ratio kept', (count) => {
+      const grid = gridLayout({ count, ...size })
+      // Enough cells, and no whole row left empty
+      expect(grid.cols * grid.rows).toBeGreaterThanOrEqual(count)
+      expect((grid.rows - 1) * grid.cols).toBeLessThan(count)
+      expect(grid.tileWidth).toBeGreaterThan(0)
+      expect(Number.isInteger(grid.tileWidth) && Number.isInteger(grid.tileHeight)).toBe(true)
+      expect(Math.abs(grid.tileWidth / grid.tileHeight - ASPECT)).toBeLessThan(0.02)
+      expect(grid.width).toBe(grid.cols * grid.tileWidth + (grid.cols - 1) * GAP)
+      expect(grid.height).toBe(grid.rows * grid.tileHeight + (grid.rows - 1) * GAP)
+      expect(grid.width).toBeLessThanOrEqual(size.width)
+      expect(grid.height).toBeLessThanOrEqual(size.height)
+    })
+
+    it('makes tiles smaller (never bigger) as people join', () => {
+      const widths = counts.map((count) => gridLayout({ count, ...size }).tileWidth)
+      for (let i = 1; i < widths.length; i++) expect(widths[i]).toBeLessThanOrEqual(widths[i - 1])
+    })
+
+    it('fills the container on one side: no other grid has bigger tiles', () => {
+      for (const count of counts) {
+        const grid = gridLayout({ count, ...size })
+        const freeWidth = size.width - grid.width
+        const freeHeight = size.height - grid.height
+        // Bounded by the width or by the height, within a pixel per column / row of rounding
+        expect(Math.min(freeWidth / grid.cols, (freeHeight / grid.rows) * ASPECT)).toBeLessThan(2)
+      }
+    })
+  })
+
+  it('lays out the usual cases like Zoom does on a 16:9 screen', () => {
+    const wide = containers.wide
+    expect(counts.map((count) => shape(count, wide))).toEqual([
+      '1x1',
+      '2x1',
+      '2x2',
+      '2x2',
+      '3x2',
+      '3x2',
+      '3x3',
+      '3x3',
+    ])
+  })
+
+  it('puts tiles side by side when wide and stacks them when tall', () => {
+    expect(shape(3, containers.ultrawide)).toBe('3x1')
+    expect(shape(4, containers.ultrawide)).toBe('2x2')
+    expect(shape(2, containers.portrait)).toBe('1x2')
+    expect(shape(4, containers.portrait)).toBe('1x4')
+    expect(shape(8, containers.portrait)).toBe('2x4')
+  })
+
+  it('one tile takes the whole width or the whole height', () => {
+    expect(gridLayout({ count: 1, width: 1280, height: 720 })).toEqual({
+      cols: 1,
+      rows: 1,
+      tileWidth: 1280,
+      tileHeight: 720,
+      width: 1280,
+      height: 720,
+    })
+    expect(gridLayout({ count: 1, width: 1600, height: 450 }).tileWidth).toBe(800)
+    expect(gridLayout({ count: 1, width: 390, height: 700 }).tileHeight).toBe(219)
+  })
+
+  it('reflows as the container is resized: wider never means smaller tiles', () => {
+    for (const count of counts) {
+      let previous = 0
+      for (let width = 320; width <= 2400; width += 40) {
+        const { tileWidth } = gridLayout({ count, width, height: 720 })
+        expect(tileWidth).toBeGreaterThanOrEqual(previous)
+        previous = tileWidth
+      }
+    }
+    // A desktop window narrowed to a phone's width goes from a row of two to a column of two
+    expect(shape(2, { width: 1280, height: 600 })).toBe('2x1')
+    expect(shape(2, { width: 420, height: 600 })).toBe('1x2')
+  })
+
+  it('takes another aspect ratio and gap', () => {
+    const grid = gridLayout({ count: 4, width: 808, height: 808, aspect: 1, gap: 8 })
+    expect(grid).toMatchObject({ cols: 2, rows: 2, tileWidth: 400, tileHeight: 400 })
+    expect(gridLayout({ count: 2, width: 400, height: 300, gap: 0 })).toMatchObject({
+      cols: 1,
+      rows: 2,
+      width: 266,
+    })
+  })
+
+  it('gives an empty grid for nothing to lay out or no room', () => {
+    const empty = { cols: 0, rows: 0, tileWidth: 0, tileHeight: 0, width: 0, height: 0 }
+    expect(gridLayout({ count: 0, width: 800, height: 600 })).toEqual(empty)
+    expect(gridLayout({ count: 3, width: 0, height: 600 })).toEqual(empty)
+    expect(gridLayout({ count: 3, width: 800, height: -1 })).toEqual(empty)
+    expect(gridLayout({ count: Number.NaN, width: 800, height: 600 })).toEqual(empty)
+    expect(gridLayout({ count: 8, width: 20, height: 20, gap: 8 })).toEqual(empty)
+  })
+
+  it('uses square tiles in a portrait container, so a phone gets a 2 × 2 grid like the mockup', () => {
+    expect(tileAspect(1280, 720)).toBe(DEFAULT_TILE_ASPECT)
+    expect(tileAspect(800, 800)).toBe(DEFAULT_TILE_ASPECT)
+    expect(tileAspect(390, 700)).toBe(PORTRAIT_TILE_ASPECT)
+    const portrait = (count: number) => {
+      const grid = gridLayout({ count, width: 390, height: 700, aspect: tileAspect(390, 700) })
+      expect(grid.tileWidth).toBe(grid.tileHeight)
+      expect(grid.height).toBeLessThanOrEqual(700)
+      return `${grid.cols}x${grid.rows}`
+    }
+    expect(counts.map(portrait)).toEqual(['1x1', '1x2', '1x3', '2x2', '2x3', '2x3', '2x4', '2x4'])
+  })
+})

@@ -55,3 +55,22 @@ export function ChevronUpIcon() {
     </svg>
   )
 }
+
+/** Sound bars: the nameplate's speaking mark, so speaking is not shown by colour alone */
+export function SpeakingIcon() {
+  return (
+    <svg {...common}>
+      <path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" />
+    </svg>
+  )
+}
+
+/** A circling arrow: reconnecting */
+export function ReconnectIcon() {
+  return (
+    <svg {...common}>
+      <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+      <path d="M21 3v5h-5" />
+    </svg>
+  )
+}

@@ -75,6 +75,7 @@ export const strings = {
     mediaLost: '聲音與畫面中斷了。請檢查網路，再按「重試」。',
     relayed: '經由轉送伺服器',
     micMuted: '麥克風已關',
+    speaking: '正在說話',
   },
   // The room's microphone, camera and speaker (e2-t05, e2-t06, e2-t09)
   devices: {

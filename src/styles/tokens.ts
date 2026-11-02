@@ -91,10 +91,45 @@ export const fontSize = {
 
 export const radius = {
   tile: '12px',
+  nameplate: '8px',
   button: '10px',
   panel: '16px',
   pill: '999px',
 } as const
+
+/**
+ * A camera-off tile's initial sits on a colour picked from the member's name (DESIGN.md §5, the
+ * mockup's avatars). Tiles are dark in both schemes, so these are fixed, not CSS variables; the
+ * white initial is ≥ 4.5:1 on every one.
+ */
+export const avatar = {
+  text: '#FFFFFF',
+  backgrounds: [
+    '#1D4ED8',
+    '#7C3AED',
+    '#0E7490',
+    '#B45309',
+    '#BE185D',
+    '#475569',
+    '#047857',
+    '#9333EA',
+  ],
+} as const
+
+/** The same name always gets the same colour (FNV-1a over the code points) */
+export function avatarColor(name: string): string {
+  let hash = 0x811c9dc5
+  for (const char of name) {
+    hash ^= char.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 0x01000193)
+  }
+  // FNV's low bits are weak: mix the high ones in before taking a few (murmur3's finaliser)
+  hash ^= hash >>> 16
+  hash = Math.imul(hash, 0x85ebca6b)
+  hash ^= hash >>> 13
+  const { backgrounds } = avatar
+  return backgrounds[(hash >>> 0) % backgrounds.length]
+}
 
 /** Spacing in multiples of 4 px: space(2) → '8px' */
 export const space = (steps: number): string => `${steps * 4}px`
