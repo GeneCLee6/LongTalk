@@ -3,7 +3,8 @@ import { strings } from '../strings.ts'
 import { color, font } from '../styles/tokens.ts'
 
 // The mark from docs/design/logo/logo-mark.svg (two speech bubbles woven into ∞), drawn in the
-// primary token so it follows the light and dark schemes. Brand finalisation is e4-t19.
+// primary token so it follows the light and dark schemes. The favicon, app icons and Open Graph
+// image are files rendered from the same SVGs (e4-t19, src/brand.ts).
 
 export function LogoMark({ size = 32 }: { size?: number }) {
   return (

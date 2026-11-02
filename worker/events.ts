@@ -67,7 +67,7 @@ export async function handleEvents(
 /**
  * One Analytics Engine data point per event (DEPLOY.md §8 has the SQL): index1 and blob1 the
  * event type; blob2 its detail (join: `ok` or the failure reason; reconnect: the layer; media:
- * `relay` or `direct`; error: `error` or `rejection`); blob3–5 an error's name, message, source;
+ * `relay` or `direct`; error: `error` or `rejection`; rating: the score `1`–`5`); blob3–5 an error's name, message, source;
  * blob6 the app version; double1 = 1.
  */
 function writeAnalytics(env: TelemetryEnv, events: readonly ClientEvent[]): void {
@@ -100,6 +100,8 @@ function detail(event: ClientEvent): string {
       return event.relay ? 'relay' : 'direct'
     case 'error':
       return event.kind
+    case 'rating':
+      return String(event.score)
   }
 }
 

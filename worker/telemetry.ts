@@ -7,6 +7,7 @@ import {
   type ClientEvent,
   type ErrorSample,
   type EventCounts,
+  type RatingScore,
   type TelemetrySummary,
 } from '../shared/telemetry.ts'
 
@@ -56,6 +57,11 @@ function count(into: EventCounts, event: ClientEvent): void {
     case 'error':
       into.errors++
       return
+    case 'rating': {
+      const ratings = (into.ratings ??= {})
+      ratings[event.score] = (ratings[event.score] ?? 0) + 1
+      return
+    }
   }
 }
 
@@ -76,6 +82,12 @@ function addCounts(into: EventCounts, from: EventCounts): void {
     number,
   ][]) {
     into.reconnect[layer] = (into.reconnect[layer] ?? 0) + n
+  }
+  // Counters stored before D4 have no ratings
+  for (const [score, n] of Object.entries(from.ratings ?? {})) {
+    const key = Number(score) as RatingScore
+    const ratings = (into.ratings ??= {})
+    ratings[key] = (ratings[key] ?? 0) + (n ?? 0)
   }
 }
 
@@ -185,16 +197,16 @@ export class TelemetryLedger {
 }
 
 /** Per client (a hash of its IP), per window: what POST /api/events accepts */
-export const EVENT_RATE = { events: 60, errors: 10, windowMs: 10 * 60_000 } as const
+export const EVENT_RATE = { events: 60, errors: 10, ratings: 3, windowMs: 10 * 60_000 } as const
 /** Clients tracked at once; beyond this the expired ones go, then everyone (memory, not safety) */
 const MAX_TRACKED_CLIENTS = 10_000
 
-type Window = { start: number; events: number; errors: number }
+type Window = { start: number; events: number; errors: number; ratings: number }
 
 /**
  * Fixed-window rate limit per client: at most EVENT_RATE.events events (of which
- * EVENT_RATE.errors client errors) per EVENT_RATE.windowMs. In memory only: an eviction forgets
- * it, which at worst lets one window through twice.
+ * EVENT_RATE.errors client errors and EVENT_RATE.ratings ratings) per EVENT_RATE.windowMs. In
+ * memory only: an eviction forgets it, which at worst lets one window through twice.
  */
 export class EventRateLimit {
   private readonly windows = new Map<string, Window>()
@@ -204,7 +216,7 @@ export class EventRateLimit {
     let window = this.windows.get(client)
     if (!window || now - window.start >= EVENT_RATE.windowMs) {
       if (!window && this.windows.size >= MAX_TRACKED_CLIENTS) this.prune(now)
-      window = { start: now, events: 0, errors: 0 }
+      window = { start: now, events: 0, errors: 0, ratings: 0 }
       this.windows.set(client, window)
     }
     const accepted: ClientEvent[] = []
@@ -213,6 +225,11 @@ export class EventRateLimit {
       if (event.type === 'error') {
         if (window.errors >= EVENT_RATE.errors) continue
         window.errors++
+      }
+      // One person leaving a few rooms is fine; one IP stuffing the average is not
+      if (event.type === 'rating') {
+        if (window.ratings >= EVENT_RATE.ratings) continue
+        window.ratings++
       }
       window.events++
       accepted.push(event)

@@ -239,7 +239,11 @@ export const strings = {
       rebuilds: '媒體重建',
       relayRatio: '經由 TURN 轉送',
       errors: '用戶端錯誤',
+      rating: '離開評分（平均）',
+      ratingDistribution: '評分分布',
     },
+    ratingAverage: (average: string, count: number) => `${average}（${count} 則）`,
+    ratingScore: (score: number, count: number) => `${score} 分 ${count}`,
     reasons: {
       notFound: '找不到房間',
       full: '房間已滿',
@@ -263,6 +267,20 @@ export const strings = {
         ? '事件也寫進 Workers Analytics Engine，可用 SQL API 細查（DEPLOY.md §8）。'
         : '這個部署沒有 Analytics Engine 綁定，只有上方的計數。',
     privacy: '統計只記事件種類與原因，不含名字、房號、聊天內容或 IP。',
+  },
+  // After pressing 「離開」, or when the room closed while we were away from it (e4-t18)
+  left: {
+    title: '你已經離開會議室',
+    body: (room: string) => `你離開了「${room}」。`,
+    closedTitle: '這間會議室已經關閉',
+    closedBody: '房間沒有人超過 10 分鐘就會自動關閉。要繼續聊，回首頁開一間新的房。',
+    question: '這次通話的品質如何？',
+    scores: { 1: '很差', 2: '不太好', 3: '普通', 4: '不錯', 5: '很好' },
+    scoreLabel: (score: number, label: string) => `${score} 分：${label}`,
+    thanks: '謝謝你的回饋！',
+    privacy: '只記分數，不記你的名字或這間會議室。',
+    rejoin: '重新加入',
+    home: '回首頁',
   },
   // A part of the app that could not be loaded (e4-t20): a network blip, or a new deployment
   // replaced the files this page was built with

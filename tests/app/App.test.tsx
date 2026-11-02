@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PROTOCOL_VERSION } from '../../shared/protocol.ts'
 import { App } from '../../src/App.tsx'
+import { telemetry } from '../../src/telemetry.ts'
 
 const ROOM_ID = 'abcdefghij'
 const TOKEN = 'S'.repeat(43)
@@ -191,7 +192,7 @@ describe('joining a room', () => {
     )
   })
 
-  it('leaves on purpose: tells the room, forgets the session and goes home', async () => {
+  it('leaves on purpose: tells the room, forgets the session, shows the after-leave screen', async () => {
     stubApi()
     localStorage.setItem('longtalk.name', 'Gene')
     sessionStorage.setItem(`longtalk.session.${ROOM_ID}`, TOKEN)
@@ -201,7 +202,66 @@ describe('joining a room', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: '離開' })))
     expect(socket.sent.at(-1)).toBe('{"t":"leave"}')
     expect(sessionStorage.getItem(`longtalk.session.${ROOM_ID}`)).toBeNull()
+    // e4-t18
+    expect(screen.getByRole('heading', { name: '你已經離開會議室' })).toBeInTheDocument()
+    expect(screen.getByText(`你離開了「會議室 ${ROOM_ID}」。`)).toBeInTheDocument()
+    expect(window.location.pathname).toBe(`/r/${ROOM_ID}`)
+    fireEvent.click(screen.getByRole('button', { name: '回首頁' }))
     expect(window.location.pathname).toBe('/')
+    expect(screen.getByRole('button', { name: '開一間房' })).toBeInTheDocument()
+  })
+
+  it('rates the call once, as telemetry with the score only (e4-t18)', async () => {
+    stubApi()
+    const track = vi.spyOn(telemetry, 'track')
+    const flush = vi.spyOn(telemetry, 'flush')
+    localStorage.setItem('longtalk.name', 'Gene')
+    sessionStorage.setItem(`longtalk.session.${ROOM_ID}`, TOKEN)
+    visit(`/r/${ROOM_ID}`)
+    await screen.findByText('目前 2 人在線')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: '離開' })))
+    const four = screen.getByRole('button', { name: '4 分：不錯' })
+    fireEvent.click(four)
+    expect(track).toHaveBeenCalledWith({ type: 'rating', score: 4 })
+    expect(flush).toHaveBeenCalled()
+    expect(four).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('status')).toHaveTextContent('謝謝你的回饋')
+    // Once: the other scores are now disabled
+    expect(screen.getByRole('button', { name: '5 分：很好' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '5 分：很好' }))
+    expect(track.mock.calls.filter(([event]) => event.type === 'rating')).toHaveLength(1)
+    track.mockRestore()
+    flush.mockRestore()
+  })
+
+  it('rejoins through the pre-join screen with the remembered name, as a new member', async () => {
+    stubApi()
+    localStorage.setItem('longtalk.name', 'Gene')
+    sessionStorage.setItem(`longtalk.session.${ROOM_ID}`, TOKEN)
+    visit(`/r/${ROOM_ID}`)
+    await screen.findByText('目前 2 人在線')
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: '離開' })))
+    fireEvent.click(screen.getByRole('button', { name: '重新加入' }))
+    expect(await screen.findByRole('heading', { name: '準備加入' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: '你的名字' })).toHaveValue('Gene')
+    fireEvent.click(screen.getByRole('button', { name: '加入' }))
+    expect(await screen.findByText('目前 2 人在線')).toBeInTheDocument()
+    // The session was forgotten on leaving: no token, so a new member
+    expect(RoomSocket.instances.at(-1)!.sent[0]).toBe('{"t":"join","name":"Gene","token":null}')
+  })
+
+  it('says the room closed (no rejoin) when it is gone after we were in it', async () => {
+    stubApi()
+    localStorage.setItem('longtalk.name', 'Gene')
+    sessionStorage.setItem(`longtalk.session.${ROOM_ID}`, TOKEN)
+    visit(`/r/${ROOM_ID}`)
+    await screen.findByText('目前 2 人在線')
+    const socket = RoomSocket.instances.at(-1)!
+    await act(async () => socket.onclose?.({ code: 4404 }))
+    expect(await screen.findByRole('heading', { name: '這間會議室已經關閉' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重新加入' })).toBeNull()
+    expect(screen.getByRole('button', { name: '1 分：很差' })).toBeEnabled()
+    expect(sessionStorage.getItem(`longtalk.session.${ROOM_ID}`)).toBeNull()
   })
 
   it('renames the room (as host) and myself, and copies the link (e1-t05)', async () => {

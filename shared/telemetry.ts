@@ -7,8 +7,9 @@
 // chat text, no IP addresses (the Worker uses the IP for the rate limit in memory only). A
 // client error's message is cut short and scrubbed of URLs, e-mail addresses and long numbers.
 //
-// Adding a kind (D4's rating, e4-t18): add it to ClientEvent and to parseEvent; a Worker that
-// does not know a kind yet drops just that event, so browsers may be deployed first.
+// Adding a kind: add it to ClientEvent and to parseEvent; a Worker that does not know a kind yet
+// drops just that event, so browsers may be deployed first. D4 added `rating` (e4-t18): the
+// after-leave screen's one question, a score and nothing else (no comment, no room, no member).
 import type { UsageStatus } from './usage.ts'
 
 /** At most this many events per request */
@@ -36,12 +37,20 @@ export const JOIN_FAILURES: readonly JoinFailure[] = [
 export type ConnectionLayer = 'socket' | 'media'
 export const CONNECTION_LAYERS: readonly ConnectionLayer[] = ['socket', 'media']
 
+/** The after-leave question's scale (e4-t18, E4: 「一題評分（1–5）」); 5 is best */
+export const RATING_SCORES = [1, 2, 3, 4, 5] as const
+export type RatingScore = (typeof RATING_SCORES)[number]
+
+export const isRatingScore = (value: unknown): value is RatingScore =>
+  typeof value === 'number' && (RATING_SCORES as readonly number[]).includes(value)
+
 /**
  * - `join`: the room welcomed us (`ok`) or refused / could not be reached before it did
  * - `reconnect`: a connection that was up dropped and the browser started reconnecting
  * - `rebuild`: the media session was thrown away and built anew (RoomMedia)
  * - `media`: the media session has been up for a while; `relay`: it goes through TURN
  * - `error`: an uncaught error or unhandled rejection in the page (sampled, rate-limited)
+ * - `rating`: the score given on the after-leave screen (e4-t18), at most once per leave
  */
 export type ClientEvent =
   | { type: 'join'; ok: true }
@@ -50,6 +59,7 @@ export type ClientEvent =
   | { type: 'rebuild' }
   | { type: 'media'; relay: boolean }
   | { type: 'error'; kind: 'error' | 'rejection'; name: string; message: string; source: string }
+  | { type: 'rating'; score: RatingScore }
 
 export type ClientEventType = ClientEvent['type']
 
@@ -109,6 +119,8 @@ export function parseEvent(value: unknown): ClientEvent | null {
         source: scrubErrorText(source, MAX_ERROR_SOURCE_CHARS),
       }
     }
+    case 'rating':
+      return isRatingScore(event.score) ? { type: 'rating', score: event.score } : null
     default:
       return null
   }
@@ -149,6 +161,30 @@ export type EventCounts = {
   media: number
   relayed: number
   errors: number
+  /**
+   * After-leave ratings by score (e4-t18). Optional: counters stored before D4 do not have it,
+   * read them with `ratingsOf`
+   */
+  ratings?: Partial<Record<RatingScore, number>>
+}
+
+/** A period's ratings by score, 0 where none (also for counters stored before D4) */
+export function ratingsOf(counts: EventCounts): Record<RatingScore, number> {
+  const out = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
+  for (const score of RATING_SCORES) out[score] = counts.ratings?.[score] ?? 0
+  return out
+}
+
+/** How many ratings, and their average (null when there are none) */
+export function ratingStats(counts: EventCounts): { count: number; average: number | null } {
+  const byScore = ratingsOf(counts)
+  let count = 0
+  let total = 0
+  for (const score of RATING_SCORES) {
+    count += byScore[score]
+    total += score * byScore[score]
+  }
+  return { count, average: count === 0 ? null : total / count }
 }
 
 /** A client error as /admin lists it (already scrubbed) */
@@ -204,4 +240,5 @@ export const emptyCounts = (): EventCounts => ({
   media: 0,
   relayed: 0,
   errors: 0,
+  ratings: {},
 })

@@ -5,8 +5,11 @@ import {
   EVENTS_PATH,
   MAX_EVENTS_BODY_BYTES,
   MAX_EVENTS_PER_BATCH,
+  emptyCounts,
   parseEvent,
   parseEventBatch,
+  ratingsOf,
+  ratingStats,
   scrubErrorText,
   type ClientEvent,
 } from '../../shared/telemetry.ts'
@@ -17,6 +20,8 @@ import {
   MAX_ERROR_SAMPLES,
   TELEMETRY_DAYS,
   TelemetryLedger,
+  dayKey,
+  hourKey,
 } from '../../worker/telemetry.ts'
 
 const HOUR = 3_600_000
@@ -49,6 +54,11 @@ describe('event validation (e11-t03)', () => {
     expect(parseEvent({ type: 'rebuild' })).toEqual({ type: 'rebuild' })
     expect(parseEvent({ type: 'media', relay: true })).toEqual({ type: 'media', relay: true })
     expect(parseEvent({ ...error(), type: 'error' })).toEqual(error())
+    // e4-t18: the score and nothing else
+    expect(parseEvent({ type: 'rating', score: 5, comment: 'dropped', room: 'x' })).toEqual({
+      type: 'rating',
+      score: 5,
+    })
   })
 
   it('refuses unknown kinds and bad fields', () => {
@@ -58,15 +68,19 @@ describe('event validation (e11-t03)', () => {
     expect(
       parseEvent({ type: 'error', kind: 'panic', name: '', message: '', source: '' }),
     ).toBeNull()
-    // D4's rating is not known yet: dropped, not an error (browsers may be deployed first)
-    expect(parseEvent({ type: 'rating', score: 5 })).toBeNull()
+    // A kind the Worker does not know: dropped, not an error (browsers may be deployed first)
+    expect(parseEvent({ type: 'reaction', emoji: 'x' })).toBeNull()
+    // The rating's scale is 1–5, whole numbers only (e4-t18)
+    for (const score of [0, 6, 3.5, '4', null, undefined]) {
+      expect(parseEvent({ type: 'rating', score })).toBeNull()
+    }
     expect(parseEvent(null)).toBeNull()
     expect(parseEvent([])).toBeNull()
   })
 
   it('takes a batch of 1–20, dropping what it does not understand one by one', () => {
     const batch = (events: unknown[]) => JSON.stringify({ events })
-    expect(parseEventBatch(batch([{ type: 'rebuild' }, { type: 'rating', score: 5 }]))).toEqual([
+    expect(parseEventBatch(batch([{ type: 'rebuild' }, { type: 'rating', score: 9 }]))).toEqual([
       { type: 'rebuild' },
     ])
     expect(parseEventBatch(batch([]))).toBeNull()
@@ -122,9 +136,36 @@ describe('TelemetryLedger', () => {
       media: 2,
       relayed: 1,
       errors: 1,
+      ratings: {},
     })
     expect(summary.last7d).toMatchObject({ joinOk: 2, joinFail: { lost: 1 } })
     expect(summary.days.map((d) => d.day)).toEqual(['2026-11-02', '2026-10-30'])
+  })
+
+  it('counts ratings by score for the distribution and the average (e4-t18)', () => {
+    const ledger = new TelemetryLedger(null)
+    const rating = (score: 1 | 2 | 3 | 4 | 5): ClientEvent => ({ type: 'rating', score })
+    ledger.add([rating(5), rating(4)], NOW - 3 * DAY)
+    ledger.add([rating(5), rating(5), rating(2)], NOW)
+    const summary = ledger.summary(NOW)
+    expect(summary.last24h.ratings).toEqual({ 5: 2, 2: 1 })
+    expect(summary.last7d.ratings).toEqual({ 5: 3, 4: 1, 2: 1 })
+    expect(ratingStats(summary.last24h)).toEqual({ count: 3, average: 4 })
+    expect(ratingStats(summary.last7d).average).toBeCloseTo(4.2)
+    expect(ratingsOf(summary.last24h)).toEqual({ 1: 0, 2: 1, 3: 0, 4: 0, 5: 2 })
+  })
+
+  it('reads counters stored before D4, which have no ratings', () => {
+    const old = emptyCounts()
+    delete old.ratings
+    const ledger = new TelemetryLedger({
+      hours: { [hourKey(NOW)]: structuredClone(old) },
+      days: { [dayKey(NOW)]: structuredClone(old) },
+      errors: [],
+    })
+    expect(ratingStats(ledger.summary(NOW).last24h)).toEqual({ count: 0, average: null })
+    ledger.add([{ type: 'rating', score: 3 }], NOW)
+    expect(ledger.summary(NOW).last7d.ratings).toEqual({ 3: 1 })
   })
 
   it(`forgets days after ${TELEMETRY_DAYS} days and survives being stored`, () => {
@@ -179,6 +220,13 @@ describe('EventRateLimit', () => {
     const taken = limit.take('c', [...errors, { type: 'rebuild' }], 0)
     expect(taken.filter((e) => e.type === 'error')).toHaveLength(EVENT_RATE.errors)
     expect(taken.at(-1)).toEqual({ type: 'rebuild' })
+
+    // A few ratings per client per window: one IP cannot stuff the average (e4-t18)
+    const ratings = Array<ClientEvent>(EVENT_RATE.ratings + 4).fill({ type: 'rating', score: 1 })
+    expect(limit.take('d', [...ratings, { type: 'rebuild' }], 0)).toHaveLength(
+      EVENT_RATE.ratings + 1,
+    )
+    expect(limit.take('d', [{ type: 'rating', score: 5 }], 1)).toEqual([])
   })
 })
 

@@ -3,6 +3,9 @@ import styled from 'styled-components'
 import {
   CONNECTION_LAYERS,
   JOIN_FAILURES,
+  RATING_SCORES,
+  ratingsOf,
+  ratingStats,
   type AdminSummary,
   type EventCounts,
 } from '../../shared/telemetry.ts'
@@ -23,7 +26,7 @@ const text = strings.admin
  * Locked until the owner types the password (the Worker secret ADMIN_TOKEN, DEPLOY.md §8); the
  * password stays in this page's memory only (a reload locks it again) and travels in a header.
  * Shows the telemetry counters (joins and why they failed, reconnects, rebuilds, the TURN ratio,
- * client errors), the alert flags and the month's Realtime usage.
+ * client errors, the after-leave ratings), the alert flags and the month's Realtime usage.
  */
 export default function AdminPage() {
   const [draft, setDraft] = useState('')
@@ -250,6 +253,22 @@ const listed = <K extends string>(
   return parts.length === 0 ? text.none : parts.join('、')
 }
 
+/** The average score with how many gave one, or — */
+const ratingAverage = (counts: EventCounts) => {
+  const { count, average } = ratingStats(counts)
+  return average === null ? text.none : text.ratingAverage(average.toFixed(1), count)
+}
+
+/** Highest score first, only the scores someone gave */
+const ratingDistribution = (counts: EventCounts) => {
+  const byScore = ratingsOf(counts)
+  const parts = [...RATING_SCORES]
+    .reverse()
+    .filter((score) => byScore[score] > 0)
+    .map((score) => text.ratingScore(score, byScore[score]))
+  return parts.length === 0 ? text.none : parts.join('、')
+}
+
 const metricRows: { label: string; value: (counts: EventCounts) => string }[] = [
   { label: text.metrics.joins, value: (c) => String(c.joinOk + failed(c)) },
   { label: text.metrics.joinRate, value: (c) => ratio(c.joinOk, c.joinOk + failed(c)) },
@@ -264,6 +283,8 @@ const metricRows: { label: string; value: (counts: EventCounts) => string }[] = 
   { label: text.metrics.rebuilds, value: (c) => String(c.rebuild) },
   { label: text.metrics.relayRatio, value: (c) => ratio(c.relayed, c.media) },
   { label: text.metrics.errors, value: (c) => String(c.errors) },
+  { label: text.metrics.rating, value: ratingAverage },
+  { label: text.metrics.ratingDistribution, value: ratingDistribution },
 ]
 
 const dayColumns: { label: string; value: (counts: EventCounts) => string }[] = [
@@ -285,6 +306,7 @@ const dayColumns: { label: string; value: (counts: EventCounts) => string }[] = 
     value: (c) => (c.media === 0 ? text.none : text.percent(c.relayed / c.media)),
   },
   { label: text.metrics.errors, value: (c) => String(c.errors) },
+  { label: text.metrics.rating, value: ratingAverage },
 ]
 
 const Page = styled.main`

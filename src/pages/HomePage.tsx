@@ -146,6 +146,12 @@ const JoinForm = styled.form`
   display: flex;
   flex: 1 1 280px;
   gap: ${space(2)};
+
+  /* The box takes the room; 「加入」 never squeezes into two lines */
+  > button {
+    flex: none;
+    white-space: nowrap;
+  }
 `
 
 const Notice = styled.p`
