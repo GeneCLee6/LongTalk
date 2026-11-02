@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { ClientMessage, ErrorCode } from '../../shared/protocol.ts'
 import { watchNetwork } from './network.ts'
-import { RoomConnection, type RoomConnectionState } from './RoomConnection.ts'
+import { RoomConnection, type ChatSendResult, type RoomConnectionState } from './RoomConnection.ts'
 import { clearSession, loadSession, saveSession } from './session.ts'
 
 export interface RoomConnectionHandle {
@@ -16,6 +16,8 @@ export interface RoomConnectionHandle {
   rename: (name: string) => void
   /** Listens for the room's refusals (`error` codes); returns a function that stops listening */
   onError: (listener: (code: ErrorCode) => void) => () => void
+  /** Sends a chat message (D3); anything but `sent` means the text should stay in the box */
+  sendChat: (text: string) => ChatSendResult
 }
 
 /**
@@ -58,5 +60,6 @@ export function useRoomConnection(roomId: string, name: string): RoomConnectionH
     retry: connection.retry,
     rename: connection.rename,
     onError: connection.onError,
+    sendChat: connection.sendChat,
   }
 }

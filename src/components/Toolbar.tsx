@@ -16,6 +16,12 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
   sharing?: boolean
   /** 分享螢幕 pressed (or 停止分享 while sharing) */
   onToggleShare: () => void
+  /** The chat is open (desktop side panel or phone drawer, D3) */
+  chatOpen?: boolean
+  /** Unread chat messages: the badge on 聊天 (none at 0) */
+  chatUnread?: number
+  /** 聊天 pressed: open or close the chat */
+  onToggleChat: () => void
   /** A button whose feature is not there yet was pressed: say it is coming */
   onComingSoon: (feature: string) => void
   /** What 更多 offers (rename the room, change my name, share the link); share comes first */
@@ -27,8 +33,9 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
 /**
  * The room's bottom toolbar (e4-t06, DESIGN.md §4.3): microphone and camera (MediaControls),
  * share, chat, participants, more, leave. Share works from D1 (e3-t03: while sharing it is
- * 停止分享, in red); chat and participants land in D3 and F1: until then they are shown dimmed
- * (aria-disabled) and a press says they are coming.
+ * 停止分享, in red); chat from D3 (e5-t02: opens the side panel or drawer, with the unread count
+ * as its badge); participants lands in F1: until then it is shown dimmed (aria-disabled) and a
+ * press says it is coming.
  *
  * On a phone (e4-t07) it is one row of icons within a thumb's reach: microphone, camera, chat,
  * participants, more (DESIGN.md §4.3's fifth key, reactions, comes with E5; participants holds
@@ -45,6 +52,9 @@ export function Toolbar({
   canShareScreen,
   sharing = false,
   onToggleShare,
+  chatOpen = false,
+  chatUnread = 0,
+  onToggleChat,
   onComingSoon,
   moreItems,
   onLeave,
@@ -86,10 +96,13 @@ export function Toolbar({
         />
       )}
       <IconButton
-        label={strings.toolbar.chat}
+        label={strings.toolbar.chatUnread(chatUnread)}
+        caption={strings.toolbar.chat}
         icon={<ChatIcon />}
+        badge={chatUnread > 0 ? chatUnread : undefined}
         showLabel
-        {...soon(strings.toolbar.chat)}
+        aria-expanded={chatOpen}
+        onClick={onToggleChat}
       />
       <IconButton
         label={strings.toolbar.participantsCount(memberCount)}

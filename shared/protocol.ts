@@ -48,6 +48,13 @@
 //    A host stopping someone else's share is RoomHost.stopShare, put on the wire with F1
 //    (e1-t06, worker/roles.ts). In an audio-only month (shared/usage.ts) `share` is refused with
 //    `audio_only`: the SFU proxy would refuse the screen's video anyway.
+// 11. Chat (D3, shared/chat.ts): `chat` sends a message (≤ MAX_CHAT_CHARS, normalizeChatText on
+//    both ends). The room keeps the latest CHAT_HISTORY messages in storage, apart from the view
+//    (no patch carries chat): right after every `welcome` it sends the whole history as `chat`
+//    frames of at most CHAT_CHUNK messages, the first with `reset` (replace what you have, which
+//    also brings a member who reconnected up to date), and every accepted message after that as
+//    `chat` with that one message, to everyone (the sender too: that is its acknowledgement).
+//    A member over CHAT_RATE is answered `error` code `rate_limited`.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -56,15 +63,17 @@
 // v5 → v6 (C2): `Member.role`, `RoomInfo.name` / `createdBy` / `startedAt`, `rename`,
 //   `renameRoom`, error code `forbidden`.
 // v6 → v7 (D1): `RoomInfo.share`, `share`, `unshare`, error codes `share_busy`, `audio_only`.
+// v7 → v8 (D3): `chat` both ways, error code `rate_limited`; MAX_CLIENT_MESSAGE_CHARS 4096 → 16384.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
 // View types are `type` aliases, not interfaces, so they stay assignable to JsonValue.
+import { isChatMessage, normalizeChatText, type ChatMessage } from './chat.ts'
 import type { JsonValue, PatchOp } from './patch.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 7
+export const PROTOCOL_VERSION = 8
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -82,8 +91,11 @@ export const RECONNECT_GRACE_MS = 60_000
 export const MAX_MEMBERS = 50
 /** Sockets that opened but have not joined yet, on top of MAX_MEMBERS */
 export const MAX_PENDING_SOCKETS = 10
-/** Client messages larger than this are refused without parsing */
-export const MAX_CLIENT_MESSAGE_CHARS = 4_096
+/**
+ * Client messages larger than this (UTF-16 code units) are refused without parsing: room for a
+ * MAX_CHAT_CHARS message of astral characters (2 units each) with every escape JSON may add
+ */
+export const MAX_CLIENT_MESSAGE_CHARS = 16_384
 /** A display name's length in characters (code points), after normalizeName */
 export const MAX_NAME_CHARS = 40
 /** A room name's length in characters (code points), after normalizeName */
@@ -210,12 +222,21 @@ export type PatchMessage = { t: 'patch'; rev: number; ops: PatchOp[] }
  * - `forbidden`: the member may not do that (`renameRoom` from someone who is not the host)
  * - `share_busy`: `share` without `takeOver` while someone else shares (ask, then take over)
  * - `audio_only`: `share` in a month that is audio-only (shared/usage.ts)
+ * - `rate_limited`: `chat` faster than CHAT_RATE (D3); the message was not kept
  */
-export type ErrorCode = 'bad_message' | 'forbidden' | 'share_busy' | 'audio_only'
+export type ErrorCode = 'bad_message' | 'forbidden' | 'share_busy' | 'audio_only' | 'rate_limited'
 
 export type ErrorMessage = { t: 'error'; code: ErrorCode }
 
-export type ServerMessage = WelcomeMessage | SnapshotMessage | PatchMessage | ErrorMessage
+/**
+ * Chat messages (D3, shared/chat.ts), oldest first. `reset`: the first frame of the history the
+ * room sends after every `welcome`; replace every message you have with these (more frames of
+ * the history may follow without it). Without `reset`: new messages, append them.
+ */
+export type ChatServerMessage = { t: 'chat'; messages: ChatMessage[]; reset?: true }
+
+export type ServerMessage =
+  WelcomeMessage | SnapshotMessage | PatchMessage | ErrorMessage | ChatServerMessage
 
 // ── Browser → server ─────────────────────────────────────────────────────────────────────────
 
@@ -258,7 +279,11 @@ export type ShareMessage = { t: 'share'; takeOver: boolean }
 /** Stop sharing (the member's own share) */
 export type UnshareMessage = { t: 'unshare' }
 
+/** A chat message to everyone in the room (D3); `text` is normalizeChatText's */
+export type ChatClientMessage = { t: 'chat'; text: string }
+
 export type ClientMessage =
+  | ChatClientMessage
   | JoinMessage
   | ResyncMessage
   | LeaveMessage
@@ -349,6 +374,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return typeof value.takeOver === 'boolean' ? { t: 'share', takeOver: value.takeOver } : null
     case 'unshare':
       return { t: 'unshare' }
+    case 'chat': {
+      const text = normalizeChatText(value.text)
+      return text === null ? null : { t: 'chat', text }
+    }
     case 'stats':
       return isSfuId(value.sessionId) &&
         Number.isSafeInteger(value.bytesReceived) &&
@@ -422,6 +451,10 @@ export function parseServerMessage(raw: string): ServerMessage | null {
       return isRev(value.rev) && Array.isArray(value.ops) ? (value as PatchMessage) : null
     case 'error':
       return value as ErrorMessage
+    case 'chat':
+      return Array.isArray(value.messages) && value.messages.every(isChatMessage)
+        ? (value as ChatServerMessage)
+        : null
     default:
       return null
   }

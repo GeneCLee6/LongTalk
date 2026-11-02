@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { isRoomId } from '../../shared/room-id.ts'
 import type { UsageStatus } from '../../shared/usage.ts'
+import type { ClientEvent } from '../../shared/telemetry.ts'
 import { handleRequest, type Env } from '../../worker/app.ts'
+import { TelemetryLedger } from '../../worker/telemetry.ts'
 
 /** A fake ROOM namespace: one object per name, with `create`, `summary` and `fetch` like RoomDO's */
 function fakeRooms() {
@@ -58,8 +60,25 @@ function env(overrides: Partial<Env> = {}): Env {
     ASSETS: { fetch: vi.fn(async () => new Response('<html>')) } as unknown as Fetcher,
     ROOM: fakeRooms().namespace,
     USAGE: fakeUsage().namespace,
+    TELEMETRY: fakeTelemetry().namespace,
     ...overrides,
   }
+}
+
+/** A fake TELEMETRY namespace: accepts everything, answers an empty summary */
+function fakeTelemetry() {
+  const recorded: { client: string; events: ClientEvent[] }[] = []
+  const namespace = {
+    idFromName: (name: string) => name,
+    get: () => ({
+      record: async (client: string, events: ClientEvent[]) => {
+        recorded.push({ client, events })
+        return events
+      },
+      summary: async () => new TelemetryLedger(null).summary(5000),
+    }),
+  }
+  return { namespace: namespace as unknown as Env['TELEMETRY'], recorded }
 }
 
 const post = () => new Request('https://x/api/rooms', { method: 'POST' })
@@ -235,5 +254,43 @@ describe('/api/turn through the router', () => {
     )
     expect(res.status).toBe(401)
     expect(e.ASSETS.fetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('/api/events and /api/admin through the router (e11-t03)', () => {
+  it('hands events to TelemetryDO and answers 202', async () => {
+    const telemetry = fakeTelemetry()
+    const e = env({ TELEMETRY: telemetry.namespace })
+    const res = await handleRequest(
+      new Request('https://x/api/events', {
+        method: 'POST',
+        body: JSON.stringify({ events: [{ type: 'join', ok: true }] }),
+      }),
+      e,
+    )
+    expect(res.status).toBe(202)
+    expect(telemetry.recorded[0].events).toEqual([{ type: 'join', ok: true }])
+    expect(e.ASSETS.fetch).not.toHaveBeenCalled()
+  })
+
+  it('keeps /api/admin closed without the secret, and opens it with the header', async () => {
+    const closed = await handleRequest(new Request('https://x/api/admin/summary'), env())
+    expect(closed.status).toBe(503)
+    const e = env({ ADMIN_TOKEN: 'fake-test-token' })
+    const wrong = await handleRequest(
+      new Request('https://x/api/admin/summary', { headers: { Authorization: 'Bearer nope' } }),
+      e,
+    )
+    expect(wrong.status).toBe(401)
+    const ok = await handleRequest(
+      new Request('https://x/api/admin/summary', {
+        headers: { Authorization: 'Bearer fake-test-token' },
+      }),
+      e,
+    )
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toMatchObject({ usage: { month: '2026-10' }, analyticsEngine: false })
+    const other = await handleRequest(new Request('https://x/api/admin/other'), e)
+    expect(other.status).toBe(404)
   })
 })

@@ -1,3 +1,10 @@
+import {
+  CHAT_HISTORY,
+  ChatRateLimit,
+  MAX_CHAT_CHARS,
+  normalizeChatText,
+  type ChatMessage,
+} from '../../shared/chat.ts'
 import { applyPatch } from '../../shared/patch.ts'
 import {
   CloseCode,
@@ -34,6 +41,10 @@ export interface RoomConnectionState {
   view: RoomView | null
   /** How many times the room welcomed this connection: grows with every rejoin */
   welcomes: number
+  /** The room's chat (D3), oldest first: the history after each welcome, then what arrives */
+  chat: ChatMessage[]
+  /** The room has sent its chat history at least once (the messages before it are not new) */
+  chatLoaded: boolean
 }
 
 /** The bits of WebSocket the connection uses, so tests can pass a fake */
@@ -63,6 +74,14 @@ export interface RoomConnectionOptions {
 }
 
 const OPEN = 1
+
+/**
+ * What became of a chat message (D3): `sent` went to the room (it shows once the room echoes
+ * it); the others were not sent and the text should stay in the box: `empty` (nothing but
+ * spaces), `tooLong` (over MAX_CHAT_CHARS), `rateLimited` (over CHAT_RATE: the room would refuse
+ * it), `offline` (the socket is not open)
+ */
+export type ChatSendResult = 'sent' | 'empty' | 'tooLong' | 'rateLimited' | 'offline'
 
 /** Once the page is back in the foreground, a socket that does not answer a ping this soon is dead */
 export const PROBE_TIMEOUT_MS = 5_000
@@ -121,7 +140,11 @@ export class RoomConnection {
     token: null,
     view: null,
     welcomes: 0,
+    chat: [],
+    chatLoaded: false,
   }
+  /** The room's CHAT_RATE, checked here too so a refused message stays in the box */
+  private readonly chatRate = new ChatRateLimit()
   private readonly listeners = new Set<() => void>()
   private readonly errorListeners = new Set<(code: ErrorCode) => void>()
 
@@ -156,7 +179,15 @@ export class RoomConnection {
     if (this.running) return
     this.running = true
     this.backoff.reset()
-    this.update({ status: 'connecting', you: null, token: null, view: null, welcomes: 0 })
+    this.update({
+      status: 'connecting',
+      you: null,
+      token: null,
+      view: null,
+      welcomes: 0,
+      chat: [],
+      chatLoaded: false,
+    })
     this.open()
   }
 
@@ -295,6 +326,7 @@ export class RoomConnection {
         this.backoff.reset()
         this.onToken(message.token)
         this.update({
+          ...this.state,
           status: 'open',
           you: message.you,
           token: message.token,
@@ -322,12 +354,35 @@ export class RoomConnection {
       case 'error':
         for (const listener of this.errorListeners) listener(message.code)
         return
+      case 'chat': {
+        // Only after this socket's welcome (the history follows it)
+        if (this.rev < 0) return
+        if (message.reset) {
+          this.update({ ...this.state, chat: message.messages, chatLoaded: true })
+          return
+        }
+        const last = this.state.chat.at(-1)?.id ?? 0
+        const added = message.messages.filter((m) => m.id > last)
+        if (added.length === 0) return
+        this.update({ ...this.state, chat: [...this.state.chat, ...added].slice(-CHAT_HISTORY) })
+        return
+      }
     }
   }
 
   /** Sends a message if the socket is open; dropped otherwise (the room resends state on join) */
   send = (message: ClientMessage): void => {
     if (this.socket?.readyState === OPEN) this.socket.send(JSON.stringify(message))
+  }
+
+  /** Sends a chat message to everyone (D3, e5-t01); see ChatSendResult */
+  sendChat = (raw: string, now: number = Date.now()): ChatSendResult => {
+    const text = normalizeChatText(raw)
+    if (text === null) return [...raw.trim()].length > MAX_CHAT_CHARS ? 'tooLong' : 'empty'
+    if (this.state.status !== 'open' || this.socket?.readyState !== OPEN) return 'offline'
+    if (!this.chatRate.take('self', now)) return 'rateLimited'
+    this.send({ t: 'chat', text })
+    return 'sent'
   }
 
   /**

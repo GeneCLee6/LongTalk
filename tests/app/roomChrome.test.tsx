@@ -66,6 +66,7 @@ describe('Toolbar', () => {
     memberCount: 3,
     canShareScreen: true,
     onToggleShare: vi.fn(),
+    onToggleChat: vi.fn(),
     onComingSoon: vi.fn(),
     moreItems: [{ id: 'rename-self', label: strings.rename.self, onSelect: vi.fn() }],
     onLeave: vi.fn(),
@@ -87,17 +88,30 @@ describe('Toolbar', () => {
     ])
   })
 
-  it('shows chat and participants as coming soon, and says so when pressed', () => {
+  it('shows participants as coming soon, and says so when pressed', () => {
     const p = props()
     render(<Toolbar {...p} />)
-    for (const name of ['聊天', '參與者（3 人）']) {
-      const button = screen.getByRole('button', { name })
-      expect(button).toHaveAttribute('aria-disabled', 'true')
-      fireEvent.click(button)
-    }
-    expect(p.onComingSoon).toHaveBeenNthCalledWith(1, '聊天')
-    expect(p.onComingSoon).toHaveBeenNthCalledWith(2, '參與者')
-    expect(strings.toolbar.comingSoon('聊天')).toBe('「聊天」即將推出')
+    const button = screen.getByRole('button', { name: '參與者（3 人）' })
+    expect(button).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(button)
+    expect(p.onComingSoon).toHaveBeenCalledWith('參與者')
+    expect(strings.toolbar.comingSoon('參與者')).toBe('「參與者」即將推出')
+  })
+
+  it('opens the chat, with the unread count as the badge and in its name (D3, e5-t02)', () => {
+    const p = props()
+    const { rerender } = render(<Toolbar {...p} />)
+    const chat = screen.getByRole('button', { name: '聊天' })
+    expect(chat).not.toHaveAttribute('aria-disabled')
+    expect(chat).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(chat)
+    expect(p.onToggleChat).toHaveBeenCalledTimes(1)
+    expect(p.onComingSoon).not.toHaveBeenCalled()
+    rerender(<Toolbar {...p} chatUnread={3} />)
+    const unread = screen.getByRole('button', { name: '聊天（3 則未讀）' })
+    expect(unread).toHaveTextContent('3')
+    rerender(<Toolbar {...p} chatOpen />)
+    expect(screen.getByRole('button', { name: '聊天' })).toHaveAttribute('aria-expanded', 'true')
   })
 
   it('shares the screen, and stops sharing from the same button (D1, e3-t03)', () => {

@@ -104,6 +104,17 @@ jobs:
           printf '%s' "$REALTIME_TURN_KEY_ID" | npx wrangler secret put REALTIME_TURN_KEY_ID --name "$WORKER"
           printf '%s' "$REALTIME_TURN_KEY_API_TOKEN" | npx wrangler secret put REALTIME_TURN_KEY_API_TOKEN --name "$WORKER"
 
+      - name: Give the preview the /admin password (optional)
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          ADMIN_TOKEN: ${{ secrets.PREVIEW_ADMIN_TOKEN }}
+        run: |
+          if [ -z "$ADMIN_TOKEN" ]; then
+            echo "::notice::PREVIEW_ADMIN_TOKEN is not set; /admin stays closed (503) on this preview (DEPLOY.md §8)"
+            exit 0
+          fi
+          printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN --name "$WORKER"
+
       - name: Smoke test
         if: steps.creds.outputs.ready == 'true'
         env:

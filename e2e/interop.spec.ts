@@ -8,7 +8,9 @@ import { strings } from '../src/strings.ts'
 // show on the other side, and turning them back on must bring the media back. Then screen sharing
 // (D1): one member shares, the others see the share in the main area and hear its sound (D2);
 // the sharer turns the sound off from the bar and the others hear silence; another takes over
-// after the question; the share stops from the bar and everyone is back in the gallery. Runs
+// after the question; the share stops from the bar and everyone is back in the gallery. Before
+// the media checks, chat (D3): one member sends a message with a link, the others see the unread
+// badge, open the chat and find it there. Runs
 // against a
 // deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
 // `e2e`).
@@ -333,6 +335,36 @@ interop(
         ).toBeVisible()
       }
     })
+
+    await interop.step(
+      'Alice chats: Bob and Carol see the unread badge, then the message with its link (D3)',
+      async () => {
+        const link = `https://example.com/longtalk-e2e-${Date.now()}`
+        const text = `大家好，連結在這 ${link}`
+        await toolbarButton(alice, strings.toolbar.chat).click()
+        const box = alice.page.getByRole('textbox', { name: strings.chat.inputLabel })
+        await box.fill(text)
+        await box.press('Enter')
+        await expect(box).toHaveValue('')
+        await expect(alice.page.getByRole('log', { name: strings.chat.messages })).toContainText(
+          text,
+        )
+        for (const other of [bob, carol]) {
+          const unread = toolbarButton(other, strings.toolbar.chatUnread(1))
+          await expect(unread, `${other.name} sees one unread message`).toBeVisible()
+          await unread.click()
+          const log = other.page.getByRole('log', { name: strings.chat.messages })
+          await expect(log).toContainText(text)
+          await expect(log.getByRole('link', { name: link })).toHaveAttribute(
+            'rel',
+            'noopener noreferrer',
+          )
+          // Closed again, so the stage has its full width for the media checks below
+          await toolbarButton(other, strings.toolbar.chat).click()
+        }
+        await toolbarButton(alice, strings.toolbar.chat).click()
+      },
+    )
 
     await interop.step('every way: video frames and audio', async () => {
       for (const viewer of members) {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { CHAT_CHUNK, CHAT_HISTORY, CHAT_RATE, type ChatMessage } from '../../shared/chat.ts'
 import { applyPatch } from '../../shared/patch.ts'
 import {
   CloseCode,
@@ -61,6 +62,7 @@ function setup(prefix = 'm') {
     sessions: [] as SessionRecord[],
     usage: null as UsageCursor | null,
     schedule: {} as Schedule,
+    chat: new Map<number, ChatMessage>(),
     cleared: 0,
   }
   const host = new RoomHost({
@@ -86,6 +88,12 @@ function setup(prefix = 'm') {
       },
       saveSchedule: (schedule) => {
         saved.schedule = schedule
+      },
+      saveChat: (message) => {
+        saved.chat.set(message.id, structuredClone(message))
+      },
+      dropChat: (id) => {
+        saved.chat.delete(id)
       },
       clear: () => {
         saved.cleared++
@@ -188,6 +196,8 @@ describe('RoomHost', () => {
           usage: 'normal',
         },
       },
+      // The chat history follows every welcome (D3), even when there is none yet
+      { t: 'chat', messages: [], reset: true },
     ])
     expect(t.host.summary()).toMatchObject({ memberCount: 1 })
   })
@@ -197,12 +207,12 @@ describe('RoomHost', () => {
     const a = t.join('Gene')
     t.tick(5)
     const b = t.join('小潔')
-    expect(a.client.received[1]).toEqual({
+    expect(a.client.received[2]).toEqual({
       t: 'patch',
       rev: 2,
       ops: [{ op: 'set', path: ['members', b.id], value: member(b.id, '小潔', t.now()) }],
     })
-    expect(b.client.received).toHaveLength(1)
+    expect(b.client.received).toHaveLength(2)
     expect(b.client.received[0]).toMatchObject({ t: 'welcome', you: b.id, rev: 2 })
     expect(a.client.view).toEqual(b.client.view)
     expect(t.saved.rev).toBe(2)
@@ -1110,5 +1120,160 @@ describe('RoomHost screen share (e3-t02): one sharer, take-over, host stop', () 
     const { b } = three()
     t.host.message(b.conn, JSON.stringify({ t: 'share' }))
     expect(b.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+  })
+})
+
+describe('RoomHost chat (e5-t01): history, rate limit, storage', () => {
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    t = setup()
+    t.host.create(ROOM)
+  })
+
+  const say = (conn: string, text: string) =>
+    t.host.message(conn, JSON.stringify({ t: 'chat', text }))
+  const chatFrames = (client: FakeClient) =>
+    client.received.filter((message) => message.t === 'chat')
+
+  it('sends every message to everyone joined, the sender too, with name, id and time', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    const pending = t.open()
+    t.tick(7)
+    say(a.conn, '  大家好\r\n連結 https://example.com  ')
+    const message: ChatMessage = {
+      id: 1,
+      from: a.id,
+      name: 'Gene',
+      text: '大家好\n連結 https://example.com',
+      at: t.now(),
+    }
+    expect(a.client.received.at(-1)).toEqual({ t: 'chat', messages: [message] })
+    expect(b.client.received.at(-1)).toEqual({ t: 'chat', messages: [message] })
+    // A socket that has not joined hears nothing
+    expect(pending.client.received).toEqual([])
+    expect([...t.saved.chat.values()]).toEqual([message])
+    // Chat never touches the view or its numbering
+    expect(t.saved.rev).toBe(2)
+  })
+
+  it('refuses empty, too long, or non-string text, and strips control characters', () => {
+    const a = t.join('Gene')
+    say(a.conn, ' \n\t ')
+    expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+    say(a.conn, '字'.repeat(2001))
+    expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+    t.host.message(a.conn, JSON.stringify({ t: 'chat', text: 42 }))
+    expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+    say(a.conn, '字'.repeat(2000))
+    expect(a.client.received.at(-1)).toMatchObject({ t: 'chat' })
+    say(a.conn, 'a\u0000b\u202Ec\u0007d<b>e</b>')
+    // Text, not HTML: angle brackets stay as they are (the browser renders text only)
+    expect(t.host.chatHistory.at(-1)!.text).toBe('abcd<b>e</b>')
+  })
+
+  it('keeps the name a message was sent under after a rename', () => {
+    const a = t.join('Gene')
+    say(a.conn, 'before')
+    t.host.message(a.conn, JSON.stringify({ t: 'rename', name: 'Gene Lee' }))
+    say(a.conn, 'after')
+    expect(t.host.chatHistory.map((m) => m.name)).toEqual(['Gene', 'Gene Lee'])
+  })
+
+  it(`limits each member to ${CHAT_RATE.count} messages in ${CHAT_RATE.windowMs / 1000} s`, () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    for (let i = 0; i < CHAT_RATE.count; i++) say(a.conn, `m${i}`)
+    say(a.conn, 'one too many')
+    expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'rate_limited' })
+    expect(t.host.chatHistory).toHaveLength(CHAT_RATE.count)
+    // Someone else is not held back by it
+    say(b.conn, 'mine')
+    expect(t.host.chatHistory.at(-1)!.text).toBe('mine')
+    // The window slides
+    t.tick(CHAT_RATE.windowMs)
+    say(a.conn, 'later')
+    expect(t.host.chatHistory.at(-1)!.text).toBe('later')
+  })
+
+  it(`keeps the latest ${CHAT_HISTORY} messages, in memory and in storage`, () => {
+    const a = t.join('Gene')
+    for (let i = 1; i <= CHAT_HISTORY + 5; i++) {
+      t.tick(CHAT_RATE.windowMs)
+      say(a.conn, `message ${i}`)
+    }
+    expect(t.host.chatHistory).toHaveLength(CHAT_HISTORY)
+    expect(t.host.chatHistory[0]).toMatchObject({ id: 6, text: 'message 6' })
+    expect(t.host.chatHistory.at(-1)).toMatchObject({ id: CHAT_HISTORY + 5 })
+    expect([...t.saved.chat.keys()].sort((x, y) => x - y)).toEqual(
+      t.host.chatHistory.map((m) => m.id),
+    )
+  })
+
+  it('sends a joiner the whole history in chunks after its welcome, the first one resetting', () => {
+    const a = t.join('Gene')
+    for (let i = 1; i <= CHAT_CHUNK + 3; i++) {
+      t.tick(CHAT_RATE.windowMs)
+      say(a.conn, `message ${i}`)
+    }
+    const b = t.join('小潔')
+    expect(b.client.received.map((message) => message.t)).toEqual(['welcome', 'chat', 'chat'])
+    const [first, second] = chatFrames(b.client)
+    expect(first).toMatchObject({ reset: true })
+    expect(first.t === 'chat' && first.messages).toHaveLength(CHAT_CHUNK)
+    expect(second).not.toHaveProperty('reset')
+    expect(second.t === 'chat' && second.messages.map((m) => m.text)).toEqual([
+      `message ${CHAT_CHUNK + 1}`,
+      `message ${CHAT_CHUNK + 2}`,
+      `message ${CHAT_CHUNK + 3}`,
+    ])
+  })
+
+  it('sends the history again after a reconnect, so missed messages arrive', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    t.host.closed(b.conn)
+    say(a.conn, 'while you were away')
+    const again = t.join('小潔', b.token)
+    expect(chatFrames(again.client)).toEqual([
+      { t: 'chat', messages: [t.host.chatHistory[0]], reset: true },
+    ])
+  })
+
+  it('keeps the history across hibernation and eviction, and continues the ids', () => {
+    const a = t.join('Gene')
+    say(a.conn, 'one')
+    say(a.conn, 'two')
+    const woken = setup('w')
+    woken.host.restore(
+      t.saved.room as RoomInfo,
+      t.saved.rev,
+      t.saved.sessions,
+      [{ conn: a.conn, openedAt: 0 }],
+      null,
+      null,
+      // Storage lists them in key order; restore sorts anyway
+      [...t.saved.chat.values()].reverse(),
+    )
+    woken.clients.set(a.conn, a.client)
+    expect(woken.host.chatHistory.map((m) => m.text)).toEqual(['one', 'two'])
+    const b = woken.join('小潔')
+    expect(chatFrames(b.client)[0]).toMatchObject({
+      reset: true,
+      messages: [{ id: 1 }, { id: 2 }],
+    })
+    woken.host.message(a.conn, JSON.stringify({ t: 'chat', text: 'three' }))
+    expect(woken.host.chatHistory.at(-1)).toMatchObject({ id: 3, text: 'three' })
+  })
+
+  it('forgets the chat when the room closes', () => {
+    const a = t.join('Gene')
+    say(a.conn, 'bye')
+    t.host.message(a.conn, JSON.stringify({ t: 'leave' }))
+    t.tick(EMPTY_ROOM_TTL_MS + 1)
+    t.host.alarm()
+    expect(t.host.exists).toBe(false)
+    expect(t.host.chatHistory).toEqual([])
+    expect(t.saved.cleared).toBe(1)
   })
 })
