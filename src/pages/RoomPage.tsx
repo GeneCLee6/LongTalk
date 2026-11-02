@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import styled from 'styled-components'
 import {
@@ -18,6 +18,7 @@ import { ChatPanel } from '../components/ChatPanel.tsx'
 import { ChatPreview } from '../components/ChatPreview.tsx'
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx'
 import { Drawer } from '../components/Drawer.tsx'
+import { LeftScreen } from '../components/LeftScreen.tsx'
 import {
   PhoneLayoutContext,
   usePhoneLayoutQuery,
@@ -68,6 +69,7 @@ import { useScreenShare } from '../room/useScreenShare.ts'
 import { copyRoomLink, roomUrl, shareRoomLink, type LinkOutcome } from '../room/shareLink.ts'
 import { useSpeaking } from '../room/useSpeaking.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
+import { telemetry } from '../telemetry.ts'
 import { strings } from '../strings.ts'
 import { color, font, fontSize, layer, radius, media, space } from '../styles/tokens.ts'
 
@@ -101,9 +103,21 @@ export default function RoomPage() {
   return <RoomEntry key={roomId} roomId={roomId} />
 }
 
+/** Where this tab is with the room: deciding to join, in it, or out of it again (e4-t18) */
+type Stage =
+  | { at: 'prejoin' }
+  | { at: 'room'; choices: JoinChoices }
+  | { at: 'left'; reason: LeftReason; roomName: string }
+
+/** `left`: pressed 「離開」; `closed`: the room was gone when we came back to it */
+export type LeftReason = 'left' | 'closed'
+
 function RoomEntry({ roomId }: { roomId: string }) {
   const navigate = useNavigate()
-  const [joined, setJoined] = useState<JoinChoices | null>(() => resume(roomId))
+  const [stage, setStage] = useState<Stage>(() => {
+    const resumed = resume(roomId)
+    return resumed ? { at: 'room', choices: resumed } : { at: 'prejoin' }
+  })
   const [supported] = useState(supportsWebRtc)
   if (!supported) {
     return (
@@ -112,12 +126,35 @@ function RoomEntry({ roomId }: { roomId: string }) {
       </Page>
     )
   }
-  if (joined) {
+  if (stage.at === 'room') {
     // The room is dark whatever the system scheme (DESIGN.md §1.2)
     return (
       <Shell data-theme="dark">
-        <Room roomId={roomId} choices={joined} onLeft={() => navigate('/')} />
+        <Room
+          roomId={roomId}
+          choices={stage.choices}
+          onLeft={(reason, roomName) => setStage({ at: 'left', reason, roomName })}
+        />
       </Shell>
+    )
+  }
+  if (stage.at === 'left') {
+    return (
+      <Page>
+        <LeftScreen
+          reason={stage.reason}
+          roomName={stage.roomName}
+          onRate={(score) => {
+            // Sent at once: the next thing the person does may well be closing the tab
+            telemetry.track({ type: 'rating', score })
+            telemetry.flush()
+          }}
+          // Back through the pre-join screen, with the remembered name and devices; the session
+          // was forgotten on leaving, so this is a new member
+          onRejoin={() => setStage({ at: 'prejoin' })}
+          onHome={() => navigate('/')}
+        />
+      </Page>
     )
   }
   return (
@@ -126,7 +163,7 @@ function RoomEntry({ roomId }: { roomId: string }) {
         roomId={roomId}
         onJoin={(choices) => {
           saveName(choices.name)
-          setJoined(choices)
+          setStage({ at: 'room', choices })
         }}
       />
     </Page>
@@ -235,7 +272,7 @@ function Room({
 }: {
   roomId: string
   choices: JoinChoices
-  onLeft: () => void
+  onLeft: (reason: LeftReason, roomName: string) => void
 }) {
   const {
     state,
@@ -246,15 +283,25 @@ function Room({
     onError,
     sendChat,
   } = useRoomConnection(roomId, choices.name)
-  const gone = state.status === 'notFound'
-  useEffect(() => {
-    if (gone) clearSession(roomId)
-  }, [gone, roomId])
-
   const toasts = useToasts()
   const { show } = toasts
   const roomInfo = state.view?.room ?? null
   const title = roomTitle(roomId, roomInfo)
+  const gone = state.status === 'notFound'
+  // Whether the room ever welcomed this tab: a room that is gone after that closed while we were
+  // away (asleep, offline past the grace period) and gets the after-leave screen; one that was
+  // never there (a stale tab resuming) is just not found
+  const welcomed = useRef(false)
+  useEffect(() => {
+    if (state.you) welcomed.current = true
+  }, [state.you])
+  const onGone = useEffectEvent(() => {
+    clearSession(roomId)
+    if (welcomed.current) onLeft('closed', title)
+  })
+  useEffect(() => {
+    if (gone) onGone()
+  }, [gone])
   const self = state.you ? state.view?.members[state.you] : undefined
   const isHost = self?.role === 'host'
   useHostNotice(self?.role, show)
@@ -458,7 +505,7 @@ function Room({
   const selfReconnecting = state.status === 'reconnecting' || media.status === 'reconnecting'
   const onLeave = () => {
     leave()
-    onLeft()
+    onLeft('left', title)
   }
   const remoteAudio = (member: (typeof members)[number]) => {
     const mic = member.tracks.find((t) => t.kind === 'mic')

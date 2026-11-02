@@ -161,6 +161,7 @@ describe('AdminPage', () => {
         media: 4,
         relayed: 1,
         errors: 2,
+        ratings: { 5: 3, 4: 1, 1: 1 },
       },
       last7d: { ...emptyCounts(), joinOk: 20 },
       days: [{ day: '2026-11-02', ...emptyCounts(), joinOk: 9 }],
@@ -226,6 +227,11 @@ describe('AdminPage', () => {
     expect(totals.getByRole('row', { name: /進房成功率/ })).toHaveTextContent('90%（9／10）')
     expect(totals.getByRole('row', { name: /進房失敗/ })).toHaveTextContent('連不上 1')
     expect(totals.getByRole('row', { name: /經由 TURN 轉送/ })).toHaveTextContent('25%（1／4）')
+    // The after-leave ratings (e4-t18): average and distribution, highest score first
+    expect(totals.getByRole('row', { name: /離開評分（平均）/ })).toHaveTextContent('4.0（5 則）')
+    expect(totals.getByRole('row', { name: /評分分布/ })).toHaveTextContent(
+      '5 分 3、4 分 1、1 分 1',
+    )
     expect(screen.getByText('TypeError: x is undefined')).toBeInTheDocument()
     expect(screen.getByText(/2026-11：約 12.3 GB（正常）/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: strings.admin.lock }))
