@@ -529,6 +529,9 @@ function useHostNotice(role: Role | undefined, show: (text: string) => void) {
   }, [role, show])
 }
 
+/** How long someone speaks before the speaker layout gives them the big tile */
+const SPEAKER_HOLD_MS = 1000
+
 /**
  * One member's tile, with the speaking outline from their microphone's level (e4-t05); tells the
  * room when they start speaking (the speaker layout shows the last one heard, e4-t07)
@@ -543,8 +546,11 @@ function MemberTile({
   useEffect(() => {
     heard.current = onHeard
   })
+  // Only after a second of speech: a cough or a beep does not take the big tile
   useEffect(() => {
-    if (speaking) heard.current?.()
+    if (!speaking) return
+    const timer = setTimeout(() => heard.current?.(), SPEAKER_HOLD_MS)
+    return () => clearTimeout(timer)
   }, [speaking])
   return <Tile {...tile} speaking={speaking} />
 }
