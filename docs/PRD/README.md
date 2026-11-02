@@ -21,7 +21,7 @@ LongTalk 的產品需求都在這個資料夾。三層結構（為什麼是三�
 
 | Epic | 名稱 | Task 完成 | AC 完成 | M0 task | M1 task | 狀態 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [E1](e1-rooms-identity-host.md) | 房間、身分與主持人控制 | 5／19 | 0／8 | 5 | 12 | in progress |
+| [E1](e1-rooms-identity-host.md) | 房間、身分與主持人控制 | 5／19 | 2／8 | 5 | 12 | in progress |
 | [E2](e2-media-core-webrtc-sfu.md) | 媒體核心：WebRTC 與 SFU | 10／18 | 1／8 | 10 | 7 | in progress |
 | [E3](e3-screen-share.md) | 螢幕分享 | 0／11 | 0／6 | 5 | 5 | planned |
 | [E4](e4-meeting-ui-experience.md) | 會議室介面與體驗 | 6／20 | 0／10 | 9 | 11 | in progress |
@@ -32,7 +32,7 @@ LongTalk 的產品需求都在這個資料夾。三層結構（為什麼是三�
 | [E9](e9-remote-control.md) | 遠端控制 | 0／9 | 0／5 | 0 | 0 | planned（M3） |
 | [E10](e10-scale-breakout.md) | 規模：大房間與分組討論室 | 0／7 | 0／5 | 0 | 0 | planned（M2–M3） |
 | [E11](e11-platform-security-cost-ops.md) | 平台、安全、成本與維運 | 4／13 | 2／11 | 5 | 4 | in progress |
-| | **合計** | **22／132** | **3／75** | **36** | **51** | |
+| | **合計** | **22／132** | **5／75** | **36** | **51** | |
 
 里程碑分布：M0 36 個、M1 51 個、M2 29 個、M3 16 個。M2／M3 的 task 刻意只寫一行，動工前那一批再細拆。
 
