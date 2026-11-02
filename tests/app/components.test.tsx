@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { Button } from '../../src/components/Button.tsx'
 import { IconButton } from '../../src/components/IconButton.tsx'
+import { TileVisibleContext } from '../../src/components/layoutContext.ts'
+import { MemberAudio } from '../../src/components/MemberAudio.tsx'
 import { Menu } from '../../src/components/Menu.tsx'
 import { Tile } from '../../src/components/Tile.tsx'
 import { ToastViewport } from '../../src/components/Toast.tsx'
@@ -152,28 +154,54 @@ describe('Menu with choices (e2-t06)', () => {
   })
 })
 
-describe('Tile (e4-t04, e4-t05)', () => {
-  const audio = { kind: 'audio' } as MediaStreamTrack
-  const video = { kind: 'video' } as MediaStreamTrack
-
-  it('marks a muted microphone on the nameplate and plays through the chosen speaker', () => {
+describe('MemberAudio (e4-t07)', () => {
+  it("plays a member's microphone through the chosen speaker, and nothing without one", () => {
     const setSinkId = vi.fn(async () => {})
     Object.defineProperty(HTMLMediaElement.prototype, 'setSinkId', {
       value: setSinkId,
       configurable: true,
     })
-    const { rerender } = render(
-      <Tile name="Wei" video={null} audio={audio} micMuted speaker="spk-1" />,
-    )
-    expect(screen.getByRole('img', { name: strings.room.micMuted })).toBeInTheDocument()
+    const audio = { kind: 'audio' } as MediaStreamTrack
+    const { container, rerender } = render(<MemberAudio name="Wei" track={audio} speaker="spk-1" />)
+    expect(container.querySelector('audio[data-member="Wei"]')).not.toBeNull()
     expect(setSinkId).toHaveBeenCalledWith('spk-1')
-    rerender(<Tile name="Wei" video={null} audio={audio} micMuted={false} speaker={null} />)
-    expect(screen.queryByRole('img', { name: strings.room.micMuted })).toBeNull()
+    rerender(<MemberAudio name="Wei" track={null} speaker={null} />)
+    expect(container.querySelector('audio')).toBeNull()
     delete (HTMLMediaElement.prototype as { setSinkId?: unknown }).setSinkId
+  })
+})
+
+describe('Tile (e4-t04, e4-t05)', () => {
+  const video = { kind: 'video' } as MediaStreamTrack
+
+  it('marks a muted microphone on the nameplate', () => {
+    const { rerender } = render(<Tile name="Wei" video={null} micMuted />)
+    expect(screen.getByRole('img', { name: strings.room.micMuted })).toBeInTheDocument()
+    rerender(<Tile name="Wei" video={null} micMuted={false} />)
+    expect(screen.queryByRole('img', { name: strings.room.micMuted })).toBeNull()
+  })
+
+  it('shows the initial instead of the video while out of view (e4-t07)', () => {
+    const { rerender } = render(
+      <TileVisibleContext.Provider value={false}>
+        <Tile name="Wei" video={video} />
+      </TileVisibleContext.Provider>,
+    )
+    const tile = screen.getByRole('figure', { name: 'Wei' })
+    expect(screen.queryByLabelText(strings.room.tileVideo('Wei'))).toBeNull()
+    expect(tile).toHaveTextContent('W')
+    // Not "camera off": the camera is on, the tile is just not on screen
+    expect(tile).not.toHaveTextContent(strings.room.camOff)
+    rerender(
+      <TileVisibleContext.Provider value={true}>
+        <Tile name="Wei" video={video} />
+      </TileVisibleContext.Provider>,
+    )
+    expect(screen.getByLabelText(strings.room.tileVideo('Wei'))).toBeInTheDocument()
   })
 
   it('shows the initial on a colour from the name when the camera is off', () => {
-    render(<Tile name="小潔" video={null} audio={null} />)
+    render(<Tile name="小潔" video={null} />)
     const tile = screen.getByRole('figure', { name: '小潔' })
     expect(tile).toHaveTextContent('小')
     expect(tile).toHaveTextContent(strings.room.camOff)
@@ -187,44 +215,41 @@ describe('Tile (e4-t04, e4-t05)', () => {
   })
 
   it('shows the camera, mirrored only on our own tile, and marks our own tile 「你」', () => {
-    const { rerender } = render(<Tile name="Gene" you video={video} audio={null} />)
+    const { rerender } = render(<Tile name="Gene" you video={video} />)
     const own = screen.getByRole('figure', { name: `Gene（${strings.common.you}）` })
     expect(own).toHaveTextContent(strings.common.you)
     expect(own).not.toHaveTextContent(strings.room.camOff)
     expect(screen.getByLabelText(strings.room.tileVideo('Gene'))).toHaveStyle({
       transform: 'scaleX(-1)',
     })
-    // Never plays our own microphone back
-    expect(own.querySelector('audio')).toBeNull()
-    rerender(<Tile name="Wei" video={video} audio={audio} />)
+    rerender(<Tile name="Wei" video={video} />)
     expect(screen.getByLabelText(strings.room.tileVideo('Wei'))).toHaveStyle({ transform: 'none' })
-    expect(screen.getByRole('figure', { name: 'Wei' }).querySelector('audio')).not.toBeNull()
   })
 
   it('outlines a speaker, with a speaking mark so it is not colour alone', () => {
-    const { rerender } = render(<Tile name="Wei" video={null} audio={audio} speaking />)
+    const { rerender } = render(<Tile name="Wei" video={null} speaking />)
     const tile = screen.getByRole('figure', { name: 'Wei' })
     expect(tile).toHaveAttribute('data-speaking', 'true')
     expect(screen.getByRole('img', { name: strings.room.speaking })).toBeInTheDocument()
-    rerender(<Tile name="Wei" video={null} audio={audio} speaking={false} />)
+    rerender(<Tile name="Wei" video={null} speaking={false} />)
     expect(tile).not.toHaveAttribute('data-speaking')
     expect(screen.queryByRole('img', { name: strings.room.speaking })).toBeNull()
     // Muted or reconnecting: no outline whatever the level said
-    rerender(<Tile name="Wei" video={null} audio={audio} speaking micMuted />)
+    rerender(<Tile name="Wei" video={null} speaking micMuted />)
     expect(tile).not.toHaveAttribute('data-speaking')
-    rerender(<Tile name="Wei" video={null} audio={audio} speaking reconnecting />)
+    rerender(<Tile name="Wei" video={null} speaking reconnecting />)
     expect(tile).not.toHaveAttribute('data-speaking')
   })
 
   it('dims a reconnecting member and says so', () => {
-    render(<Tile name="佑佑" video={null} audio={null} reconnecting />)
+    render(<Tile name="佑佑" video={null} reconnecting />)
     const tile = screen.getByRole('figure', { name: '佑佑' })
     expect(tile).toHaveAttribute('data-reconnecting', 'true')
     expect(tile).toHaveTextContent(strings.room.reconnecting)
   })
 
   it('notes our own relayed media quietly', () => {
-    render(<Tile name="Gene" you relayed video={null} audio={null} />)
+    render(<Tile name="Gene" you relayed video={null} />)
     expect(screen.getByRole('figure', { name: `Gene（${strings.common.you}）` })).toHaveTextContent(
       strings.room.relayed,
     )

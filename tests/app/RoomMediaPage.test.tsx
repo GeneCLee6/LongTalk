@@ -124,7 +124,8 @@ describe('room page media', () => {
     const grid = await screen.findByRole('region', { name: '會議室畫面' }, SLOW)
     const tile = within(grid).getByRole('figure', { name: 'Wei' })
     await waitFor(() => expect(within(tile).getByLabelText('Wei 的畫面')).toBeInTheDocument(), SLOW)
-    expect(tile.querySelector('audio')).not.toBeNull()
+    // Their sound plays apart from the tile, so layouts can move tiles (e4-t07)
+    expect(document.querySelector('audio[data-member="Wei"]')).not.toBeNull()
     // Our own tile, with no camera in jsdom, shows the initial instead
     expect(within(grid).getByRole('figure', { name: 'Gene（你）' })).toHaveTextContent('G')
     // Subscribed exactly once, by the one live transport (StrictMode mounted twice)

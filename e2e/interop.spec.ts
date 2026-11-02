@@ -145,7 +145,8 @@ async function framesPerSecond(viewer: Member, other: Member): Promise<number> {
 
 /** The loudest sample of `other`'s microphone that `viewer` plays, over 1.5 seconds */
 async function audioPeak(viewer: Member, other: Member): Promise<number> {
-  const audio = tile(viewer, other).locator('audio')
+  // Sound plays apart from the tiles (MemberAudio, e4-t07), one element per member
+  const audio = viewer.page.locator(`audio[data-member="${other.name}"]`)
   if ((await audio.count()) === 0) return 0
   return audio.evaluate(async (element: HTMLAudioElement) => {
     const stream = element.srcObject

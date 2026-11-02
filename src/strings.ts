@@ -80,6 +80,16 @@ export const strings = {
     micMuted: '麥克風已關',
     speaking: '正在說話',
   },
+  // The stage on phones (e4-t07): pages of four tiles, the speaker layout
+  stage: {
+    pager: '分頁畫面',
+    hint: '左右滑動，或用方向鍵換頁',
+    pages: '換頁',
+    page: (page: number, pages: number) => `第 ${page} 頁，共 ${pages} 頁`,
+    previous: '上一頁',
+    next: '下一頁',
+    strip: '其他參與者',
+  },
   // The room's microphone, camera and speaker (e2-t05, e2-t06, e2-t09)
   devices: {
     controls: '會議控制',

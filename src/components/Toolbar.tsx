@@ -1,8 +1,9 @@
 import styled from 'styled-components'
 import { strings } from '../strings.ts'
-import { breakpoint, space } from '../styles/tokens.ts'
+import { space } from '../styles/tokens.ts'
 import { IconButton } from './IconButton.tsx'
 import { ChatIcon, LeaveIcon, MoreIcon, PeopleIcon, ScreenShareIcon } from './icons.tsx'
+import { usePhoneLayout } from './layoutContext.ts'
 import { MediaControls, type MediaControlsProps } from './MediaControls.tsx'
 import { Menu, type MenuItem } from './Menu.tsx'
 
@@ -15,6 +16,7 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
   onComingSoon: (feature: string) => void
   /** What 更多 offers (rename the room, change my name, share the link) */
   moreItems: MenuItem[]
+  /** Leave the room (on phones the top bar has the button instead) */
   onLeave: () => void
 }
 
@@ -22,6 +24,11 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
  * The room's bottom toolbar (e4-t06, DESIGN.md §4.3): microphone and camera (MediaControls),
  * share, chat, participants, more, leave. Share, chat and participants land in D1, D3 and F1:
  * until then they are shown dimmed (aria-disabled) and a press says they are coming.
+ *
+ * On a phone (e4-t07) it is one row of icons within a thumb's reach: microphone, camera, chat,
+ * participants, more (DESIGN.md §4.3's fifth key, reactions, comes with E5; participants holds
+ * its place until then). No screen sharing (phones cannot), and 離開 moves to the top bar's right
+ * end, away from the thumb, so nobody leaves by accident.
  */
 export function Toolbar({
   memberCount,
@@ -31,6 +38,7 @@ export function Toolbar({
   onLeave,
   ...media
 }: ToolbarProps) {
+  const phone = usePhoneLayout() !== null
   const soon = (feature: string) => ({
     'aria-disabled': true,
     title: strings.toolbar.comingSoon(feature),
@@ -38,15 +46,13 @@ export function Toolbar({
   })
   return (
     <MediaControls {...media}>
-      {canShareScreen && (
-        <WideOnly>
-          <IconButton
-            label={strings.toolbar.share}
-            icon={<ScreenShareIcon />}
-            showLabel
-            {...soon(strings.toolbar.share)}
-          />
-        </WideOnly>
+      {canShareScreen && !phone && (
+        <IconButton
+          label={strings.toolbar.share}
+          icon={<ScreenShareIcon />}
+          showLabel
+          {...soon(strings.toolbar.share)}
+        />
       )}
       <IconButton
         label={strings.toolbar.chat}
@@ -54,16 +60,14 @@ export function Toolbar({
         showLabel
         {...soon(strings.toolbar.chat)}
       />
-      <WideOnly>
-        <IconButton
-          label={strings.toolbar.participantsCount(memberCount)}
-          caption={strings.toolbar.participants}
-          icon={<PeopleIcon />}
-          badge={memberCount}
-          showLabel
-          {...soon(strings.toolbar.participants)}
-        />
-      </WideOnly>
+      <IconButton
+        label={strings.toolbar.participantsCount(memberCount)}
+        caption={strings.toolbar.participants}
+        icon={<PeopleIcon />}
+        badge={memberCount}
+        showLabel
+        {...soon(strings.toolbar.participants)}
+      />
       {moreItems.length > 0 && (
         <Menu
           label={strings.toolbar.more}
@@ -74,30 +78,20 @@ export function Toolbar({
           showLabel
         />
       )}
-      <Leave>
-        <IconButton
-          label={strings.toolbar.leave}
-          icon={<LeaveIcon />}
-          tone="danger"
-          showLabel
-          onClick={onLeave}
-        />
-      </Leave>
+      {!phone && (
+        <Leave>
+          <IconButton
+            label={strings.toolbar.leave}
+            icon={<LeaveIcon />}
+            tone="danger"
+            showLabel
+            onClick={onLeave}
+          />
+        </Leave>
+      )}
     </MediaControls>
   )
 }
-
-/**
- * Left out on phones until C3's phone toolbar (DESIGN.md §4.3: mic, camera, reactions, chat,
- * more): screen sharing is not there on phones anyway, the head count is in the top bar
- */
-const WideOnly = styled.span`
-  display: contents;
-
-  @media (max-width: ${breakpoint.phone}) {
-    display: none;
-  }
-`
 
 const Leave = styled.span`
   display: inline-flex;

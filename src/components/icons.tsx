@@ -131,3 +131,30 @@ export function LinkIcon() {
     </svg>
   )
 }
+
+/** A cross: close a drawer or sheet */
+export function CloseIcon() {
+  return (
+    <svg {...common}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
+  )
+}
+
+/** Previous page (the pager on a desktop window as narrow as a phone) */
+export function ChevronLeftIcon() {
+  return (
+    <svg {...common}>
+      <path d="m15 6-6 6 6 6" />
+    </svg>
+  )
+}
+
+/** Next page */
+export function ChevronRightIcon() {
+  return (
+    <svg {...common}>
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  )
+}

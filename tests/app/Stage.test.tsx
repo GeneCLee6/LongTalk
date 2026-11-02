@@ -1,6 +1,7 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Stage } from '../../src/components/Stage.tsx'
+import { Tile } from '../../src/components/Tile.tsx'
 import { strings } from '../../src/strings.ts'
 
 /** A ResizeObserver the test drives: resize(width, height) reports a new content box */
@@ -68,6 +69,136 @@ describe('Stage (e4-t04)', () => {
     expect(screen.getByRole('region', { name: strings.room.grid })).toHaveAttribute(
       'data-cols',
       '0',
+    )
+  })
+})
+
+const video = { kind: 'video' } as MediaStreamTrack
+const videoTiles = (count: number) =>
+  Array.from({ length: count }, (_, i) => <Tile key={`m${i}`} name={`m${i}`} video={video} />)
+const playing = () => screen.queryAllByLabelText(/的畫面$/).map((v) => v.getAttribute('aria-label'))
+
+describe('Stage, paged (e4-t07, a phone held upright)', () => {
+  it('shows one page of up to four without page controls', () => {
+    render(<Stage mode="paged">{videoTiles(4)}</Stage>)
+    FakeResizeObserver.last!.resize(374, 560)
+    const pager = screen.getByRole('region', { name: strings.room.grid })
+    expect(pager).toHaveAttribute('data-cols', '2')
+    expect(pager).toHaveAttribute('data-rows', '2')
+    expect(pager).toHaveAttribute('data-pages', '1')
+    expect(screen.queryByRole('group', { name: strings.stage.pages })).toBeNull()
+    expect(playing()).toHaveLength(4)
+  })
+
+  it('pages four at a time; only the page in view plays video', () => {
+    render(<Stage mode="paged">{videoTiles(6)}</Stage>)
+    FakeResizeObserver.last!.resize(374, 560)
+    const pager = screen.getByRole('region', { name: strings.room.grid })
+    expect(pager).toHaveAttribute('data-pages', '2')
+    const first = screen.getByRole('group', { name: strings.stage.page(1, 2) })
+    const second = screen.getByRole('group', { name: strings.stage.page(2, 2) })
+    expect(within(first).getAllByRole('figure')).toHaveLength(4)
+    expect(within(second).getAllByRole('figure')).toHaveLength(2)
+    // Every tile is there (names, mute marks); the second page's without video
+    expect(playing()).toEqual(['m0 的畫面', 'm1 的畫面', 'm2 的畫面', 'm3 的畫面'])
+
+    const dots = screen.getByRole('group', { name: strings.stage.pages })
+    const [dot1, dot2] = within(dots).getAllByRole('button')
+    expect(dot1).toHaveAttribute('aria-current', 'true')
+    fireEvent.click(dot2)
+    expect(dot2).toHaveAttribute('aria-current', 'true')
+    expect(dot1).not.toHaveAttribute('aria-current')
+    expect(playing()).toEqual(['m4 的畫面', 'm5 的畫面'])
+
+    // Previous / next, for a mouse (jsdom has none: hidden), with the ends disabled
+    const step = (name: string) =>
+      document.querySelector<HTMLButtonElement>(`[aria-label="${name}"]`)!
+    expect(step(strings.stage.next)).toBeDisabled()
+    fireEvent.click(step(strings.stage.previous))
+    expect(pager).toHaveAttribute('data-page', '0')
+    expect(step(strings.stage.previous)).toBeDisabled()
+  })
+
+  it('turns pages with the keyboard once it has focus', () => {
+    render(<Stage mode="paged">{videoTiles(9)}</Stage>)
+    FakeResizeObserver.last!.resize(374, 560)
+    const pager = screen.getByRole('region', { name: strings.room.grid })
+    expect(pager).toHaveAttribute('tabindex', '0')
+    expect(pager).toHaveAccessibleDescription(strings.stage.hint)
+    fireEvent.keyDown(pager, { key: 'ArrowRight' })
+    expect(pager).toHaveAttribute('data-page', '1')
+    fireEvent.keyDown(pager, { key: 'End' })
+    expect(pager).toHaveAttribute('data-page', '2')
+    fireEvent.keyDown(pager, { key: 'ArrowRight' })
+    expect(pager).toHaveAttribute('data-page', '2')
+    fireEvent.keyDown(pager, { key: 'PageUp' })
+    expect(pager).toHaveAttribute('data-page', '1')
+    fireEvent.keyDown(pager, { key: 'Home' })
+    expect(pager).toHaveAttribute('data-page', '0')
+  })
+
+  it('follows a swipe: both pages play while both show, then the one it lands on', () => {
+    render(<Stage mode="paged">{videoTiles(6)}</Stage>)
+    FakeResizeObserver.last!.resize(374, 560)
+    const pager = screen.getByRole('region', { name: strings.room.grid })
+    Object.defineProperty(pager, 'clientWidth', { value: 374, configurable: true })
+    pager.scrollLeft = 120
+    fireEvent.scroll(pager)
+    expect(playing()).toHaveLength(6)
+    expect(pager).toHaveAttribute('data-page', '0')
+    pager.scrollLeft = 374
+    fireEvent.scroll(pager)
+    expect(pager).toHaveAttribute('data-page', '1')
+    expect(playing()).toEqual(['m4 的畫面', 'm5 的畫面'])
+  })
+
+  it('stays on a page that still exists when people leave', () => {
+    const { rerender } = render(<Stage mode="paged">{videoTiles(6)}</Stage>)
+    FakeResizeObserver.last!.resize(374, 560)
+    fireEvent.click(screen.getByRole('button', { name: strings.stage.page(2, 2) }))
+    rerender(<Stage mode="paged">{videoTiles(4)}</Stage>)
+    const pager = screen.getByRole('region', { name: strings.room.grid })
+    expect(pager).toHaveAttribute('data-pages', '1')
+    expect(pager).toHaveAttribute('data-page', '0')
+    expect(playing()).toHaveLength(4)
+  })
+})
+
+describe('Stage, speaker (e4-t07, a phone held sideways)', () => {
+  it('shows the speaker big and the others in a strip', () => {
+    const { rerender } = render(
+      <Stage mode="speaker" speaker={2}>
+        {videoTiles(4)}
+      </Stage>,
+    )
+    FakeResizeObserver.last!.resize(812, 290)
+    const stage = screen.getByRole('region', { name: strings.room.grid })
+    expect(stage).toHaveAttribute('data-mode', 'speaker')
+    const main = stage.querySelector('[data-speaker]')!
+    expect(within(main as HTMLElement).getByRole('figure')).toHaveAccessibleName('m2')
+    const strip = screen.getByLabelText(strings.stage.strip)
+    expect(
+      within(strip)
+        .getAllByRole('figure')
+        .map((f) => f.getAttribute('aria-label')),
+    ).toEqual(['m0', 'm1', 'm3'])
+    expect((main as HTMLElement).style.height).toBe('289px')
+    // Someone else speaks: they take the big tile
+    rerender(
+      <Stage mode="speaker" speaker={0}>
+        {videoTiles(4)}
+      </Stage>,
+    )
+    expect(
+      within(stage.querySelector('[data-speaker]') as HTMLElement).getByRole('figure'),
+    ).toHaveAccessibleName('m0')
+  })
+
+  it('is the plain gallery for one person', () => {
+    render(<Stage mode="speaker">{videoTiles(1)}</Stage>)
+    expect(screen.getByRole('region', { name: strings.room.grid })).toHaveAttribute(
+      'data-mode',
+      'grid',
     )
   })
 })

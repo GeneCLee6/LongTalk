@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  clampPage,
   DEFAULT_GRID_GAP,
   DEFAULT_TILE_ASPECT,
   gridLayout,
   MAX_GRID_TILES,
+  pageCount,
+  pagedLayout,
+  pageRange,
+  pagesInView,
+  PHONE_PAGE_SIZE,
+  pickSpeaker,
   PORTRAIT_TILE_ASPECT,
+  speakerLayout,
   tileAspect,
 } from '../../shared/layout.ts'
 
@@ -138,5 +146,120 @@ describe('gridLayout (e4-t04, AC-4.3)', () => {
       return `${grid.cols}x${grid.rows}`
     }
     expect(counts.map(portrait)).toEqual(['1x1', '1x2', '1x3', '2x2', '2x3', '2x3', '2x4', '2x4'])
+  })
+})
+
+describe('phone paging (e4-t07, AC-4.6)', () => {
+  it('counts pages of four', () => {
+    expect([0, 1, 4, 5, 8, 9, 16].map((n) => pageCount(n))).toEqual([0, 1, 1, 2, 2, 3, 4])
+    expect(PHONE_PAGE_SIZE).toBe(4)
+    expect(pageCount(6, 3)).toBe(2)
+    expect(pageCount(-1)).toBe(0)
+    expect(pageCount(Number.NaN)).toBe(0)
+  })
+
+  it('keeps a page index on an existing page', () => {
+    expect(clampPage(0, 2)).toBe(0)
+    expect(clampPage(5, 2)).toBe(1)
+    expect(clampPage(-3, 2)).toBe(0)
+    expect(clampPage(1, 0)).toBe(0)
+    expect(clampPage(Number.NaN, 3)).toBe(0)
+    expect(clampPage(1.4, 3)).toBe(1)
+  })
+
+  it('slices the tiles of a page; the last page may be short', () => {
+    expect(pageRange(0, 6)).toEqual({ start: 0, end: 4 })
+    expect(pageRange(1, 6)).toEqual({ start: 4, end: 6 })
+    // Past the end (someone left while we were on the last page): the last page
+    expect(pageRange(3, 6)).toEqual({ start: 4, end: 6 })
+    expect(pageRange(0, 0)).toEqual({ start: 0, end: 0 })
+  })
+
+  it('tells which pages a swipe shows', () => {
+    const width = 390
+    expect(pagesInView(0, width, 2)).toEqual({ first: 0, last: 0, current: 0 })
+    // Mid-swipe: both pages are on screen, the dots follow the one mostly shown
+    expect(pagesInView(100, width, 2)).toEqual({ first: 0, last: 1, current: 0 })
+    expect(pagesInView(250, width, 2)).toEqual({ first: 0, last: 1, current: 1 })
+    expect(pagesInView(390, width, 2)).toEqual({ first: 1, last: 1, current: 1 })
+    // Sub-pixel offsets and overscroll do not count as the next page
+    expect(pagesInView(389.8, width, 2)).toEqual({ first: 1, last: 1, current: 1 })
+    expect(pagesInView(0.4, width, 2)).toEqual({ first: 0, last: 0, current: 0 })
+    expect(pagesInView(-30, width, 2)).toEqual({ first: 0, last: 0, current: 0 })
+    expect(pagesInView(900, width, 2)).toEqual({ first: 1, last: 1, current: 1 })
+    expect(pagesInView(100, 0, 2)).toEqual({ first: 0, last: 0, current: 0 })
+  })
+
+  it('lays every page out for a full page, two by two on a phone held upright', () => {
+    const phone = { width: 374, height: 560 }
+    const aspect = tileAspect(phone.width, phone.height)
+    const four = pagedLayout({ count: 4, ...phone, aspect })
+    expect(four).toMatchObject({ cols: 2, rows: 2, pages: 1 })
+    for (const count of [5, 6, 8]) {
+      const paged = pagedLayout({ count, ...phone, aspect })
+      // The same tile size on every page, whatever the count
+      expect(paged).toEqual({ ...four, pages: 2 })
+    }
+    expect(pagedLayout({ count: 9, ...phone, aspect }).pages).toBe(3)
+    // Fewer than a page: the gallery's own layout
+    expect(pagedLayout({ count: 3, ...phone, aspect })).toEqual({
+      ...gridLayout({ count: 3, ...phone, aspect }),
+      pages: 1,
+    })
+    expect(pagedLayout({ count: 0, ...phone, aspect }).pages).toBe(0)
+  })
+})
+
+describe('speakerLayout (e4-t07, a phone held sideways)', () => {
+  const landscape = { width: 812, height: 290 }
+
+  it('gives one person the whole stage', () => {
+    const { main, strip } = speakerLayout({ count: 1, ...landscape })
+    expect(strip).toBeNull()
+    expect(main.height).toBeGreaterThanOrEqual(289)
+    expect(main.width).toBeLessThanOrEqual(812)
+  })
+
+  it('puts the others in a column on the right of a wide stage, everything within it', () => {
+    for (let count = 2; count <= MAX_GRID_TILES; count++) {
+      const { main, strip } = speakerLayout({ count, ...landscape })
+      expect(strip?.side).toBe('right')
+      expect(main.width + GAP + strip!.tileWidth).toBeLessThanOrEqual(landscape.width)
+      expect(main.height).toBeLessThanOrEqual(landscape.height)
+      // The speaker is the biggest tile
+      expect(main.width).toBeGreaterThan(strip!.tileWidth)
+      expect(Math.abs(strip!.tileWidth / strip!.tileHeight - ASPECT)).toBeLessThan(0.05)
+      // Never smaller than a readable tile: past that the strip scrolls
+      expect(strip!.tileHeight).toBeGreaterThanOrEqual(71)
+    }
+    // Two others fit the column without scrolling
+    const three = speakerLayout({ count: 3, ...landscape }).strip!
+    expect(2 * three.tileHeight + GAP).toBeLessThanOrEqual(landscape.height)
+  })
+
+  it('puts the strip under a tall stage', () => {
+    const { main, strip } = speakerLayout({ count: 4, width: 390, height: 640 })
+    expect(strip?.side).toBe('bottom')
+    expect(main.height + GAP + strip!.tileHeight).toBeLessThanOrEqual(640)
+    expect(main.width).toBeLessThanOrEqual(390)
+  })
+
+  it('has nothing to lay out without tiles or space', () => {
+    expect(speakerLayout({ count: 0, ...landscape }).main.width).toBe(0)
+    expect(speakerLayout({ count: 3, width: 0, height: 0 }).main.width).toBe(0)
+  })
+})
+
+describe('pickSpeaker (e4-t07)', () => {
+  const ids = ['gene', 'wei', 'ming']
+
+  it('shows the last person heard, never ourselves unless alone', () => {
+    expect(pickSpeaker(ids, 'gene', 'ming')).toBe('ming')
+    expect(pickSpeaker(ids, 'gene', 'gene')).toBe('wei')
+    expect(pickSpeaker(ids, 'gene', null)).toBe('wei')
+    // They left: back to the first other member
+    expect(pickSpeaker(ids, 'gene', 'yu')).toBe('wei')
+    expect(pickSpeaker(['gene'], 'gene', null)).toBe('gene')
+    expect(pickSpeaker([], 'gene', null)).toBeNull()
   })
 })
