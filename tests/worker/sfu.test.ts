@@ -92,7 +92,8 @@ function setup(body: unknown = {}, status = 200, usage: UsageState = 'normal') {
     tracks: { trackName: string; kind: string }[],
   ) => {
     r.host.bindSfu(who.token, sessionId)
-    r.host.message(who.conn, JSON.stringify({ t: 'tracks', sessionId, tracks }))
+    const listed = tracks.map((track) => ({ ...track, muted: false }))
+    r.host.message(who.conn, JSON.stringify({ t: 'tracks', sessionId, tracks: listed }))
   }
   return { ...r, fetchMock, usageMock, deps, publish }
 }

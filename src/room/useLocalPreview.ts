@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useMediaDevices } from './devicesContext.ts'
 import {
-  browserMediaDevices,
   emptyDeviceLists,
   listDevices,
   openLocalMedia,
@@ -38,8 +38,9 @@ export function useLocalPreview(
   request: LocalMediaRequest,
   deps: LocalPreviewDeps = {},
 ): LocalPreview {
+  const contextDevices = useMediaDevices()
   const [mediaDevices] = useState(() =>
-    deps.mediaDevices === undefined ? browserMediaDevices() : deps.mediaDevices,
+    deps.mediaDevices === undefined ? contextDevices : deps.mediaDevices,
   )
   const [createStream] = useState(() => deps.createStream)
   const [attempt, setAttempt] = useState(0)

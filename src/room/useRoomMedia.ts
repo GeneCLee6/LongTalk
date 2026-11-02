@@ -8,7 +8,10 @@ export interface UseRoomMediaOptions {
   enabled: boolean
   /** A new transport for each run; called inside an effect */
   createTransport: () => MediaTransport
-  /** The opened microphone and camera; null while they are still opening */
+  /**
+   * What to send (null per kind when off); null while the devices are still opening. Changing
+   * it later toggles or switches without a new session.
+   */
   local: LocalTracks | null
   send: (message: ClientMessage) => void
   /** This member's id, so its own tracks are never subscribed */
@@ -33,17 +36,26 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaState {
     latest.current = options
   })
 
+  // Starts once the devices have opened (or failed to); toggles and device switches after that
+  // go to the running RoomMedia (setLocal) instead of starting a new session
+  const ready = local !== null
   useEffect(() => {
-    if (!enabled || !local) return
-    const { createTransport, send, view: startView } = latest.current
+    if (!enabled || !ready) return
+    const { createTransport, send, view: startView, local: startLocal } = latest.current
     const run = new RoomMedia({ transport: createTransport(), send })
     setMedia(run)
-    void run.start(local, startView?.usage ?? 'normal')
+    void run.start(startLocal ?? { mic: null, cam: null }, startView?.usage ?? 'normal')
     return () => {
       void run.close()
       setMedia((current) => (current === run ? null : current))
     }
-  }, [enabled, local])
+  }, [enabled, ready])
+
+  const mic = local?.mic ?? null
+  const cam = local?.cam ?? null
+  useEffect(() => {
+    void media?.setLocal({ mic, cam })
+  }, [media, mic, cam])
 
   const members = view?.members
   const desired = useMemo<MemberTrack[]>(

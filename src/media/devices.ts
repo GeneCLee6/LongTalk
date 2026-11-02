@@ -1,7 +1,7 @@
-// Local devices for the pre-join screen (e4-t03): the camera and microphone through
-// getUserMedia, the device lists through enumerateDevices. No RTCPeerConnection here: sending
-// media is MediaTransport's job (B1). No React and no interface text either: hooks wrap this,
-// components show it with strings.ts.
+// Local devices for the pre-join screen (e4-t03) and the room (e2-t06): the camera and
+// microphone through getUserMedia, the device lists through enumerateDevices, the speaker
+// through setSinkId. No RTCPeerConnection here: sending media is MediaTransport's job (B1). No
+// React and no interface text either: hooks wrap this, components show it with strings.ts.
 
 export type DeviceKind = 'audioinput' | 'videoinput' | 'audiooutput'
 
@@ -19,9 +19,10 @@ export type DeviceLists = Record<DeviceKind, DeviceOption[]>
  * - `notFound`: no such device, or the chosen one is gone (NotFoundError, OverconstrainedError)
  * - `inUse`: another program holds it, or the hardware failed (NotReadableError, AbortError)
  * - `unsupported`: no navigator.mediaDevices (an http: page, or a very old browser)
+ * - `lost`: the device stopped in the middle of the call (unplugged) and no other one opened
  * - `unknown`: anything else
  */
-export type MediaProblem = 'denied' | 'notFound' | 'inUse' | 'unsupported' | 'unknown'
+export type MediaProblem = 'denied' | 'notFound' | 'inUse' | 'unsupported' | 'lost' | 'unknown'
 
 /** The part of navigator.mediaDevices this module uses, so tests can pass a fake */
 export interface MediaDevicesLike {
@@ -87,8 +88,12 @@ export interface LocalMedia {
   camProblem: MediaProblem | null
 }
 
-const constraint = (deviceId: string | null): MediaTrackConstraints | true =>
-  deviceId ? { deviceId: { exact: deviceId } } : true
+/**
+ * A remembered device is only preferred (`ideal`): when it is gone the browser opens another
+ * one instead of failing. A device the person just picked is required (`exact`).
+ */
+const constraint = (deviceId: string | null, strict = false): MediaTrackConstraints | true =>
+  deviceId ? { deviceId: strict ? { exact: deviceId } : { ideal: deviceId } } : true
 
 /** Makes one stream of several tracks; `new MediaStream` in the browser */
 export type CreateStream = (tracks: MediaStreamTrack[]) => MediaStream
@@ -155,4 +160,67 @@ export function activeDeviceId(stream: MediaStream | null, kind: 'audio' | 'vide
 /** Whether this browser can choose the speaker (HTMLMediaElement.setSinkId; not Safari or older Firefox) */
 export function canChooseSpeaker(): boolean {
   return typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype
+}
+
+/** Thrown by openDevice: why the device could not be opened */
+export class MediaOpenError extends Error {
+  readonly problem: MediaProblem
+  constructor(problem: MediaProblem) {
+    super(problem)
+    this.name = 'MediaOpenError'
+    this.problem = problem
+  }
+}
+
+/**
+ * Opens one microphone or camera on its own (the room's toggles and device menus, e2-t06):
+ * `strict` requires that very device, otherwise it is only preferred. Rejects with
+ * MediaOpenError.
+ */
+export async function openDevice(
+  devices: MediaDevicesLike | null,
+  kind: 'audio' | 'video',
+  deviceId: string | null,
+  strict = false,
+): Promise<MediaStreamTrack> {
+  if (!devices) throw new MediaOpenError('unsupported')
+  const wanted = constraint(deviceId, strict)
+  let stream: MediaStream
+  try {
+    stream = await devices.getUserMedia(
+      kind === 'audio' ? { audio: wanted, video: false } : { audio: false, video: wanted },
+    )
+  } catch (error) {
+    throw new MediaOpenError(mediaProblem(error))
+  }
+  const track = kind === 'audio' ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0]
+  if (!track) {
+    stopStream(stream)
+    throw new MediaOpenError('notFound')
+  }
+  return track
+}
+
+/** The element the speaker choice applies to (HTMLMediaElement with setSinkId) */
+interface SinkElement {
+  setSinkId?: (deviceId: string) => Promise<void>
+}
+
+/**
+ * Plays an <audio> through the chosen speaker where the browser can (canChooseSpeaker); null
+ * keeps the system default. Failures (the speaker is gone) leave it on the current output.
+ */
+export function setSpeaker(element: HTMLMediaElement | null, deviceId: string | null): void {
+  const sink = element as SinkElement | null
+  if (!sink?.setSinkId || deviceId === null) return
+  void sink.setSinkId(deviceId).catch(() => undefined)
+}
+
+/**
+ * Whether this browser can be in a call at all: WebRTC (RTCPeerConnection). The device side
+ * (navigator.mediaDevices, which needs HTTPS) is checked when the devices open: without it the
+ * member can still join to watch and listen.
+ */
+export function supportsWebRtc(): boolean {
+  return typeof globalThis.RTCPeerConnection === 'function'
 }

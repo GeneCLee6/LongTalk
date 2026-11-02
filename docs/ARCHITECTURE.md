@@ -27,6 +27,7 @@
 - **RoomDO 現況（A3）**：`worker/room.ts` 只是接 Cloudflare 的膠水（storage、alarm、hibernation WebSocket，每個 socket 以成員 id 為 tag、attachment 存成員資料，醒來時從 socket 重建成員）；房間邏輯在 `worker/room-host.ts` 的純類別 `RoomHost`，Vitest 直接測。訊息型別在 `shared/protocol.ts`（有版本號，連線帶 `?v=`，版本不合以 4400 關閉）；差異是 `shared/patch.ts` 的 `set`／`del` 路徑操作，每個 patch 帶遞增 `rev`，瀏覽器發現缺號就送 `resync` 拿 `snapshot`。storage 只存房間資訊與 `rev`；成員不寫 storage。房間 id 是 10 碼 base58（去掉 0、O、I、l，約 58.6 bits），由 `POST /api/rooms` 產生並在 RoomDO 初始化；沒建過的 id 連 WebSocket 以 4404 關閉。
 - **Realtime SFU**：每位成員一個 SFU session；發布自己的軌（push），依 RoomDO 告知的 track id 訂閱別人的軌（pull）。SFU 的 API 呼叫由 Worker 代理（App token 不進瀏覽器）。
 - **媒體現況（B1）**：代理在 `/api/sfu/<roomId>/*`，每個呼叫帶成員的 session token，由該房 RoomDO 判斷（只服務房內成員、session 屬於建立它的成員、只能 pull 同房的軌；`docs/adr-001-media-layer.md`）。瀏覽器發布後送 `tracks`（協定 v3），RoomDO 把它放進 `Member.tracks` 推給大家；瀏覽器端 `src/room/RoomMedia.ts` 以 desired（RoomDO 的軌清單）／actual（transport 已訂閱）對齊來訂閱與退訂。
+- **開關與裝置（B2）**：協定 v4 的每條軌帶 `muted`。關麥克風或鏡頭不取消發布：`MediaTransport.replaceTrack` 改送 null（不重新協商，訂閱者不用重訂），再送一次 `tracks`（`muted: true`），狀態存在 RoomDO。切換裝置也是 `replaceTrack`。本機裝置由 `src/room/LocalDevices.ts` 管：麥克風靜音時保持開啟（解除靜音不延遲），鏡頭關掉時停止裝置（燈會熄）；裝置被拔掉（track `ended`）就改用同類的另一個，沒有就關掉並提示，接上新裝置（`devicechange`）時自動補回；進房時剛被預先加入頁釋放的裝置若「找不到／被佔用」，600 ms 後安靜地再試一次；選擇存 localStorage（`longtalk.devices`），和預先加入頁共用。伺服器估算流出時不算 muted 的軌。
 - **UsageDO（B1，`e11-t13`）**：整個部署一個（`idFromName('global')`），記這個月（UTC）的 Realtime 流出估算；每間房的 alarm 每 15 秒把「瀏覽器回報的 `bytesReceived` 增量」與「伺服器估算（時間 × 收的軌 × 假設位元率）」取大者交給它。達門檻後 `RoomView.usage` 變成 `low`（鏡頭低畫質）或 `audioOnly`（代理拒絕新的視訊軌）。細節與門檻在 `DEPLOY.md` §6。
 - **TURN**：Worker 發短期憑證給瀏覽器；ICE 設定一律含 TURN，只在直連失敗時用到。
 - **R2**：聊天檔案（24 小時）、雲端錄影（有效期）、白板匯出。
@@ -47,7 +48,7 @@
 ## 4. 資料流：一個人進房
 
 1. 瀏覽器 `GET /r/abc123` → Worker 的靜態資產回 SPA。
-2. 預先加入頁先 `GET /api/rooms/abc123` 確認房間存在（順便拿人數）才開鏡頭。按「加入」後開 WebSocket `/api/rooms/abc123/ws?v=3`（Worker 檢查 `Origin` 後轉給 RoomDO），第一則訊息是 `join`（名字、這個分頁上次拿到的 session token）→ RoomDO 回 `welcome`：成員 id、session token、房間快照（A4 起）。角色、TURN 憑證、SFU session 資訊在之後的批次加進 `welcome`。
+2. 預先加入頁先 `GET /api/rooms/abc123` 確認房間存在（順便拿人數）才開鏡頭。按「加入」後開 WebSocket `/api/rooms/abc123/ws?v=4`（Worker 檢查 `Origin` 後轉給 RoomDO），第一則訊息是 `join`（名字、這個分頁上次拿到的 session token）→ RoomDO 回 `welcome`：成員 id、session token、房間快照（A4 起）。角色、TURN 憑證、SFU session 資訊在之後的批次加進 `welcome`。
 3. 之後所有狀態變化走這條 WebSocket。
 4. 瀏覽器經 `/api/sfu/abc123/sessions`（帶 session token）建立 SFU session（RoomDO 記成這個成員的），發布 mic／cam 軌；把軌清單回報 RoomDO（`tracks` 訊息，B1 起）。
 5. RoomDO 以 patch 推送 `Member.tracks`；其他瀏覽器向 SFU 訂閱該軌（代理確認那條軌屬於同一間房）。瀏覽器每 10 秒送 `stats`（收到的 bytes），給免費額度保護記帳。

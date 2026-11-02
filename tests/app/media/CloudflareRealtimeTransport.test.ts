@@ -5,7 +5,12 @@ import { CloudflareRealtimeTransport } from '../../../src/media/CloudflareRealti
 // Realtime calls in the documented order with the documented bodies. The real browser path is
 // what the two-device spike checks (DEPLOY.md §5).
 class MockPc {
-  transceivers: { mid: string | null; stop: () => void; receiver: { track: unknown } }[] = []
+  transceivers: {
+    mid: string | null
+    stop: () => void
+    receiver: { track: unknown }
+    sender?: { replaceTrack: ReturnType<typeof vi.fn> }
+  }[] = []
   localDescription: { type: string; sdp: string } | null = null
   remoteDescriptions: { type: string; sdp: string }[] = []
   iceGatheringState = 'complete'
@@ -21,6 +26,7 @@ class MockPc {
       mid: null as string | null,
       stop: vi.fn(),
       receiver: { track: { from: 'local', track } },
+      sender: { replaceTrack: vi.fn(async () => {}) },
     }
     this.transceivers.push(t)
     return t
@@ -134,6 +140,24 @@ describe('CloudflareRealtimeTransport', () => {
       tracks: [{ location: 'local', mid: '0', trackName: published.trackName }],
     })
     expect(pc.remoteDescriptions).toEqual([{ type: 'answer', sdp: 'sfu-answer' }])
+  })
+
+  it('replaces what a published track sends without another SFU call (B2)', async () => {
+    const { transport, pc, calls } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: 'sfu-answer' },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    await transport.connect()
+    const published = await transport.publish(track, { kind: 'mic' })
+    const other = { kind: 'audio' } as MediaStreamTrack
+    await transport.replaceTrack(published.trackName, other)
+    await transport.replaceTrack(published.trackName, null)
+    expect(pc.transceivers[0].sender!.replaceTrack.mock.calls).toEqual([[other], [null]])
+    expect(calls).toHaveLength(2)
+    await expect(transport.replaceTrack('nope', null)).rejects.toMatchObject({ code: 'not_found' })
   })
 
   it('pulls a remote track and answers the SFU offer with renegotiate', async () => {

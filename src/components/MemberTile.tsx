@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react'
 import styled from 'styled-components'
+import { setSpeaker } from '../media/devices.ts'
 import { strings } from '../strings.ts'
 import { color, fontSize, radius, space } from '../styles/tokens.ts'
+import { MicOffIcon } from './icons.tsx'
 
 export interface MemberTileProps {
   name: string
@@ -12,6 +14,10 @@ export interface MemberTileProps {
   video: MediaStreamTrack | null
   /** The member's microphone, received; always null on our own tile */
   audio: MediaStreamTrack | null
+  /** The microphone is off (muted, or never published): the nameplate shows it (e2-t05) */
+  micMuted?: boolean
+  /** The speaker chosen in the room (setSinkId where supported); null: the system default */
+  speaker?: string | null
 }
 
 /** Puts one track into a media element, or clears it (jsdom has no MediaStream) */
@@ -39,9 +45,14 @@ export function MemberTile({
   reconnecting = false,
   video,
   audio,
+  micMuted = false,
+  speaker = null,
 }: MemberTileProps) {
   const videoRef = useTrack<HTMLVideoElement>(video)
   const audioRef = useTrack<HTMLAudioElement>(audio)
+  useEffect(() => {
+    setSpeaker(audioRef.current, speaker)
+  }, [audioRef, audio, speaker])
   const label = you ? `${name}（${strings.common.you}）` : name
   return (
     <Tile aria-label={label}>
@@ -59,6 +70,11 @@ export function MemberTile({
       )}
       {audio && !you && <audio ref={audioRef} autoPlay />}
       <Nameplate>
+        {micMuted && (
+          <Muted role="img" aria-label={strings.room.micMuted}>
+            <MicOffIcon />
+          </Muted>
+        )}
         {label}
         {reconnecting && <Warn> · {strings.room.reconnecting}</Warn>}
         {!video && <span className="visually-hidden"> · {strings.room.camOff}</span>}
@@ -95,6 +111,9 @@ const Initial = styled.span`
 
 const Nameplate = styled.figcaption`
   position: absolute;
+  display: flex;
+  align-items: center;
+  gap: ${space(1)};
   left: ${space(2)};
   bottom: ${space(2)};
   padding: ${space(1)} ${space(2)};
@@ -109,6 +128,18 @@ const Nameplate = styled.figcaption`
     height: 1px;
     overflow: hidden;
     clip-path: inset(50%);
+  }
+`
+
+const Muted = styled.span`
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: ${color.danger};
+
+  svg {
+    width: 100%;
+    height: 100%;
   }
 `
 

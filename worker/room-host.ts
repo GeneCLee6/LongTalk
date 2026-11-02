@@ -173,8 +173,12 @@ export class RoomHost {
       this.conns.set(conn, { member: null, openedAt, lastSeen: openedAt })
     }
     for (const record of sessions) {
-      // Members stored by protocol v2 have no tracks
-      this.members.set(record.member.id, { ...record.member, tracks: record.member.tracks ?? [] })
+      // Members stored by protocol v2 have no tracks, by v3 no `muted`
+      const tracks = (record.member.tracks ?? []).map((track) => ({
+        ...track,
+        muted: track.muted ?? false,
+      }))
+      this.members.set(record.member.id, { ...record.member, tracks })
       this.sessions.set(record.member.id, {
         token: record.token,
         conn: record.conn,
@@ -350,8 +354,8 @@ export class RoomHost {
 
   /**
    * Egress since the last call, for UsageDO (shared/usage.ts): what the browsers reported, and
-   * the server's estimate (elapsed time × every track each connected member receives × its
-   * assumed bitrate). Called by the sweep alarm.
+   * the server's estimate (elapsed time × every unmuted track each connected member receives ×
+   * its assumed bitrate). Called by the sweep alarm.
    */
   takeUsage(): UsageDelta {
     const now = this.deps.now()
@@ -363,7 +367,11 @@ export class RoomHost {
       if (receiver.reconnecting) continue
       for (const [publisherId, publisher] of this.members) {
         if (publisherId === receiverId) continue
-        for (const track of publisher.tracks) bitsPerSecond += ASSUMED_BITRATE[track.kind]
+        for (const track of publisher.tracks) {
+          // A muted track sends nothing (B2); a member lying about it still shows up in the
+          // receivers' own reports
+          if (!track.muted) bitsPerSecond += ASSUMED_BITRATE[track.kind]
+        }
       }
     }
     const clientBytes = this.reported
@@ -428,13 +436,17 @@ export class RoomHost {
     return null
   }
 
-  /** `tracks`: only for the member's current SFU session; a stale one (before a reload) is ignored */
+  /**
+   * `tracks`: only for the member's current SFU session; a stale one (before a reload) is
+   * ignored. Also how a member mutes and unmutes (`muted` on each track, B2).
+   */
   private setTracks(memberId: string, message: TracksMessage): void {
     if (this.sessions.get(memberId)!.sfu !== message.sessionId) return
-    const tracks: MemberTrack[] = message.tracks.map(({ trackName, kind }) => ({
+    const tracks: MemberTrack[] = message.tracks.map(({ trackName, kind, muted }) => ({
       sessionId: message.sessionId,
       trackName,
       kind,
+      muted,
     }))
     this.setMember(memberId, { tracks })
     this.publish()

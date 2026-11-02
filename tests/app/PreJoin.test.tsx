@@ -83,10 +83,12 @@ describe('pre-join screen', () => {
     await waitFor(() =>
       expect(fake.getUserMedia).toHaveBeenLastCalledWith({
         audio: true,
-        video: { deviceId: { exact: 'cam-2' } },
+        video: { deviceId: { ideal: 'cam-2' } },
       }),
     )
     await waitFor(() => expect(select('鏡頭').value).toBe('cam-2'))
+    // Remembered for the room and the next visit (e2-t06)
+    expect(JSON.parse(localStorage.getItem('longtalk.devices')!)).toMatchObject({ cam: 'cam-2' })
   })
 
   it('picks up a device plugged in later', async () => {

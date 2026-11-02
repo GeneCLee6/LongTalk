@@ -70,6 +70,36 @@ export const strings = {
     tileVideo: (name: string) => `${name} 的畫面`,
     camOff: '鏡頭沒開',
     mediaConnecting: '正在連接媒體伺服器…',
+    micMuted: '麥克風已關',
+  },
+  // The room's microphone, camera and speaker (e2-t05, e2-t06, e2-t09)
+  devices: {
+    controls: '會議控制',
+    micMenu: '選擇麥克風與喇叭',
+    camMenu: '選擇鏡頭',
+    mic: '麥克風',
+    cam: '鏡頭',
+    speaker: '喇叭',
+    problems: {
+      denied: (kind: string) =>
+        `瀏覽器沒有${kind}的權限。點網址列旁的鎖頭圖示，把${kind}改成「允許」後按「重試」。`,
+      inUse: (kind: string) =>
+        `${kind}正被其他程式使用，或無法啟動。關掉正在用${kind}的程式（例如另一個視訊軟體）後按「重試」。`,
+      notFound: (kind: string) => `找不到${kind}。接上${kind}之後按「重試」。`,
+      lost: (kind: string) =>
+        `${kind}中斷了，也找不到其他${kind}。重新接上後會自動恢復，或按「重試」。`,
+      unsupported: '這個瀏覽器不能使用麥克風與鏡頭（網頁需要 HTTPS）。你仍然看得到、聽得到其他人。',
+      unknown: (kind: string) => `無法開啟${kind}，請按「重試」。`,
+    },
+    switched: (kind: string, label: string) =>
+      label ? `${kind}中斷了，已改用「${label}」。` : `${kind}中斷了，已改用另一個${kind}。`,
+    recovered: (kind: string, label: string) =>
+      label ? `找到${kind}了，已改用「${label}」。` : `找到${kind}了。`,
+    switchFailed: (kind: string) => `無法切換到那個${kind}，繼續使用原本的${kind}。`,
+  },
+  unsupported: {
+    title: '這個瀏覽器不能視訊通話',
+    body: '請改用最新版的 Chrome、Edge、Firefox 或 Safari 開啟這個連結。',
   },
   // The Realtime free-tier guard (e11-t13): the month's egress is past a threshold
   usage: {

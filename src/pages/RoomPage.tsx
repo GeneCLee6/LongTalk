@@ -6,32 +6,47 @@ import { isRoomId } from '../../shared/room-id.ts'
 import type { UsageState } from '../../shared/usage.ts'
 import { getRoom } from '../api/rooms.ts'
 import { Button } from '../components/Button.tsx'
+import { MediaControls } from '../components/MediaControls.tsx'
 import { MemberTile } from '../components/MemberTile.tsx'
-import { PreJoin, type DeviceChoice } from '../components/PreJoin.tsx'
+import { PreJoin } from '../components/PreJoin.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
 import { useToasts } from '../components/useToasts.ts'
-import { activeDeviceId, canChooseSpeaker } from '../media/devices.ts'
+import {
+  activeDeviceId,
+  canChooseSpeaker,
+  supportsWebRtc,
+  type MediaProblem,
+} from '../media/devices.ts'
 import { trackKey, type MediaTransportErrorCode } from '../media/MediaTransport.ts'
 import type { RoomConnectionState } from '../room/RoomConnection.ts'
-import { clearSession, loadName, loadSession, saveName } from '../room/session.ts'
+import type { DeviceNotice, LocalDevicesState, LocalKind } from '../room/LocalDevices.ts'
+import {
+  clearSession,
+  loadDevices,
+  loadName,
+  loadSession,
+  saveDevice,
+  saveName,
+  type DeviceChoices,
+} from '../room/session.ts'
+import { useLocalDevices } from '../room/useLocalDevices.ts'
 import { useLocalPreview } from '../room/useLocalPreview.ts'
 import { useMicLevel } from '../room/useMicLevel.ts'
 import { useRoomConnection } from '../room/useRoomConnection.ts'
-import type { LocalTracks, RoomMediaState } from '../room/RoomMedia.ts'
+import type { LocalTracks } from '../room/RoomMedia.ts'
 import { useRoomMedia } from '../room/useRoomMedia.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
 import { strings } from '../strings.ts'
-import { color, font, space } from '../styles/tokens.ts'
+import { color, font, fontSize, radius, space } from '../styles/tokens.ts'
 
 /** What the pre-join screen hands to the room: the room publishes with the media choices */
 export interface JoinChoices {
   name: string
   mic: boolean
   cam: boolean
-  devices: Record<DeviceChoice, string | null>
+  /** The devices chosen (also remembered in localStorage, session.ts) */
+  devices: DeviceChoices
 }
-
-const noDevices = { mic: null, cam: null, speaker: null }
 
 /**
  * A tab that joined this room before (it still holds the session token) and knows its name goes
@@ -39,7 +54,7 @@ const noDevices = { mic: null, cam: null, speaker: null }
  */
 function resume(roomId: string): JoinChoices | null {
   const name = loadName()
-  return loadSession(roomId) && name ? { name, mic: true, cam: true, devices: noDevices } : null
+  return loadSession(roomId) && name ? { name, mic: true, cam: true, devices: loadDevices() } : null
 }
 
 export default function RoomPage() {
@@ -57,6 +72,14 @@ export default function RoomPage() {
 function RoomEntry({ roomId }: { roomId: string }) {
   const navigate = useNavigate()
   const [joined, setJoined] = useState<JoinChoices | null>(() => resume(roomId))
+  const [supported] = useState(supportsWebRtc)
+  if (!supported) {
+    return (
+      <Page>
+        <Unsupported />
+      </Page>
+    )
+  }
   if (joined) {
     // The room is dark whatever the system scheme (DESIGN.md §1.2)
     return (
@@ -132,7 +155,7 @@ function PreJoinScreen({
   const [name, setName] = useState(loadName)
   const [mic, setMic] = useState(true)
   const [cam, setCam] = useState(true)
-  const [devices, setDevices] = useState<Record<DeviceChoice, string | null>>(noDevices)
+  const [devices, setDevices] = useState<DeviceChoices>(loadDevices)
   const preview = useLocalPreview({ mic, cam, micId: devices.mic, camId: devices.cam })
   const level = useMicLevel(preview.stream)
   const [speakerSupported] = useState(canChooseSpeaker)
@@ -157,7 +180,10 @@ function PreJoinScreen({
         cam: devices.cam ?? activeDeviceId(preview.stream, 'video'),
         speaker: devices.speaker,
       }}
-      onSelect={(choice, deviceId) => setDevices((current) => ({ ...current, [choice]: deviceId }))}
+      onSelect={(choice, deviceId) => {
+        saveDevice(choice, deviceId)
+        setDevices((current) => ({ ...current, [choice]: deviceId }))
+      }}
       speakerSupported={speakerSupported}
       micProblem={preview.micProblem}
       camProblem={preview.camProblem}
@@ -185,23 +211,23 @@ function Room({
     if (gone) clearSession(roomId)
   }, [gone, roomId])
 
-  // The microphone and camera chosen on the pre-join screen, opened again for the room
-  const devices = useLocalPreview({
-    mic: choices.mic,
-    cam: choices.cam,
-    micId: choices.devices.mic,
-    camId: choices.devices.cam,
-  })
-  const local = useMemo<LocalTracks | null>(
-    () =>
-      devices.opening
-        ? null
-        : {
-            mic: devices.stream?.getAudioTracks()[0] ?? null,
-            cam: devices.stream?.getVideoTracks()[0] ?? null,
-          },
-    [devices.opening, devices.stream],
+  const toasts = useToasts()
+  const { show } = toasts
+  const onNotice = useCallback((notice: DeviceNotice) => show(noticeText(notice), 'warn'), [show])
+  // The microphone and camera chosen on the pre-join screen, opened again for the room; the
+  // toolbar turns them on and off and switches them after that (e2-t05, e2-t06)
+  const { state: local, devices } = useLocalDevices(
+    { mic: choices.mic, cam: choices.cam },
+    choices.devices,
+    onNotice,
   )
+  const micSending = local.mic.on ? local.mic.track : null
+  const camSending = local.cam.on ? local.cam.track : null
+  const sending = useMemo<LocalTracks | null>(
+    () => (local.ready ? { mic: micSending, cam: camSending } : null),
+    [local.ready, micSending, camSending],
+  )
+  const [speakerSupported] = useState(canChooseSpeaker)
 
   // The SFU proxy asks for the session token on every call; the transport reads the latest
   const token = useRef(state.token)
@@ -216,13 +242,23 @@ function Room({
   const media = useRoomMedia({
     enabled: state.status === 'open' && state.token !== null,
     createTransport,
-    local,
+    local: sending,
     send,
     you: state.you,
     view: state.view,
   })
-  const toasts = useToasts()
-  useUsageNotices(state.view?.usage ?? 'normal', media.videoRefused, toasts.show)
+  const usage = state.view?.usage ?? 'normal'
+  useUsageNotices(usage, media.videoRefused, show)
+
+  const toggleCam = () => {
+    // Once the month is audio-only a camera that is off stays off (e11-t13): say so without
+    // opening it
+    if (!local.cam.on && usage === 'audioOnly') {
+      show(strings.usage.videoRefused, 'warn')
+      return
+    }
+    void devices?.setOn('cam', !local.cam.on)
+  }
 
   if (gone) return <NotFound />
   const members = Object.values(state.view?.members ?? {})
@@ -235,44 +271,156 @@ function Room({
         <p>{strings.room.mediaConnecting}</p>
       )}
       {mediaProblem && <p role="alert">{mediaProblem}</p>}
+      <DeviceProblems local={local} onRetry={(kind) => void devices?.retry(kind)} />
       {state.status === 'open' && (
         <Grid aria-label={strings.room.grid}>
           {members.map((member) => {
             const you = member.id === state.you
+            const listed = (kind: 'mic' | 'cam') => member.tracks.find((t) => t.kind === kind)
             const received = (kind: 'mic' | 'cam') => {
-              const track = member.tracks.find((t) => t.kind === kind)
+              const track = listed(kind)
               return (track && media.received[trackKey(track)]?.track) || null
             }
+            const cam = listed('cam')
             return (
               <MemberTile
                 key={member.id}
                 name={member.name}
                 you={you}
                 reconnecting={member.reconnecting}
-                video={you ? ownCamera(local, media) : received('cam')}
+                video={
+                  you
+                    ? media.videoRefused
+                      ? null
+                      : camSending
+                    : cam && !cam.muted
+                      ? received('cam')
+                      : null
+                }
                 audio={you ? null : received('mic')}
+                micMuted={you ? micSending === null : (listed('mic')?.muted ?? true)}
+                speaker={local.chosen.speaker}
               />
             )
           })}
         </Grid>
       )}
-      <Button
-        variant="danger"
-        onClick={() => {
-          leave()
-          onLeft()
+      <MediaControls
+        micOn={local.mic.on}
+        camOn={local.cam.on}
+        micBusy={!local.ready || local.mic.opening}
+        camBusy={!local.ready || local.cam.opening}
+        onToggleMic={() => void devices?.setOn('mic', !local.mic.on)}
+        onToggleCam={toggleCam}
+        devices={local.devices}
+        selected={{
+          mic: trackDevice(local.mic.track) ?? local.chosen.mic,
+          cam: trackDevice(local.cam.track) ?? local.chosen.cam,
+          speaker: local.chosen.speaker,
         }}
+        onSelect={(choice, deviceId) => void devices?.select(choice, deviceId)}
+        speakerSupported={speakerSupported}
       >
-        {strings.toolbar.leave}
-      </Button>
+        <Button
+          variant="danger"
+          onClick={() => {
+            leave()
+            onLeft()
+          }}
+        >
+          {strings.toolbar.leave}
+        </Button>
+      </MediaControls>
       <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
     </Panel>
   )
 }
 
-/** Our own camera on our tile, unless it was refused this month */
-function ownCamera(local: LocalTracks | null, media: RoomMediaState): MediaStreamTrack | null {
-  return media.videoRefused ? null : (local?.cam ?? null)
+const trackDevice = (track: MediaStreamTrack | null): string | null =>
+  track?.getSettings?.().deviceId ?? null
+
+const kindName = (kind: LocalKind) => (kind === 'mic' ? strings.devices.mic : strings.devices.cam)
+
+function noticeText(notice: DeviceNotice): string {
+  const kind = kindName(notice.kind)
+  switch (notice.type) {
+    case 'switched':
+      return strings.devices.switched(kind, notice.label)
+    case 'recovered':
+      return strings.devices.recovered(kind, notice.label)
+    case 'switchFailed':
+      return strings.devices.switchFailed(kind)
+  }
+}
+
+function problemText(kind: LocalKind, problem: MediaProblem): string {
+  const { problems } = strings.devices
+  const name = kindName(kind)
+  switch (problem) {
+    case 'denied':
+      return problems.denied(name)
+    case 'inUse':
+      return problems.inUse(name)
+    case 'notFound':
+      return problems.notFound(name)
+    case 'lost':
+      return problems.lost(name)
+    case 'unsupported':
+      return problems.unsupported
+    case 'unknown':
+      return problems.unknown(name)
+  }
+}
+
+/**
+ * Why the microphone or camera is off against the person's wish (e2-t09), with what to do and a
+ * retry. Without device support at all there is one notice and nothing to retry.
+ */
+function DeviceProblems({
+  local,
+  onRetry,
+}: {
+  local: LocalDevicesState
+  onRetry: (kind: LocalKind) => void
+}) {
+  const kinds = (['mic', 'cam'] as const).filter((kind) => local[kind].problem !== null)
+  if (kinds.length === 0) return null
+  if (kinds.some((kind) => local[kind].problem === 'unsupported')) {
+    return <Alert role="alert">{strings.devices.problems.unsupported}</Alert>
+  }
+  // The same refusal for both: one message, one retry
+  const both = kinds.length === 2 && local.mic.problem === local.cam.problem
+  const shown = both ? (['mic'] as const) : kinds
+  return (
+    <>
+      {shown.map((kind) => (
+        <Alert key={kind} role="alert">
+          <span>
+            {both && local.mic.problem === 'denied'
+              ? strings.prejoin.problems.denied
+              : problemText(kind, local[kind].problem!)}
+          </span>
+          <Button
+            variant="secondary"
+            onClick={() => (both ? kinds.forEach(onRetry) : onRetry(kind))}
+          >
+            {strings.common.retry}
+          </Button>
+        </Alert>
+      ))}
+    </>
+  )
+}
+
+/** No WebRTC at all: nothing in the room would work (e2-t09) */
+function Unsupported() {
+  return (
+    <Panel>
+      <h1>{strings.unsupported.title}</h1>
+      <p role="alert">{strings.unsupported.body}</p>
+      <Link to="/">{strings.room.backHome}</Link>
+    </Panel>
+  )
 }
 
 function mediaErrorText(error: MediaTransportErrorCode | null): string | null {
@@ -361,6 +509,21 @@ const Panel = styled.section`
   p {
     margin: 0;
   }
+`
+
+const Alert = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: ${space(2)};
+  max-width: 640px;
+  padding: ${space(2)} ${space(3)};
+  border: 1px solid ${color.warn};
+  border-radius: ${radius.button};
+  background: ${color.surface};
+  font-size: ${fontSize.small};
+  text-align: left;
 `
 
 const Grid = styled.section`

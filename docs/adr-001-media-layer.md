@@ -70,6 +70,7 @@ interface MediaTransport {
   connect(options?: { iceServers?: RTCIceServer[] }): Promise<void>
   publish(track: MediaStreamTrack, options: { kind: TrackKind; simulcast?: boolean }): Promise<PublishedTrack>
   unpublish(trackName: string): Promise<void>
+  replaceTrack(trackName: string, track: MediaStreamTrack | null): Promise<void> // B2
   subscribe(ref: TrackRef): Promise<RemoteTrack>
   unsubscribe(ref: TrackRef): Promise<void>
   setPreferredLayer(ref: TrackRef, layer: 'high' | 'medium' | 'low'): Promise<void>
@@ -84,6 +85,7 @@ interface MediaTransport {
 - 錯誤一律是 `MediaTransportError`，`code` 為 `not_connected`、`closed`、`not_found`、`sfu_not_configured`、`sfu_error`、`negotiation_failed`；B1 加上 `unauthorized`（代理不認得 session token，或 session 不是自己的）與 `quota_exceeded`（本月免費額度快用完，新的視訊軌被拒，`DEPLOY.md` §6）。
 - `TrackKind` B1 起定義在 `shared/protocol.ts`（RoomDO 的軌清單也用它），`MediaTransport.ts` 轉出。`CloudflareRealtimeTransport` 的建構參數必填 `apiBase`（`/api/sfu/<roomId>`）與 `token`（取 session token 的函式）。
 - 和 ARCHITECTURE §3 原本的清單相比：加了 `unsubscribe`、`on()`（回傳取消函式）與 `trackEnded` 事件；`stats` 事件拿掉，改由呼叫端每 2 秒 `getStats()`（`e2-t13` 決定節奏）。
+- **B2 加上 `replaceTrack`**：換掉已發布的軌實際送出的內容（換裝置），或送 null（靜音、關鏡頭）；`RTCRtpSender.replaceTrack`，不需要 SDP 交換，所以不經過協商佇列，訂閱者的訂閱不受影響。
 - `FakeTransport`（`src/media/FakeTransport.ts`）：同一個 `FakeSfu` 建出來的 transport 互相 publish／subscribe，`useRoomMedia`（`e2-t04`）的測試用它跑。
 
 ## 後果

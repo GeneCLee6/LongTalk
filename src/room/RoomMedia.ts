@@ -9,9 +9,16 @@ import {
   type TrackKind,
 } from '../media/MediaTransport.ts'
 
-// One member's media in the room (e2-t03, e2-t04), on top of a MediaTransport and nothing else
-// (CLAUDE.md rule 2): publishes the local microphone and camera, tells the room what it
-// publishes (`tracks`), and keeps what it receives in line with the room's track list.
+// One member's media in the room (e2-t03, e2-t04, e2-t05), on top of a MediaTransport and
+// nothing else (CLAUDE.md rule 2): publishes the local microphone and camera, tells the room what
+// it publishes (`tracks`), and keeps what it receives in line with the room's track list.
+//
+// What it sends is also a reconciliation: `setLocal` hands over the track to send per kind (null:
+// turned off, muted, or no device). A kind never published is published once a track arrives;
+// after that, turning it off, on, or switching devices only replaces what the published track
+// sends (MediaTransport.replaceTrack, no renegotiation) and reports `muted` to the room. Once the
+// month is audio-only a camera that is not sending stays off: replacing would get round the
+// proxy's refusal of new video.
 //
 // Subscriptions are a desired / actual reconciliation, the only way anything gets subscribed:
 // `setDesired` hands over every other member's tracks from RoomDO; `reconcile` subscribes to what
@@ -22,10 +29,14 @@ import {
 //
 // No React here: useRoomMedia (useRoomMedia.ts) wraps it, the tests drive it with FakeTransport.
 
+/** What to send per kind; null when it is off (muted, camera off, or no device) */
 export interface LocalTracks {
   mic: MediaStreamTrack | null
   cam: MediaStreamTrack | null
 }
+
+/** A track this member publishes, and whether it is muted (sending nothing) now */
+export type OwnTrack = PublishedTrack & { muted: boolean }
 
 export interface ReceivedTrack {
   sessionId: string
@@ -41,7 +52,7 @@ export interface RoomMediaState {
   /** Why connecting or publishing failed (the interface explains it with strings.ts) */
   error: MediaTransportErrorCode | null
   /** What this member publishes */
-  published: PublishedTrack[]
+  published: OwnTrack[]
   /** What this member receives, by trackKey */
   received: Readonly<Record<string, ReceivedTrack>>
   /** The camera was not published: the month's free allowance is nearly spent */
@@ -82,6 +93,14 @@ export const idleRoomMedia: RoomMediaState = {
 const errorCode = (error: unknown): MediaTransportErrorCode =>
   error instanceof MediaTransportError ? error.code : 'sfu_error'
 
+async function lowerQuality(cam: MediaStreamTrack): Promise<void> {
+  try {
+    await cam.applyConstraints(LOW_QUALITY_VIDEO)
+  } catch {
+    // The camera cannot go that low; it keeps sending what it can
+  }
+}
+
 export class RoomMedia {
   private readonly transport: MediaTransport
   private readonly send: (message: ClientMessage) => void
@@ -92,7 +111,12 @@ export class RoomMedia {
   private closed = false
   private started = false
   private usage: UsageState = 'normal'
-  private cam: MediaStreamTrack | null = null
+  /** What to send, from setLocal */
+  private wanted: LocalTracks = { mic: null, cam: null }
+  /** What each published track sends now */
+  private readonly sending: LocalTracks = { mic: null, cam: null }
+  /** Local changes run one at a time, in order */
+  private localQueue: Promise<void> = Promise.resolve()
   private statsTimer: ReturnType<typeof setInterval> | null = null
   private readonly retryTimers = new Set<ReturnType<typeof setTimeout>>()
   private readonly offTransport: (() => void)[] = []
@@ -140,6 +164,7 @@ export class RoomMedia {
     if (this.started || this.closed) return
     this.started = true
     this.usage = usage
+    this.wanted = local
     this.update({ status: 'connecting' })
     try {
       await this.transport.connect()
@@ -151,22 +176,29 @@ export class RoomMedia {
     this.update({ status: 'connected' })
     this.reconcile()
     this.statsTimer = setInterval(() => void this.reportStats(), this.statsIntervalMs)
-    if (local.mic) await this.publish(local.mic, 'mic')
-    if (local.cam && !this.closed) {
-      if (this.usage === 'audioOnly') {
-        this.update({ videoRefused: true })
-      } else {
-        this.cam = local.cam
-        if (this.usage === 'low') await this.lowerQuality()
-        await this.publish(local.cam, 'cam')
-      }
-    }
+    await this.syncLocal()
+  }
+
+  /**
+   * What to send now (e2-t05, e2-t06): a toggle or a device switch. Resolves once it is applied;
+   * before start() it only becomes what start() publishes.
+   */
+  setLocal(local: LocalTracks): Promise<void> {
+    if (local.mic === this.wanted.mic && local.cam === this.wanted.cam) return this.localQueue
+    this.wanted = local
+    // Turning the camera off clears the refusal, so asking again tells the member again
+    if (local.cam === null && this.state.videoRefused) this.update({ videoRefused: false })
+    if (this.state.status !== 'connected') return this.localQueue
+    return this.syncLocal()
   }
 
   /** The month's state from the room view: past the low-quality threshold the camera goes low */
   setUsage(usage: UsageState): void {
     this.usage = usage
-    if (usage !== 'normal') void this.lowerQuality()
+    if (usage !== 'normal' && !this.state.lowQuality) {
+      this.update({ lowQuality: true })
+      if (this.sending.cam) void lowerQuality(this.sending.cam)
+    }
   }
 
   /** Every other member's tracks, from the room view; reconciles at once */
@@ -210,11 +242,60 @@ export class RoomMedia {
     await this.transport.close()
   }
 
-  private async publish(track: MediaStreamTrack, kind: TrackKind): Promise<void> {
+  private syncLocal(): Promise<void> {
+    this.localQueue = this.localQueue.then(() => this.applyLocal()).catch(() => undefined)
+    return this.localQueue
+  }
+
+  /** Brings what each kind sends in line with `wanted`, the microphone first */
+  private async applyLocal(): Promise<void> {
+    for (const kind of ['mic', 'cam'] as const) {
+      if (this.closed) return
+      const want = this.wanted[kind]
+      const own = this.state.published.find((track) => track.kind === kind)
+      if (!own) {
+        if (want) await this.publishLocal(want, kind)
+        continue
+      }
+      if (this.sending[kind] === want) continue
+      if (kind === 'cam' && want && this.sending.cam === null && this.usage === 'audioOnly') {
+        this.update({ videoRefused: true })
+        continue
+      }
+      if (kind === 'cam' && want && this.usage !== 'normal') await lowerQuality(want)
+      try {
+        await this.transport.replaceTrack(own.trackName, want)
+      } catch (error) {
+        if (!this.closed) this.update({ error: errorCode(error) })
+        continue
+      }
+      if (this.closed) return
+      this.sending[kind] = want
+      this.update({
+        published: this.state.published.map((track) =>
+          track.kind === kind ? { ...track, muted: want === null } : track,
+        ),
+      })
+      this.reportTracks()
+    }
+  }
+
+  private async publishLocal(track: MediaStreamTrack, kind: 'mic' | 'cam'): Promise<void> {
+    if (kind === 'cam') {
+      if (this.usage === 'audioOnly') {
+        this.update({ videoRefused: true })
+        return
+      }
+      if (this.usage === 'low') {
+        this.update({ lowQuality: true })
+        await lowerQuality(track)
+      }
+    }
     try {
       const published = await this.transport.publish(track, { kind })
       if (this.closed) return
-      this.update({ published: [...this.state.published, published] })
+      this.sending[kind] = track
+      this.update({ published: [...this.state.published, { ...published, muted: false }] })
       this.reportTracks()
     } catch (error) {
       if (this.closed) return
@@ -259,23 +340,17 @@ export class RoomMedia {
     }
   }
 
-  private async lowerQuality(): Promise<void> {
-    if (!this.cam || this.state.lowQuality) return
-    this.update({ lowQuality: true })
-    try {
-      await this.cam.applyConstraints(LOW_QUALITY_VIDEO)
-    } catch {
-      // The camera cannot go that low; it keeps sending what it can
-    }
-  }
-
   private reportTracks(): void {
     const sessionId = this.transport.sessionId
     if (!sessionId) return
     this.send({
       t: 'tracks',
       sessionId,
-      tracks: this.state.published.map(({ trackName, kind }) => ({ trackName, kind })),
+      tracks: this.state.published.map(({ trackName, kind, muted }) => ({
+        trackName,
+        kind,
+        muted,
+      })),
     })
   }
 

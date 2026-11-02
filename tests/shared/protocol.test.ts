@@ -51,8 +51,8 @@ describe('protocol', () => {
       t: 'tracks',
       sessionId: 'sess-1',
       tracks: [
-        { trackName: 'mic-1a2b', kind: 'mic' },
-        { trackName: 'cam-3c4d', kind: 'cam' },
+        { trackName: 'mic-1a2b', kind: 'mic', muted: false },
+        { trackName: 'cam-3c4d', kind: 'cam', muted: true },
       ],
     }
     expect(parseClientMessage(JSON.stringify(tracks))).toEqual(tracks)
@@ -71,15 +71,18 @@ describe('protocol', () => {
   it('refuses malformed track lists and stats', () => {
     const bad = [
       { t: 'tracks', sessionId: 'a/b', tracks: [] },
-      { t: 'tracks', sessionId: 's', tracks: [{ trackName: 'x', kind: 'hologram' }] },
-      { t: 'tracks', sessionId: 's', tracks: [{ trackName: '../x', kind: 'mic' }] },
+      { t: 'tracks', sessionId: 's', tracks: [{ trackName: 'x', kind: 'hologram', muted: false }] },
+      { t: 'tracks', sessionId: 's', tracks: [{ trackName: '../x', kind: 'mic', muted: false }] },
+      // v4: `muted` is required and a boolean
+      { t: 'tracks', sessionId: 's', tracks: [{ trackName: 'x', kind: 'mic' }] },
+      { t: 'tracks', sessionId: 's', tracks: [{ trackName: 'x', kind: 'mic', muted: 'yes' }] },
       // Two of one kind
       {
         t: 'tracks',
         sessionId: 's',
         tracks: [
-          { trackName: 'a', kind: 'cam' },
-          { trackName: 'b', kind: 'cam' },
+          { trackName: 'a', kind: 'cam', muted: false },
+          { trackName: 'b', kind: 'cam', muted: false },
         ],
       },
       { t: 'tracks', sessionId: 's', tracks: 'mic' },

@@ -1,6 +1,6 @@
 # NEXT — 接下來怎麼做（給 AI 協作者與自己的交接手冊）
 
-最後更新 2026-10-31。**完整順序在 [`ROADMAP.md`](ROADMAP.md)**（一批一個 PR）；這份只記「現在的位置」與工作方式。每完成一批就更新「現在的位置」；每個 AI session 開頭只需要讀 `CLAUDE.md` 和這一份。
+最後更新 2026-11-02。**完整順序在 [`ROADMAP.md`](ROADMAP.md)**（一批一個 PR）；這份只記「現在的位置」與工作方式。每完成一批就更新「現在的位置」；每個 AI session 開頭只需要讀 `CLAUDE.md` 和這一份。
 
 ## 1. 現在的位置
 
@@ -12,8 +12,10 @@
 - **2026-10-31**：`main` 設為受保護分支（`CI / verify` 必過）；`REALTIME_APP_ID`／`REALTIME_APP_SECRET` 已設成 GitHub secret（app `longtalk-dev`，只給 PR 預覽用；正式站等 B1 綁定成員後再設）。擁有者決定**只用免費額度**：新增 `e11-t13` 流量保護，排進 B1。
 - **2026-10-31 B1 完成**（#8）：通訊協定升到 v3（`tracks`、`stats`、`Member.tracks`、`RoomView.usage`）。SFU 代理改成 `/api/sfu/<roomId>/*` 並**綁定房間成員**：每個呼叫帶 session token，由 RoomDO 判斷（房外 401、別人的 session 403、只能 pull 同房的軌）；`/dev/realtime` spike 移除。會議室進房後重新開啟預先加入選的裝置，經 `CloudflareRealtimeTransport` 發布 mic／cam、回報 RoomDO；`src/room/RoomMedia.ts`＋`useRoomMedia` 以 desired／actual 對齊訂閱別人的軌（冪等、StrictMode 只留一個 session、失敗重試 3 次）；簡版格狀畫面（每人一格，正式版面是 C1）。**免費額度保護**（`e11-t13`）：`UsageDO`（migration `v2`）記當月流出，取「瀏覽器回報」與「伺服器估算」的大者；800 GB 鏡頭低畫質、950 GB 代理拒絕新的視訊軌；門檻是 `vars`；`GET /api/usage`（`DEPLOY.md` §6）。AC-2.1、AC-11.11 已勾。**AC-2.2 不勾**：還沒有兩台不同裝置實測（PR 預覽上的單機驗證結果寫在 #8）。
 - **2026-11-02 兩台裝置實測**（PR #8 預覽，擁有者）：電腦 Chrome（無鏡頭）＋手機 Chrome，電腦看到並聽到手機，Realtime 跨裝置可用，ADR-001 定案。未測：電腦→手機視訊、8 人（AC-2.2 未勾）。
-- **下一批：B2**（`e2-t05` `e2-t06` `e2-t09`：開關與軌狀態同步、裝置切換與記憶、權限與裝置錯誤畫面；依賴 B1）。動工前先用 PR 預覽在兩台不同裝置跑一次會議室互通（`DEPLOY.md` §5），通過就勾 AC-2.2 的發布訂閱部分；預先加入的鏡頭、麥克風、裝置選單也一起試。
-- **等人決定的事**：正式站要不要現在設定 `REALTIME_APP_ID`／`REALTIME_APP_SECRET`（B1 已綁定成員，可以設；建議用和預覽不同的 Realtime app）；帳號登入方式（E1）；AI 摘要用哪家模型（E8）；兩台不同裝置的會議室互通實測（AC-2.2，要人拿兩台裝置）。
+- **2026-11-02 正式站有媒體了**：擁有者在正式 Worker `longtalk` 設定 `REALTIME_APP_ID`／`REALTIME_APP_SECRET`（另一個 SFU app，也叫 `longtalk`；PR 預覽繼續用 `longtalk-dev`）。已驗證：開房、WebSocket 加入後，`POST /api/sfu/<room>/sessions` 沒帶 token 回 401、帶成員 token 回 201；`/api/usage` 是 `normal`。
+- **2026-11-02 B2 完成**（#9）：通訊協定升到 v4（`MemberTrack.muted`，`tracks` 每條軌都帶 `muted`）。工具列（簡版，正式版是 C2）有麥克風、鏡頭開關與裝置選單（麥克風選單也列喇叭，只在支援 `setSinkId` 的瀏覽器）。關掉不取消發布：`MediaTransport.replaceTrack` 改送 null、回報 RoomDO，別人的名牌即時顯示紅色麥克風、格子換成首字；切換裝置也只換 sender 的軌，不重新協商。`src/room/LocalDevices.ts` 管本機裝置：麥克風靜音時保持開啟、鏡頭關掉時停止（燈熄）；拔掉裝置自動換另一個，沒有就提示「中斷了」，接上自動恢復；選擇存 localStorage，和預先加入頁共用（記住的裝置不在了就用預設的）。權限被拒、被佔用、找不到、中斷、不能用裝置（http）都有繁中說明＋「重試」；沒有 WebRTC 的瀏覽器在進房前就看到「請改用…」。本月只剩音訊時，關掉的鏡頭不能再打開（不然會繞過代理的視訊限制）。**AC-2.3 不勾**：要兩台不同裝置實測（`DEPLOY.md` §5 第 5 步）；PR 預覽上的單機驗證寫在 #9。
+- **下一批：B3**（`e2-t07` `e2-t08`：TURN 憑證與 ICE、斷線重連；依賴 B2）。動工前先用 PR 預覽或正式站在兩台不同裝置試 B2 的開關、換裝置、拔裝置（`DEPLOY.md` §5 第 5 步），通過就勾 AC-2.3。
+- **等人決定的事**：帳號登入方式（E1）；AI 摘要用哪家模型（E8）；兩台不同裝置的會議室互通實測（AC-2.2、AC-2.3，要人拿兩台裝置）。
 
 ## 2. 建議順序（為什麼這樣排）
 

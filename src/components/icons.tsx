@@ -47,3 +47,11 @@ export function CamOffIcon() {
     </svg>
   )
 }
+
+export function ChevronUpIcon() {
+  return (
+    <svg {...common}>
+      <path d="m6 15 6-6 6 6" />
+    </svg>
+  )
+}

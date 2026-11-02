@@ -49,6 +49,18 @@ describe('FakeTransport', () => {
     expect(onTrack).toHaveBeenCalledOnce()
   })
 
+  it('replaces what a published track sends, keeping the subscription', async () => {
+    const { alice, bob } = await connectedPair()
+    const mic = fakeTrack('audio')
+    const published = await alice.publish(mic, { kind: 'mic' })
+    await bob.subscribe(published)
+    expect(alice.sending.get(published.trackName)).toBe(mic)
+    await alice.replaceTrack(published.trackName, null)
+    expect(alice.sending.get(published.trackName)).toBeNull()
+    expect(bob.subscriptions.size).toBe(1)
+    await expect(alice.replaceTrack('cam-9', null)).rejects.toMatchObject({ code: 'not_found' })
+  })
+
   it('rejects a subscription to a track nobody published', async () => {
     const { bob } = await connectedPair()
     const error = await bob

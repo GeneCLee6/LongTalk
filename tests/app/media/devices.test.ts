@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   activeDeviceId,
   listDevices,
+  MediaOpenError,
   mediaProblem,
+  openDevice,
   openLocalMedia,
+  setSpeaker,
   stopStream,
 } from '../../../src/media/devices.ts'
 import {
@@ -70,13 +73,20 @@ describe('openLocalMedia', () => {
     expect(activeDeviceId(media.stream, 'video')).toBe('cam-1')
   })
 
-  it('asks for exactly the chosen devices, and only the ones switched on', async () => {
+  it('prefers the chosen devices, and asks only for the ones switched on', async () => {
     const fake = fakeMediaDevices()
     await openLocalMedia(fake.devices, { mic: true, cam: false, micId: 'mic-2', camId: 'cam-2' })
     expect(fake.getUserMedia).toHaveBeenCalledWith({
-      audio: { deviceId: { exact: 'mic-2' } },
+      audio: { deviceId: { ideal: 'mic-2' } },
       video: false,
     })
+  })
+
+  it('falls back to another device when the remembered one is gone (e2-t06)', async () => {
+    const fake = fakeMediaDevices()
+    fake.unplug('mic-2')
+    const media = await openLocalMedia(fake.devices, { ...both, cam: false, micId: 'mic-2' })
+    expect(activeDeviceId(media.stream, 'audio')).toBe('mic-1')
   })
 
   it('asks for nothing when both are off', async () => {
@@ -122,6 +132,43 @@ describe('openLocalMedia', () => {
     stopStream(asStream(new FakeStream(tracks)))
     stopStream(null)
     expect(tracks.every((track) => track.stopped)).toBe(true)
+  })
+})
+
+describe('openDevice (e2-t06)', () => {
+  it('requires the device the person picked, or only prefers a remembered one', async () => {
+    const fake = fakeMediaDevices()
+    const track = await openDevice(fake.devices, 'video', 'cam-2', true)
+    expect(track.getSettings().deviceId).toBe('cam-2')
+    expect(fake.getUserMedia).toHaveBeenLastCalledWith({
+      audio: false,
+      video: { deviceId: { exact: 'cam-2' } },
+    })
+    fake.unplug('cam-2')
+    await expect(openDevice(fake.devices, 'video', 'cam-2', true)).rejects.toMatchObject({
+      problem: 'notFound',
+    })
+    expect((await openDevice(fake.devices, 'video', 'cam-2')).getSettings().deviceId).toBe('cam-1')
+  })
+
+  it('says why a device did not open', async () => {
+    await expect(openDevice(null, 'audio', null)).rejects.toMatchObject({ problem: 'unsupported' })
+    const denied = fakeMediaDevices({ denyAll: true })
+    await expect(openDevice(denied.devices, 'audio', null)).rejects.toMatchObject({
+      problem: 'denied',
+    })
+    const busy = fakeMediaDevices({ fail: { video: 'NotReadableError' } })
+    await expect(openDevice(busy.devices, 'video', null)).rejects.toBeInstanceOf(MediaOpenError)
+  })
+
+  it('plays through the chosen speaker where the browser can', () => {
+    const setSinkId = vi.fn(async () => {})
+    const element = { setSinkId } as unknown as HTMLMediaElement
+    setSpeaker(element, 'spk-1')
+    setSpeaker(element, null)
+    setSpeaker({} as HTMLMediaElement, 'spk-1')
+    setSpeaker(null, 'spk-1')
+    expect(setSinkId).toHaveBeenCalledExactlyOnceWith('spk-1')
   })
 })
 
