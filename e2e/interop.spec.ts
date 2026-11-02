@@ -1,13 +1,21 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { strings } from '../src/strings.ts'
 
-// e2-t10 (AC-2.2): two browsers with Chrome's fake camera and microphone (a moving picture and a
-// beep) open one room through the home page, join through the pre-join screen, and must see and
-// hear each other through the real Realtime SFU; muting and turning the camera off must show on
-// the other side, and turning them back on must bring the media back. Runs against a deployed
-// Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job `e2e`).
+// e2-t10 (AC-2.2): three browsers with Chrome's fake camera and microphone (a moving picture and
+// a beep) open one room through the home page, join through the pre-join screen a few seconds
+// apart, and must each see and hear the other two through the real Realtime SFU (three, because
+// two never showed the lost-video races fixed after C1); muting and turning the camera off must
+// show on the other side, and turning them back on must bring the media back. Runs against a
+// deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
+// `e2e`).
+//
+// Every member is a context of the one Chromium (its own storage: a different member). Separate
+// browser processes were tried and were worse: Chrome's fake camera was then often missing
+// altogether (getUserMedia: NotFoundError), which the logs below make easy to tell apart.
 
 const VIDEO_FRAMES_PER_SECOND = 5
+/** Joins this far apart: the next member arrives while the last one is still negotiating */
+const JOIN_GAP_MS = 3_000
 /** Chrome's fake microphone beeps at full scale; silence is exactly 0 */
 const AUDIBLE = 0.05
 
@@ -31,10 +39,79 @@ async function openRoom(browser: Browser): Promise<string> {
 
 /** A new browser (its own storage: a different member) that joins through the pre-join screen */
 async function join(browser: Browser, roomUrl: string, name: string): Promise<Member> {
-  const context = await browser.newContext()
+  const context = await browser.newContext({
+    locale: 'zh-TW',
+    permissions: ['camera', 'microphone'],
+  })
+  // The PeerConnection's states and failed SDP steps, for reading a failure in the CI log
+  await context.addInitScript(() => {
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
+    navigator.mediaDevices.getUserMedia = (constraints) =>
+      getUserMedia(constraints).catch((error: unknown) => {
+        console.info(`[pc] getUserMedia(${JSON.stringify(constraints)}): ${String(error)}`)
+        throw error
+      })
+    const Native = window.RTCPeerConnection
+    let count = 0
+    window.RTCPeerConnection = class extends Native {
+      constructor(config?: RTCConfiguration) {
+        super(config)
+        const id = ++count
+        const say = (text: string) => console.info(`[pc${id}] ${text}`)
+        this.addEventListener('connectionstatechange', () => say(this.connectionState))
+        for (const method of ['setLocalDescription', 'setRemoteDescription'] as const) {
+          const original = this[method].bind(this) as (
+            d?: RTCSessionDescriptionInit,
+          ) => Promise<void>
+          this[method] = ((description?: RTCSessionDescriptionInit) =>
+            original(description).catch((error: unknown) => {
+              say(`${method}(${description?.type}) in ${this.signalingState}: ${String(error)}`)
+              throw error
+            })) as never
+        }
+      }
+    }
+  })
   const page = await context.newPage()
+  // Seconds since this member opened the room, on every line it logs
+  const started = Date.now()
+  const at = () => `${((Date.now() - started) / 1000).toFixed(1)}s`
   page.on('console', (message) => {
-    if (message.type() === 'error') console.log(`[${name}] ${message.text().slice(0, 300)}`)
+    const text = message.text()
+    if (message.type() === 'error' || text.startsWith('[pc')) {
+      console.log(`[${name} ${at()}] ${text.slice(0, 300)}`)
+    }
+  })
+  // Every SFU call and what came back, and what the member tells the room it publishes, for
+  // reading a failure in the CI log
+  page.on('websocket', (socket) =>
+    socket.on('framesent', ({ payload }) => {
+      if (typeof payload !== 'string' || !payload.startsWith('{"t":"tracks"')) return
+      const names = [...payload.matchAll(/"trackName":"([^"]+)"/g)].map((m) => m[1])
+      console.log(`[${name} ${at()}] tracks → room: ${names.join(',')}`)
+    }),
+  )
+  page.on('response', async (response) => {
+    const path = new URL(response.url()).pathname
+    if (!path.startsWith('/api/sfu/')) return
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string
+      errorCode?: string
+      requiresImmediateRenegotiation?: boolean
+      tracks?: { trackName?: string; mid?: string; errorCode?: string }[]
+    }
+    const request = response.request().postData() ?? ''
+    const what = /"location":"(local|remote)"/.exec(request)?.[1] === 'local' ? 'push' : 'pull'
+    const tracks = (body.tracks ?? [])
+      .map((t) => `${t.trackName ?? ''}@${t.mid ?? ''}${t.errorCode ? `!${t.errorCode}` : ''}`)
+      .join(',')
+    const call = path.replace(/^\/api\/sfu\/[^/]+\/sessions\/?/, '').replace(/^[0-9a-f]{64}/, 'S')
+    const errors = [body.error, body.errorCode].filter(Boolean).join(' ')
+    console.log(
+      `[${name} ${at()}] ${response.request().method()} ` +
+        `${call || 'sessions'}${call.endsWith('/tracks') ? ` ${what}` : ''} → ${response.status()}` +
+        `${errors ? ` ${errors}` : ''}${body.requiresImmediateRenegotiation ? ' rir' : ''} ${tracks}`,
+    )
   })
   await page.goto(roomUrl)
   await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill(name)
@@ -142,14 +219,22 @@ const interop = test.extend<{ room: { url: string; join: (name: string) => Promi
 })
 
 interop(
-  'two browsers see and hear each other, and see mute and camera off (AC-2.2)',
+  'three browsers joining a few seconds apart all see and hear each other, and see mute and camera off (AC-2.2)',
   async ({ room }) => {
+    interop.setTimeout(180_000)
     const alice = await room.join('Alice')
+    await new Promise((resolve) => setTimeout(resolve, JOIN_GAP_MS))
     const bob = await room.join('Bob')
+    await new Promise((resolve) => setTimeout(resolve, JOIN_GAP_MS))
+    const carol = await room.join('Carol')
+    const members = [alice, bob, carol]
 
-    await interop.step('both ways: video frames and audio', async () => {
-      await expectReceiving(bob, alice)
-      await expectReceiving(alice, bob)
+    await interop.step('every way: video frames and audio', async () => {
+      for (const viewer of members) {
+        for (const other of members) {
+          if (viewer !== other) await expectReceiving(viewer, other)
+        }
+      }
     })
 
     await interop.step('Alice mutes: Bob sees the muted microphone and hears silence', async () => {
