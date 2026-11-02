@@ -1,6 +1,6 @@
 # DEPLOY — 部署
 
-LongTalk 是**一個 Cloudflare Worker**：同一個 Worker 回答 `/api/*`、承載 Durable Object（每房一個 `RoomDO`），其餘路徑交給靜態資產（React app，`dist/client`）。
+LongTalk 是**一個 Cloudflare Worker**：同一個 Worker 回答 `/api/*`、承載 Durable Object（每房一個 `RoomDO`，加上全站各一個的 `UsageDO`、`TelemetryDO`），其餘路徑交給靜態資產（React app，`dist/client`）。
 
 ## 為什麼是 Workers Static Assets，而不是 Pages ＋ 另一個 Worker
 
@@ -71,9 +71,9 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 
 ## 4. 新增綁定或 Durable Object 時
 
-- `wrangler.jsonc` 的 `migrations` **只能往後加**；已部署的 migration 不要改、不要刪。新增 DO class 就加一個新 tag。現有：`v1` `RoomDO`（A1）、`v2` `UsageDO`（B1，§6）；下一個是 `v3`。
+- `wrangler.jsonc` 的 `migrations` **只能往後加**；已部署的 migration 不要改、不要刪。新增 DO class 就加一個新 tag。現有：`v1` `RoomDO`（A1）、`v2` `UsageDO`（B1，§6）、`v3` `TelemetryDO`（D3，§8）；下一個是 `v4`。
 - `vars` 也**不會繼承**：頂層與 `env.preview` 各寫一次（現有 `USAGE_LOW_QUALITY_GB`、`USAGE_AUDIO_ONLY_GB`，§6）。
-- `env.preview` **不會繼承**頂層的綁定：每個 DO、KV、R2、D1 綁定都要在 `env.preview` 重寫一次；R2／D1 要給預覽自己的資源，不要指到正式站的。
+- `env.preview` **不會繼承**頂層的綁定：每個 DO、KV、R2、D1、Analytics Engine 綁定都要在 `env.preview` 重寫一次；R2／D1／Analytics Engine 要給預覽自己的資源，不要指到正式站的（Analytics Engine：正式站 `longtalk_events`、預覽 `longtalk_events_preview`，§8）。
 - secret（SFU App token、TURN key、AI 金鑰）只用 `wrangler secret put` 放在 Worker，**不進前端、不進 repo**（CLAUDE.md 規則 3）。要設定的 secret 見 §5。
 
 ## 5. Secrets 與 Realtime 互通測試（A2，B1 起改用會議室頁）
@@ -86,6 +86,7 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 | `REALTIME_APP_SECRET` | Worker secret | 同一個 app 的 **App Secret**（API token；只顯示一次） | `worker/sfu.ts`（A2 起） |
 | `REALTIME_TURN_KEY_ID` | Worker secret | 儀表板 → Realtime → TURN → 建立 key → **Turn Token ID** | `worker/turn.ts`（B3 起） |
 | `REALTIME_TURN_KEY_API_TOKEN` | Worker secret | 同一個 TURN key 的 **API token**（只顯示一次） | `worker/turn.ts`（B3 起） |
+| `ADMIN_TOKEN` | Worker secret | 自己產生的長亂數（例如 `openssl rand -base64 32`），當成 `/admin` 的密碼 | `worker/events.ts`（D3 起，§8） |
 
 App ID 不算機密，但和 App Secret 放在一起管理比較不會漏。**沒設定時 `/api/sfu/<roomId>/*` 對房間成員回 503 `sfu_not_configured`**，其餘功能照常（進得了房、看得到成員，只是沒有聲音與畫面）。
 
@@ -151,6 +152,14 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
     - **手機**（iPhone Safari、Android Chrome）：工具列沒有分享鈕；「更多」第一項是灰色的「分享螢幕」，下面寫「手機瀏覽器不能分享螢幕。要分享，請用電腦加入這間會議室。」，點了沒反應；手機聽得到電腦分享的聲音。桌機 Chrome 把視窗拉窄到手機版面：「更多」第一項是可以按的「分享螢幕」。
     - 把電腦與手機的系統、瀏覽器版本與結果寫進 PR；都通過才勾 AC-3.2（AC-3.6 還要等簡報者檢視 `e3-t08`）。
 
+11. **聊天（D3，AC-5.1）**：兩台不同的裝置（一台電腦、一支手機；手機用 iPhone Safari 或 Android Chrome 都試更好）：
+    - 電腦按工具列「聊天」：右側出現 320 px 的聊天欄、舞台跟著變窄，游標已經在輸入框。打一句中文（注音或倉頡選字時按 Enter **只選字、不送出**）、Shift + Enter 換行、Enter 送出；貼一個網址，兩邊都變成可點的連結、在新分頁開啟。
+    - 手機聊天沒開時：電腦送一則，手機工具列「聊天」上出現 1、畫面下方跳出氣泡預覽（名字＋前兩行），約 6 秒後消失；點氣泡打開全螢幕聊天抽屜，未讀數歸零。抽屜裡用手機鍵盤打中文、送出，鍵盤不擋住剛送出的訊息；「關閉」或返回收起。
+    - 電腦連續快速送 11 則：第 11 則留在輸入框、下方提示「你傳得太快了」；等 10 秒可以再送。
+    - 手機重新整理頁面（或關 Wi-Fi 30 秒再打開）：回到房間後先前的訊息都還在，斷線期間別人傳的也補上，而且不算成一堆未讀。
+    - 第三個人（另一個分頁也可以）中途加入：看得到加入前的訊息。
+    - 把兩台裝置的系統、瀏覽器版本與結果寫進 PR；都通過才勾 AC-5.1。
+
 常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「媒體伺服器不認得這個分頁」＝ session token 過期（房間把成員移除了），重新整理；一直沒有對方的畫面 ＝ 網路擋 UDP，檢查 TURN secret 有沒有設（`/api/turn` 的 `turn` 要是 `true`）。
 
 ## 6. Realtime 免費額度保護（e11-t13，B1）
@@ -182,6 +191,7 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
 - Bob 靜音：Alice 看到，而且還在收他的畫面。
 - **螢幕分享（D1）**：Bob 按「分享螢幕」：他看到「你正在分享畫面」條、自己維持格狀；Alice、Carol 的舞台切成分享版面、主區看到 Bob 的畫面（每秒 ≥ 3 幀）、Carol 的鏡頭在側列照常。Carol 按分享 → 「接手分享？」→ 接手：Bob 的提示條消失、大家看到 Carol 的畫面。Carol 從提示條停止：三人都回到格狀。headless Chromium 沒有螢幕可擷取、也沒有選擇器可點，所以分享來源是 `addInitScript` 換掉的 `getDisplayMedia`（canvas `captureStream`，會動的畫面）；真的選擇器在 §5 第 9 步實測。
 - **分享音訊（D2）**：替身 `getDisplayMedia` 在房間要求音訊時多給一條 oscillator 的音軌（當成分頁音訊）。Alice、Carol 的 `audio[data-share-audio="Bob"]` 音量峰值 > 0.05（Bob 的麥克風此時是靜音的，聲音只會來自分享音訊）；Bob 按提示條的「關閉分享音訊」→ Alice 聽到靜音、分享畫面照常；「開啟分享音訊」→ 聲音回來。Carol 接手後 Bob 的分享音訊元素消失、Alice 聽得到 Carol 的分享音訊。真的分頁／系統音訊與回音在 §5 第 10 步實測。
+- **聊天（D3）**：媒體檢查之前，Alice 打開聊天、送一則帶連結的中文訊息；Bob、Carol 的「聊天」鈕出現「1 則未讀」，打開後看到同一則訊息、連結是 `rel="noopener noreferrer"`，再關上（讓舞台回到全寬）。
 - 結束時每個人按「離開」，SFU session 立刻關閉（省額度）。
 
 **在哪裡跑**：`preview.yml` 的 `e2e` job，在預覽部署與 smoke test 之後，`BASE_URL` 是這個 PR 的預覽網址。沒有預覽（fork、沒有 Cloudflare secret）或預覽沒有 `REALTIME_APP_ID`／`REALTIME_APP_SECRET` 時，job 留 notice 並略過（顯示成功）。每次約用數十 MB 的 SFU 流量（`longtalk-dev` app）。
@@ -199,3 +209,44 @@ PW_CHANNEL=chrome BASE_URL=… npm run test:e2e   # 用已安裝的 Chrome，不
 `BASE_URL` 必須是有 SFU secret 的部署（PR 預覽或正式站）；`npm run dev` 的本機 Worker 沒有 secret，媒體連不上。`npm test`（Vitest）只跑 `tests/`，不會撿到 `e2e/`。
 
 **是不是必過的檢查**：目前不是（`main` 的保護只要求 `CI / verify`）。它依賴 Cloudflare 與 SFU secret，fork 的 PR 也不會跑；穩定跑過幾個 PR 後，可以在分支保護加上 Preview workflow 的 `e2e`（略過時算通過）。
+
+## 8. 最小遙測與 `/admin`（e11-t03，D3）
+
+擁有者決定（2026-11-02）：**自架、不用第三方帳號（不用 Sentry）、只用免費額度**。所以遙測全部在自己的 Worker 裡：
+
+| 部分 | 在哪裡 | 做什麼 |
+| --- | --- | --- |
+| 事件 API | `POST /api/events`（`worker/events.ts`，格式 `shared/telemetry.ts`） | 瀏覽器每 10 秒（或離開頁面時用 `sendBeacon`）送一批 ≤ 20 個事件、≤ 8 KB；只接受同站（`Origin`）；每個用戶端（IP 的雜湊，不存 IP）每 10 分鐘最多 60 個事件、其中錯誤 10 個，超過回 429 |
+| 計數 | `TelemetryDO`（全站一個，`worker/telemetry-do.ts`、`worker/telemetry.ts`） | 每小時（留 48 小時）與每天（留 90 天，資料保留表的遙測 90 天）的計數，最近 20 種用戶端錯誤；變動後 30 秒內寫進 storage（一段時間只寫一次） |
+| Analytics Engine | 綁定 `EVENTS`（`wrangler.jsonc`；正式站 dataset `longtalk_events`、預覽 `longtalk_events_preview`） | 每個收下的事件寫一個 data point，之後要細查時用 SQL API；**`/admin` 不需要它** |
+| `/admin` | `src/pages/AdminPage.tsx`（lazy chunk，不在首頁與會議室的 JS 裡）＋ `GET /api/admin/summary` | 輸入 `ADMIN_TOKEN` 才看得到：近 24 小時／7 天的進房數與成功率、失敗原因、重新連線（房間連線／媒體連線）、媒體重建、經由 TURN 的比例、用戶端錯誤、每日表、最近的錯誤、本月 Realtime 流量；最上方是**警示** |
+
+**記哪些事件**：進房成功／失敗（原因：找不到房間、房間已滿、版本過舊、連不上、被另一分頁取代）、重新連線（房間 WebSocket 或媒體）、媒體重建、媒體 session 連上 15 秒後是否走 TURN（算 TURN 比例）、未攔截的錯誤與 Promise rejection（每頁最多 5 種、同一種只報一次、名稱與訊息截短並去掉網址、e-mail、長數字、房號；Worker 收到後再清一次；抽樣比例 `ERROR_SAMPLE_RATE` 目前是 1，量大再調低）。**不記**名字、房號、聊天內容、IP。D4 的離開評分（`e4-t18`）加一種事件即可：Worker 不認得的事件只丟掉那一個、不會讓整批失敗，所以可以先部署瀏覽器。本機開發（`npm run dev`）與測試不送事件。
+
+**警示（目前的做法）**：沒有 Email、沒有 webhook（都要另外的服務或帳號）；`/admin` 最上方用紅字列出：(1) 這個小時加上一個小時，用戶端錯誤 ≥ 20 次；(2) 近 24 小時進房 ≥ 10 次、其中失敗 ≥ 20%。門檻在 `shared/telemetry.ts`。要主動通知的話，之後可以用 Cron Trigger 檢查同一份 summary，再寄到擁有者的信箱（Email Routing 免費）——那是 `e11-t09` 的範圍。
+
+### 擁有者要做的事
+
+1. 產生一個長亂數當密碼，設成**正式 Worker** 的 secret（不要用跟別的地方一樣的密碼；不會出現在 repo、前端或網址裡）：
+
+   ```sh
+   openssl rand -base64 32          # 或任何密碼產生器
+   npx wrangler secret put ADMIN_TOKEN
+   ```
+
+   沒設定時 `/api/admin/summary` 回 503，`/admin` 顯示「還沒設定 ADMIN_TOKEN」；其他功能不受影響。
+2. （選用）PR 預覽也要能看 `/admin`：在 GitHub 設 `PREVIEW_ADMIN_TOKEN`（`gh secret set PREVIEW_ADMIN_TOKEN`，用**另一個**亂數），`preview.yml` 部署後會把它寫成該 PR Worker 的 `ADMIN_TOKEN`；沒設就跳過（notice）。
+3. 打開 `https://<站>/admin`，輸入密碼。密碼只放在這個分頁的記憶體裡（重新整理就要再輸入一次），以 `Authorization: Bearer …` 標頭送出，**不會放在網址**；Worker 用常數時間比對（兩邊先 SHA-256 再 `timingSafeEqual`）。目前沒有猜密碼的次數限制，所以密碼一定要夠長（32 個字元以上的亂數）。
+
+### Analytics Engine（選用的細查）
+
+Analytics Engine 在 Workers 免費方案可用（有每日寫入額度，M0 的量遠低於它，以 Cloudflare 定價頁為準；PR 預覽部署成功即代表免費方案接受這個綁定）；第一次部署時 dataset 自動建立，不用另外設定。要用 SQL 查，需要一個有 **Account Analytics: Read** 權限的 Cloudflare API token（**不是** Worker secret，只在擁有者自己的電腦用；LongTalk 不需要它也能運作）：
+
+```sh
+curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engine/sql"   -H "Authorization: Bearer <分析用的 API token>"   -d "SELECT blob1 AS type, blob2 AS detail, SUM(_sample_interval) AS n
+      FROM longtalk_events
+      WHERE timestamp > NOW() - INTERVAL '1' DAY
+      GROUP BY type, detail ORDER BY n DESC"
+```
+
+欄位：`index1`／`blob1` 事件種類（`join`、`reconnect`、`rebuild`、`media`、`error`）；`blob2` 細節（`join`：`ok` 或失敗原因；`reconnect`：`socket`／`media`；`media`：`relay`／`direct`；`error`：`error`／`rejection`）；`blob3`–`blob5` 錯誤的名稱、訊息、來源檔；`blob6` 版本（commit）；`double1` = 1。預覽的資料在 `longtalk_events_preview`。資料保留 3 個月（Analytics Engine 的預設）。
