@@ -10,8 +10,8 @@ import { strings } from '../src/strings.ts'
 // the sharer turns the sound off from the bar and the others hear silence; another takes over
 // after the question; the share stops from the bar and everyone is back in the gallery. Before
 // the media checks, chat (D3): one member sends a message with a link, the others see the unread
-// badge, open the chat and find it there. Runs
-// against a
+// badge, open the chat and find it there. At the end (D4) one member leaves, sees the
+// after-leave screen and rates the call (the rating reaches POST /api/events). Runs against a
 // deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
 // `e2e`).
 //
@@ -484,5 +484,32 @@ interop(
         alice.page.getByRole('figure', { name: strings.screenShare.region(carol.name) }),
       ).toHaveCount(0)
     })
+
+    await interop.step(
+      'Carol leaves: the after-leave screen, a rating sent as telemetry, the others see her go (D4)',
+      async () => {
+        const rated = carol.page.waitForRequest(
+          (request) =>
+            request.method() === 'POST' &&
+            new URL(request.url()).pathname === '/api/events' &&
+            (request.postData() ?? '').includes('"rating"'),
+        )
+        await toolbarButton(carol, strings.toolbar.leave).click()
+        await expect(carol.page.getByRole('heading', { name: strings.left.title })).toBeVisible()
+        await expect(carol.page.getByRole('button', { name: strings.left.rejoin })).toBeVisible()
+        await carol.page
+          .getByRole('button', { name: strings.left.scoreLabel(5, strings.left.scores[5]) })
+          .click()
+        await expect(carol.page.getByRole('status')).toHaveText(strings.left.thanks)
+        const request = await rated
+        expect(JSON.parse(request.postData() ?? '{}')).toEqual({
+          events: expect.arrayContaining([{ type: 'rating', score: 5 }]),
+        })
+        expect((await request.response())?.status()).toBe(202)
+        for (const other of [alice, bob]) {
+          await expect(tile(other, carol), `${other.name} sees Carol leave`).toHaveCount(0)
+        }
+      },
+    )
   },
 )

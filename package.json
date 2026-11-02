@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "budget": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/budget.ts",
+    "brand": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/brand.ts",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler deploy",
     "test:e2e": "playwright test"

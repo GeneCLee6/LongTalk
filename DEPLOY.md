@@ -192,6 +192,7 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
 - **螢幕分享（D1）**：Bob 按「分享螢幕」：他看到「你正在分享畫面」條、自己維持格狀；Alice、Carol 的舞台切成分享版面、主區看到 Bob 的畫面（每秒 ≥ 3 幀）、Carol 的鏡頭在側列照常。Carol 按分享 → 「接手分享？」→ 接手：Bob 的提示條消失、大家看到 Carol 的畫面。Carol 從提示條停止：三人都回到格狀。headless Chromium 沒有螢幕可擷取、也沒有選擇器可點，所以分享來源是 `addInitScript` 換掉的 `getDisplayMedia`（canvas `captureStream`，會動的畫面）；真的選擇器在 §5 第 9 步實測。
 - **分享音訊（D2）**：替身 `getDisplayMedia` 在房間要求音訊時多給一條 oscillator 的音軌（當成分頁音訊）。Alice、Carol 的 `audio[data-share-audio="Bob"]` 音量峰值 > 0.05（Bob 的麥克風此時是靜音的，聲音只會來自分享音訊）；Bob 按提示條的「關閉分享音訊」→ Alice 聽到靜音、分享畫面照常；「開啟分享音訊」→ 聲音回來。Carol 接手後 Bob 的分享音訊元素消失、Alice 聽得到 Carol 的分享音訊。真的分頁／系統音訊與回音在 §5 第 10 步實測。
 - **聊天（D3）**：媒體檢查之前，Alice 打開聊天、送一則帶連結的中文訊息；Bob、Carol 的「聊天」鈕出現「1 則未讀」，打開後看到同一則訊息、連結是 `rel="noopener noreferrer"`，再關上（讓舞台回到全寬）。
+- **離開後畫面（D4）**：最後 Carol 按「離開」：她看到「你已經離開會議室」與「重新加入」，按「5 分：很好」後出現「謝謝你的回饋！」，而且這個評分真的送到 `POST /api/events`（請求內容有 `{ "type": "rating", "score": 5 }`、回 202）；Alice、Bob 的舞台上 Carol 的格子消失。
 - 結束時每個人按「離開」，SFU session 立刻關閉（省額度）。
 
 **在哪裡跑**：`preview.yml` 的 `e2e` job，在預覽部署與 smoke test 之後，`BASE_URL` 是這個 PR 的預覽網址。沒有預覽（fork、沒有 Cloudflare secret）或預覽沒有 `REALTIME_APP_ID`／`REALTIME_APP_SECRET` 時，job 留 notice 並略過（顯示成功）。每次約用數十 MB 的 SFU 流量（`longtalk-dev` app）。
@@ -216,12 +217,12 @@ PW_CHANNEL=chrome BASE_URL=… npm run test:e2e   # 用已安裝的 Chrome，不
 
 | 部分 | 在哪裡 | 做什麼 |
 | --- | --- | --- |
-| 事件 API | `POST /api/events`（`worker/events.ts`，格式 `shared/telemetry.ts`） | 瀏覽器每 10 秒（或離開頁面時用 `sendBeacon`）送一批 ≤ 20 個事件、≤ 8 KB；只接受同站（`Origin`）；每個用戶端（IP 的雜湊，不存 IP）每 10 分鐘最多 60 個事件、其中錯誤 10 個，超過回 429 |
+| 事件 API | `POST /api/events`（`worker/events.ts`，格式 `shared/telemetry.ts`） | 瀏覽器每 10 秒（或離開頁面時用 `sendBeacon`）送一批 ≤ 20 個事件、≤ 8 KB；只接受同站（`Origin`）；每個用戶端（IP 的雜湊，不存 IP）每 10 分鐘最多 60 個事件、其中錯誤 10 個、評分 3 個，超過回 429 |
 | 計數 | `TelemetryDO`（全站一個，`worker/telemetry-do.ts`、`worker/telemetry.ts`） | 每小時（留 48 小時）與每天（留 90 天，資料保留表的遙測 90 天）的計數，最近 20 種用戶端錯誤；變動後 30 秒內寫進 storage（一段時間只寫一次） |
 | Analytics Engine | 綁定 `EVENTS`（`wrangler.jsonc`；正式站 dataset `longtalk_events`、預覽 `longtalk_events_preview`）。**目前註解掉**，等擁有者在帳號啟用 Analytics Engine（下方） | 每個收下的事件寫一個 data point，之後要細查時用 SQL API；**`/admin` 不需要它**，沒有綁定時 Worker 只是不寫 |
-| `/admin` | `src/pages/AdminPage.tsx`（lazy chunk，不在首頁與會議室的 JS 裡）＋ `GET /api/admin/summary` | 輸入 `ADMIN_TOKEN` 才看得到：近 24 小時／7 天的進房數與成功率、失敗原因、重新連線（房間連線／媒體連線）、媒體重建、經由 TURN 的比例、用戶端錯誤、每日表、最近的錯誤、本月 Realtime 流量；最上方是**警示** |
+| `/admin` | `src/pages/AdminPage.tsx`（lazy chunk，不在首頁與會議室的 JS 裡）＋ `GET /api/admin/summary` | 輸入 `ADMIN_TOKEN` 才看得到：近 24 小時／7 天的進房數與成功率、失敗原因、重新連線（房間連線／媒體連線）、媒體重建、經由 TURN 的比例、用戶端錯誤、離開評分（平均與 1–5 分的分布；每日表有平均）、每日表、最近的錯誤、本月 Realtime 流量；最上方是**警示** |
 
-**記哪些事件**：進房成功／失敗（原因：找不到房間、房間已滿、版本過舊、連不上、被另一分頁取代）、重新連線（房間 WebSocket 或媒體）、媒體重建、媒體 session 連上 15 秒後是否走 TURN（算 TURN 比例）、未攔截的錯誤與 Promise rejection（每頁最多 5 種、同一種只報一次、名稱與訊息截短並去掉網址、e-mail、長數字、房號；Worker 收到後再清一次；抽樣比例 `ERROR_SAMPLE_RATE` 目前是 1，量大再調低）。**不記**名字、房號、聊天內容、IP。D4 的離開評分（`e4-t18`）加一種事件即可：Worker 不認得的事件只丟掉那一個、不會讓整批失敗，所以可以先部署瀏覽器。本機開發（`npm run dev`）與測試不送事件。
+**記哪些事件**：進房成功／失敗（原因：找不到房間、房間已滿、版本過舊、連不上、被另一分頁取代）、重新連線（房間 WebSocket 或媒體）、媒體重建、媒體 session 連上 15 秒後是否走 TURN（算 TURN 比例）、未攔截的錯誤與 Promise rejection（每頁最多 5 種、同一種只報一次、名稱與訊息截短並去掉網址、e-mail、長數字、房號；Worker 收到後再清一次；抽樣比例 `ERROR_SAMPLE_RATE` 目前是 1，量大再調低）。離開評分（D4 `e4-t18`：離開後畫面的一題 1–5 分，只有分數，沒有文字、房號或成員；一次離開最多評一次）。**不記**名字、房號、聊天內容、IP。加新的事件種類時，Worker 不認得的事件只丟掉那一個、不會讓整批失敗，所以可以先部署瀏覽器。本機開發（`npm run dev`）與測試不送事件。
 
 **警示（目前的做法）**：沒有 Email、沒有 webhook（都要另外的服務或帳號）；`/admin` 最上方用紅字列出：(1) 這個小時加上一個小時，用戶端錯誤 ≥ 20 次；(2) 近 24 小時進房 ≥ 10 次、其中失敗 ≥ 20%。門檻在 `shared/telemetry.ts`。要主動通知的話，之後可以用 Cron Trigger 檢查同一份 summary，再寄到擁有者的信箱（Email Routing 免費）——那是 `e11-t09` 的範圍。
 
@@ -254,4 +255,25 @@ curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engin
       GROUP BY type, detail ORDER BY n DESC"
 ```
 
-欄位：`index1`／`blob1` 事件種類（`join`、`reconnect`、`rebuild`、`media`、`error`）；`blob2` 細節（`join`：`ok` 或失敗原因；`reconnect`：`socket`／`media`；`media`：`relay`／`direct`；`error`：`error`／`rejection`）；`blob3`–`blob5` 錯誤的名稱、訊息、來源檔；`blob6` 版本（commit）；`double1` = 1。預覽的資料在 `longtalk_events_preview`。資料保留 3 個月（Analytics Engine 的預設）。
+欄位：`index1`／`blob1` 事件種類（`join`、`reconnect`、`rebuild`、`media`、`error`、`rating`）；`blob2` 細節（`join`：`ok` 或失敗原因；`reconnect`：`socket`／`media`；`media`：`relay`／`direct`；`error`：`error`／`rejection`；`rating`：分數 `1`–`5`）；`blob3`–`blob5` 錯誤的名稱、訊息、來源檔；`blob6` 版本（commit）；`double1` = 1。預覽的資料在 `longtalk_events_preview`。資料保留 3 個月（Analytics Engine 的預設）。
+
+## 9. 品牌檔案：favicon、App 圖示、OG 圖、manifest（e4-t19，D4）
+
+名稱只用英文 **LongTalk**（PRD §14、DESIGN §7）：標誌、圖示、manifest 的 `name`／`short_name`、`<title>`、Open Graph 標題與圖片都沒有中文名。說明文字（`description`、`og:description`）是介面文字，用繁體中文。
+
+| 檔案（`public/`） | 從哪裡來 | 用途 |
+| --- | --- | --- |
+| `favicon.svg` | `docs/design/logo/favicon.svg` 原樣複製 | 分頁圖示（支援 SVG 的瀏覽器） |
+| `favicon.ico`、`icons/favicon-32.png` | `favicon.svg` 32 px（ICO 裡包一張 PNG） | 不吃 SVG 的瀏覽器、會自己去要 `/favicon.ico` 的爬蟲 |
+| `apple-touch-icon.png` | `favicon.svg` 拿掉圓角、180 px | iPhone／iPad「加入主畫面」（iOS 自己切圓角） |
+| `icons/icon-192.png`、`icon-512.png` | `favicon.svg`（圓角方塊） | manifest `purpose: any` |
+| `icons/icon-maskable-192.png`、`icon-maskable-512.png` | `icon-maskable.svg`（滿版、圖在中央安全區） | manifest `purpose: maskable`（Android 依系統形狀裁切） |
+| `og-image.png` | 1200×630：品牌藍綠底、白色標誌、「LongTalk」與英文標語「The meeting room that never cuts out」 | 貼連結到 LINE、Messenger、Slack、X 時的預覽圖 |
+| `manifest.webmanifest` | `src/brand.ts` 的 `webManifest()` | `name`／`short_name` 都是 LongTalk，`display: standalone`，顏色是 `tokens.ts` 的深色背景（會議室一律深色） |
+| `_headers` | 手寫 | 快取標頭（下方） |
+
+- **重新產生**：改了 `docs/design/logo/*.svg`、`src/brand.ts` 或 `tokens.ts` 的顏色後跑 `npm run brand`（用 Playwright 已安裝的 Chromium 把 SVG 畫成 PNG；沒有的話先 `npx playwright install chromium`），把 `public/` 的變動一起提交。OG 圖的字用品牌字體 `Inter`，沒有就用系統的無襯線字，所以不同電腦產生的 OG 圖可能有一點差異；其他圖示只有圖形，結果一樣。`tests/shared/brand.test.ts` 會檢查 `public/` 與 `index.html` 跟 `src/brand.ts` 一致（manifest、每張圖的尺寸、meta 標籤、名稱沒有中文字）。
+- **`index.html` 的標籤**：`favicon.ico`＋`favicon.svg`、`apple-touch-icon`、`manifest`、兩個 `theme-color`（淺色／深色跟系統，取 `tokens.ts` 的 `bg`）、`description`、`og:*`、`twitter:card`（`summary_large_image`）。**`og:image` 必須是絕對網址**，寫死正式站 `https://longtalk.genelee-pro.workers.dev/og-image.png`（PR 預覽也指向正式站的圖）；換網域時改 `src/brand.ts` 的 `SITE_URL` 與 `index.html`，測試會比對兩者。
+- **快取**（`public/_headers`，Workers Static Assets 會讀它、不會把它當檔案送出）：圖示與 OG 圖 1 天、manifest 1 小時（並明確給 `Content-Type: application/manifest+json`）；其他檔案維持預設（每次用 ETag 驗證）。**不給 `/assets/*` 長快取**：雖然 Vite 的檔名帶雜湊，但部署後舊分頁要的舊 chunk 已經不在，會落到 single-page-application 的 `index.html`，那個回應不能用 chunk 的名字快取一年。
+- **沒有 service worker**：有 manifest 與圖示，Chrome／Edge／Android 可以「安裝」或「加到主畫面」，iOS 用 `apple-touch-icon`；離線殼、安裝提示、新版本提示是 M1 的 `e4-t12`（AC-4.7）。
+- **部署後檢查**：`scripts/smoke.sh` 在每次預覽與正式部署後確認這些檔案回 200 且型別正確（`image/svg+xml`、`image/png`、`application/manifest+json`），manifest 寫的是 LongTalk，首頁連到 manifest。
