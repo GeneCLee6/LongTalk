@@ -144,6 +144,24 @@ export const size = {
 export const breakpoint = {
   // At or below this width the layout is the phone layout (DESIGN.md §4)
   phone: '640px',
+  // A landscape screen at or below this height is a phone held sideways (e4-t07)
+  phoneLandscape: '500px',
+} as const
+
+/**
+ * Media queries, shared by CSS (`@media ${media.phone}`) and JS (matchMedia, layoutContext.ts)
+ * so the two never disagree about whether this is a phone
+ */
+export const media = {
+  // A phone held upright (or a desktop window as narrow): the paged gallery
+  phonePortrait: `(max-width: ${breakpoint.phone}) and (orientation: portrait)`,
+  // A phone held sideways (or a window as short): the speaker layout
+  phoneLandscape: `(max-height: ${breakpoint.phoneLandscape}) and (orientation: landscape)`,
+  // Either: compact chrome (icon-only toolbar, bottom sheets)
+  phone: `(max-width: ${breakpoint.phone}), (max-height: ${breakpoint.phoneLandscape}) and (orientation: landscape)`,
+  // A mouse or trackpad: the pager's previous / next buttons (touch screens swipe)
+  finePointer: '(hover: hover) and (pointer: fine)',
+  reducedMotion: '(prefers-reduced-motion: reduce)',
 } as const
 
 export const motion = {
@@ -155,5 +173,7 @@ export const motion = {
 export const layer = {
   overlay: 10,
   menu: 20,
+  // Bottom sheets and full-screen drawers (phones), above menus, below toasts
+  drawer: 25,
   toast: 30,
 } as const

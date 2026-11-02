@@ -1,6 +1,6 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import styled, { css } from 'styled-components'
-import { breakpoint, color, fontSize, motion, radius, size, space } from '../styles/tokens.ts'
+import { color, fontSize, motion, radius, size, media, space } from '../styles/tokens.ts'
 
 export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
   /** Accessible name, and the visible caption when `showLabel` is set (from strings.ts) */
@@ -92,7 +92,7 @@ const Wrapper = styled.button<{ $danger: boolean }>`
     opacity: 0.5;
   }
 
-  @media (max-width: ${breakpoint.phone}) {
+  @media ${media.phone} {
     min-width: ${size.toolbarButtonTouch};
     min-height: ${size.toolbarButtonTouch};
   }
@@ -115,7 +115,7 @@ const Caption = styled.span`
   line-height: 1;
   white-space: nowrap;
 
-  @media (max-width: ${breakpoint.phone}) {
+  @media ${media.phone} {
     display: none;
   }
 `

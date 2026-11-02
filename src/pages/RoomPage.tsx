@@ -8,15 +8,22 @@ import {
   type RoomInfo,
   type Role,
 } from '../../shared/protocol.ts'
+import { pickSpeaker } from '../../shared/layout.ts'
 import { isRoomId } from '../../shared/room-id.ts'
 import type { UsageState } from '../../shared/usage.ts'
 import { getRoom } from '../api/rooms.ts'
 import { fetchIceConfig } from '../api/turn.ts'
 import { Button } from '../components/Button.tsx'
+import {
+  PhoneLayoutContext,
+  usePhoneLayoutQuery,
+  type PhoneLayout,
+} from '../components/layoutContext.ts'
+import { MemberAudio } from '../components/MemberAudio.tsx'
 import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
 import { PreJoin } from '../components/PreJoin.tsx'
-import { Stage } from '../components/Stage.tsx'
+import { Stage, type StageMode } from '../components/Stage.tsx'
 import { Tile, type TileProps } from '../components/Tile.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
 import { Toolbar } from '../components/Toolbar.tsx'
@@ -51,7 +58,7 @@ import { copyRoomLink, roomUrl, shareRoomLink, type LinkOutcome } from '../room/
 import { useSpeaking } from '../room/useSpeaking.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
 import { strings } from '../strings.ts'
-import { breakpoint, color, font, fontSize, layer, radius, space } from '../styles/tokens.ts'
+import { color, font, fontSize, layer, radius, media, space } from '../styles/tokens.ts'
 
 /** What the pre-join screen hands to the room: the room publishes with the media choices */
 export interface JoinChoices {
@@ -239,6 +246,9 @@ function Room({
     }
   }, [title])
   const [renaming, setRenaming] = useState<'room' | 'self' | null>(null)
+  const phone = usePhoneLayoutQuery()
+  // Whoever spoke last, for the speaker layout (phones held sideways)
+  const [lastHeard, setLastHeard] = useState<string | null>(null)
   const [webShare] = useState(canWebShare)
   const [screenShare] = useState(canShareScreen)
   const link = roomUrl(roomId)
@@ -334,18 +344,38 @@ function Room({
     media.error !== 'unauthorized'
   const mediaProblem = mediaLost ? null : mediaErrorText(media.error)
   const selfReconnecting = state.status === 'reconnecting' || media.status === 'reconnecting'
+  const onLeave = () => {
+    leave()
+    onLeft()
+  }
+  const remoteAudio = (member: (typeof members)[number]) => {
+    const mic = member.tracks.find((t) => t.kind === 'mic')
+    return (mic && media.received[trackKey(mic)]?.track) || null
+  }
+  const speaker = pickSpeaker(
+    members.map((member) => member.id),
+    state.you,
+    lastHeard,
+  )
   return (
-    <>
+    <PhoneLayoutContext.Provider value={phone}>
       <TopBar
         title={title}
         startedAt={roomInfo?.startedAt ?? null}
         status={statusText(state)}
         warn={state.status !== 'open'}
         onCopyLink={() => void copyRoomLink(link, title, strings.share.text).then(onLinkOutcome)}
+        onLeave={onLeave}
       />
       <StageArea>
         {inRoom && (
-          <Stage>
+          <Stage
+            mode={stageMode(phone)}
+            speaker={Math.max(
+              0,
+              members.findIndex((member) => member.id === speaker),
+            )}
+          >
             {members.map((member) => {
               const you = member.id === state.you
               const listed = (kind: 'mic' | 'cam') => member.tracks.find((t) => t.kind === kind)
@@ -355,7 +385,7 @@ function Room({
               }
               const cam = listed('cam')
               const mic = listed('mic')
-              const audio = you ? null : received('mic')
+              const audio = you ? null : remoteAudio(member)
               return (
                 <MemberTile
                   key={member.id}
@@ -372,12 +402,11 @@ function Room({
                         ? received('cam')
                         : null
                   }
-                  audio={audio}
                   // The speaking outline follows our own microphone while it sends, theirs
                   // while it is on
                   level={you ? micSending : mic && !mic.muted ? audio : null}
                   micMuted={you ? micSending === null : (mic?.muted ?? true)}
-                  speaker={local.chosen.speaker}
+                  onHeard={you ? undefined : () => setLastHeard(member.id)}
                 />
               )
             })}
@@ -411,10 +440,7 @@ function Room({
           canShareScreen={screenShare}
           onComingSoon={(feature) => show(strings.toolbar.comingSoon(feature))}
           moreItems={moreItems}
-          onLeave={() => {
-            leave()
-            onLeft()
-          }}
+          onLeave={onLeave}
           micOn={local.mic.on}
           camOn={local.cam.on}
           micBusy={!local.ready || local.mic.opening}
@@ -459,9 +485,29 @@ function Room({
           onCancel={() => setRenaming(null)}
         />
       )}
+      {/* Everyone's sound, apart from the tiles: layouts move tiles, never the sound (e4-t07) */}
+      <div hidden>
+        {members.map((member) =>
+          member.id === state.you ? null : (
+            <MemberAudio
+              key={member.id}
+              name={member.name}
+              track={remoteAudio(member)}
+              speaker={local.chosen.speaker}
+            />
+          ),
+        )}
+      </div>
       <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
-    </>
+    </PhoneLayoutContext.Provider>
   )
+}
+
+/** Phones (e4-t07): held upright the gallery pages, held sideways the speaker is big */
+function stageMode(phone: PhoneLayout): StageMode {
+  if (phone === 'portrait') return 'paged'
+  if (phone === 'landscape') return 'speaker'
+  return 'grid'
 }
 
 /**
@@ -483,9 +529,29 @@ function useHostNotice(role: Role | undefined, show: (text: string) => void) {
   }, [role, show])
 }
 
-/** One member's tile, with the speaking outline from their microphone's level (e4-t05) */
-function MemberTile({ level, ...tile }: TileProps & { level: MediaStreamTrack | null }) {
+/** How long someone speaks before the speaker layout gives them the big tile */
+const SPEAKER_HOLD_MS = 1000
+
+/**
+ * One member's tile, with the speaking outline from their microphone's level (e4-t05); tells the
+ * room when they start speaking (the speaker layout shows the last one heard, e4-t07)
+ */
+function MemberTile({
+  level,
+  onHeard,
+  ...tile
+}: TileProps & { level: MediaStreamTrack | null; onHeard?: () => void }) {
   const speaking = useSpeaking(level)
+  const heard = useRef(onHeard)
+  useEffect(() => {
+    heard.current = onHeard
+  })
+  // Only after a second of speech: a cough or a beep does not take the big tile
+  useEffect(() => {
+    if (!speaking) return
+    const timer = setTimeout(() => heard.current?.(), SPEAKER_HOLD_MS)
+    return () => clearTimeout(timer)
+  }, [speaking])
   return <Tile {...tile} speaking={speaking} />
 }
 
@@ -686,7 +752,15 @@ const Alert = styled.div`
  * participants) joins in D3 / F1
  */
 const Shell = styled.main`
+  /*
+   * The visible viewport, nothing more (e4-t07): the room never scrolls, so a phone's URL bar
+   * neither hides nor shows under a swipe, and nothing jumps. 100vh first for browsers without
+   * dvh.
+   */
+  height: 100vh;
   height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   font-family: ${font.ui};
@@ -708,6 +782,12 @@ const StageArea = styled.div`
   position: relative;
   min-width: 0;
   margin: ${space(3)};
+
+  /* Phones: the stage gets every pixel, and stays clear of a sideways notch */
+  @media ${media.phone} {
+    margin: ${space(2)} max(${space(2)}, env(safe-area-inset-right)) ${space(2)}
+      max(${space(2)}, env(safe-area-inset-left));
+  }
 `
 
 /** Above the stage, centred at the top: what is wrong and how to fix it */
@@ -742,7 +822,8 @@ const ToolbarArea = styled.footer`
   border-top: 1px solid ${color.line};
   background: ${color.surface};
 
-  @media (max-width: ${breakpoint.phone}) {
-    padding: 0;
+  /* Phones: edge to edge, above the home indicator */
+  @media ${media.phone} {
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
 `

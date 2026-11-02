@@ -1,6 +1,6 @@
 import styled, { keyframes } from 'styled-components'
 import { strings } from '../strings.ts'
-import { color, fontSize, layer, motion, radius, space } from '../styles/tokens.ts'
+import { color, fontSize, layer, media, motion, radius, space } from '../styles/tokens.ts'
 import type { ToastMessage, ToastTone } from './useToasts.ts'
 
 export interface ToastViewportProps {
@@ -44,10 +44,16 @@ const enter = keyframes`
 const Region = styled.section`
   position: fixed;
   /* Below the room's top bar (44 px), so the status there stays readable */
-  top: ${space(14)};
-  right: ${space(4)};
+  top: calc(${space(14)} + env(safe-area-inset-top));
+  right: max(${space(4)}, env(safe-area-inset-right));
   z-index: ${layer.toast};
   pointer-events: none;
+
+  /* Phones (e4-t07): across the top, inside the screen's edges */
+  @media ${media.phone} {
+    left: max(${space(2)}, env(safe-area-inset-left));
+    right: max(${space(2)}, env(safe-area-inset-right));
+  }
 `
 
 const Stack = styled.div`

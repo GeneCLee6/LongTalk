@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import styled from 'styled-components'
 import type { DeviceLists, DeviceOption } from '../media/devices.ts'
 import { strings } from '../strings.ts'
-import { breakpoint, color, radius, space } from '../styles/tokens.ts'
+import { color, radius, media, space } from '../styles/tokens.ts'
 import { IconButton } from './IconButton.tsx'
 import { CamIcon, CamOffIcon, ChevronUpIcon, MicIcon, MicOffIcon } from './icons.tsx'
 import { Menu, type MenuItem } from './Menu.tsx'
@@ -118,9 +118,14 @@ const Bar = styled.div`
   background: ${color.surface};
   color: ${color.fg};
 
-  @media (max-width: ${breakpoint.phone}) {
-    gap: ${space(1)};
+  /* Phones (e4-t07): one row across the bottom, the buttons spread for the thumb */
+  @media ${media.phone} {
+    flex-wrap: nowrap;
+    justify-content: space-evenly;
+    width: 100%;
+    gap: 0;
     padding: ${space(1)};
+    border-radius: 0;
   }
 `
 
@@ -130,7 +135,7 @@ const Group = styled.div`
   gap: ${space(1)};
 
   /* The device menus' chevrons: narrow on phones, so the toolbar fits one row */
-  @media (max-width: ${breakpoint.phone}) {
+  @media ${media.phone} {
     gap: 0;
 
     [aria-haspopup] {

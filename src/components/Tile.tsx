@@ -1,67 +1,47 @@
-import { useEffect, useRef } from 'react'
+import { useContext } from 'react'
 import styled, { css, keyframes } from 'styled-components'
-import { setSpeaker } from '../media/devices.ts'
 import { strings } from '../strings.ts'
 import { avatar, avatarColor, color, fontSize, motion, radius, space } from '../styles/tokens.ts'
 import { MicOffIcon, ReconnectIcon, SpeakingIcon } from './icons.tsx'
+import { TileVisibleContext } from './layoutContext.ts'
+import { useTrack } from './useTrack.ts'
 
 export interface TileProps {
   name: string
-  /** This browser's own tile: mirrored, never plays its own audio, marked 「你」 */
+  /** This browser's own tile: mirrored, marked 「你」 */
   you?: boolean
   /** The member dropped and may come back (RoomDO keeps them 60 s), or we are reconnecting */
   reconnecting?: boolean
   /** The member's camera (received, or our own local track); null when it is off */
   video: MediaStreamTrack | null
-  /** The member's microphone, received; always null on our own tile */
-  audio: MediaStreamTrack | null
   /** The microphone is off (muted, or never published): the nameplate shows it (e2-t05) */
   micMuted?: boolean
   /** Their microphone is above the speaking threshold (speaking.ts): the green outline */
   speaking?: boolean
-  /** The speaker chosen in the room (setSinkId where supported); null: the system default */
-  speaker?: string | null
   /** Our own media goes through a TURN relay (e2-t07): a quiet note on our own nameplate */
   relayed?: boolean
-}
-
-/** Puts one track into a media element, or clears it (jsdom has no MediaStream) */
-function useTrack<T extends HTMLMediaElement>(track: MediaStreamTrack | null) {
-  const ref = useRef<T>(null)
-  useEffect(() => {
-    const element = ref.current
-    if (!element || !track || typeof MediaStream === 'undefined') return
-    element.srcObject = new MediaStream([track])
-    void element.play?.()?.catch(() => undefined)
-    return () => {
-      element.srcObject = null
-    }
-  }, [track])
-  return ref
 }
 
 /**
  * One member in the room (e4-t04, e4-t05; DESIGN.md §5): their camera, or their initial on a
  * colour from their name; the nameplate bottom-left (muted microphone, speaking mark, name, 「你」);
  * a green outline while they speak; dimmed with a 「重新連線中」 badge while they reconnect. Fills
- * the box the grid gives it. Their microphone plays through a hidden <audio>.
+ * the box the grid gives it. Their microphone plays elsewhere (MemberAudio), so a tile can move
+ * between pages or layouts without a gap in the sound. A tile on a page out of view
+ * (TileVisibleContext, e4-t07) shows the initial instead of the video until it is back.
  */
 export function Tile({
   name,
   you = false,
   reconnecting = false,
   video,
-  audio,
   micMuted = false,
   speaking = false,
-  speaker = null,
   relayed = false,
 }: TileProps) {
-  const videoRef = useTrack<HTMLVideoElement>(video)
-  const audioRef = useTrack<HTMLAudioElement>(audio)
-  useEffect(() => {
-    setSpeaker(audioRef.current, speaker)
-  }, [audioRef, audio, speaker])
+  const visible = useContext(TileVisibleContext)
+  const shown = visible ? video : null
+  const videoRef = useTrack<HTMLVideoElement>(shown)
   const outlined = speaking && !micMuted && !reconnecting
   return (
     <Frame
@@ -71,7 +51,7 @@ export function Tile({
       $speaking={outlined}
       $dimmed={reconnecting}
     >
-      {video ? (
+      {shown ? (
         <Video
           ref={videoRef}
           aria-label={strings.room.tileVideo(name)}
@@ -85,7 +65,6 @@ export function Tile({
           {[...name][0]?.toUpperCase()}
         </Avatar>
       )}
-      {audio && !you && <audio ref={audioRef} autoPlay />}
       {reconnecting && (
         <Badge>
           <ReconnectIcon />
