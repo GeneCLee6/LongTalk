@@ -1,7 +1,7 @@
 ---
 title: ADR-001 — 媒體層：Cloudflare Realtime SFU
 date: 2026-10-30
-status: accepted（兩台裝置實測前為暫定；實測不通過就照「切換條件」改 LiveKit）
+status: accepted（2026-11-02 兩台裝置實測通過：電腦 Chrome ＋ 手機 Chrome 經 Realtime SFU 互通，見 PR #8）
 task: e2-t01
 ---
 
