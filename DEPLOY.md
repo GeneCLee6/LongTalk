@@ -147,14 +147,14 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
 `e2e/interop.spec.ts`（Playwright）：三個 Chromium 用假鏡頭、假麥克風（`--use-fake-device-for-media-stream`，會動的畫面與嗶聲），從首頁開一間房、每隔 3 秒一個經預先加入頁加入，經**真的 Realtime SFU** 檢查：
 
 - 每個人都看到另外兩人的畫面，而且每秒解出 ≥ 5 幀；都聽得到另外兩人（`<audio>` 的音量峰值 > 0.05）。只測兩人時抓不到三人以上才出現的協商競態（見 ADR-001 Realtime API 要點）。
-- 每個成員是**獨立的瀏覽器程序**：Chrome 的假鏡頭屬於整個瀏覽器，負載高時它當掉，同一個瀏覽器裡的所有 context 會一起「找不到鏡頭」，那是測試環境的問題，不是 LongTalk 的。
+- 三人是同一個 Chromium 的三個 context（各自的儲存空間＝不同成員）。Chrome 的假鏡頭偶爾整個不見（`getUserMedia` 回 `NotFoundError`，畫面上是「找不到鏡頭」），那是測試環境的問題、不是 LongTalk 的；log 會印出每個人的 `getUserMedia` 失敗、PeerConnection 狀態、每個 `/api/sfu` 呼叫與送給房間的 `tracks`，看得出是哪一種。改成每人一個瀏覽器程序試過，假鏡頭不見的情況反而更常發生。
 - Alice 按「靜音」：Bob 看到紅色麥克風、聲音變成靜音；按「關閉視訊」：Bob 的格子換成首字（「鏡頭沒開」）；兩個都打開：Bob 又看到、聽到她。
 - Bob 靜音：Alice 看到，而且還在收他的畫面。
 - 結束時每個人按「離開」，SFU session 立刻關閉（省額度）。
 
 **在哪裡跑**：`preview.yml` 的 `e2e` job，在預覽部署與 smoke test 之後，`BASE_URL` 是這個 PR 的預覽網址。沒有預覽（fork、沒有 Cloudflare secret）或預覽沒有 `REALTIME_APP_ID`／`REALTIME_APP_SECRET` 時，job 留 notice 並略過（顯示成功）。每次約用數十 MB 的 SFU 流量（`longtalk-dev` app）。
 
-**不穩的對策**：CI 重試 1 次（第二次還失敗就是真的壞了）；斷言用輪詢（每項最多 30 秒），不用固定等待；一次只跑一個測試。失敗時上傳 `e2e` artifact（`test-results/` 的 trace、每個人的截圖，`playwright-report/`），用 `npx playwright show-trace <trace.zip>` 看；成員的瀏覽器是測試自己開的，所以 trace 與影片只涵蓋開房那一頁，成員畫面看截圖。
+**不穩的對策**：CI 重試 1 次（第二次還失敗就是真的壞了）；斷言用輪詢（每項最多 30 秒），不用固定等待；一次只跑一個測試。失敗時上傳 `e2e` artifact（`test-results/` 的 trace、影片、每個人的截圖，`playwright-report/`），用 `npx playwright show-trace <trace.zip>` 看。
 
 **本機跑**：
 

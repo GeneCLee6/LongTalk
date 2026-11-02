@@ -1,11 +1,4 @@
-import {
-  expect,
-  test,
-  type Browser,
-  type BrowserContext,
-  type LaunchOptions,
-  type Page,
-} from '@playwright/test'
+import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { strings } from '../src/strings.ts'
 
 // e2-t10 (AC-2.2): three browsers with Chrome's fake camera and microphone (a moving picture and
@@ -16,8 +9,9 @@ import { strings } from '../src/strings.ts'
 // deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
 // `e2e`).
 //
-// Every member is its own browser process, like separate people: Chrome's fake capture device
-// belongs to the browser, and under load a crash of it takes every context's camera with it.
+// Every member is a context of the one Chromium (its own storage: a different member). Separate
+// browser processes were tried and were worse: Chrome's fake camera was then often missing
+// altogether (getUserMedia: NotFoundError), which the logs below make easy to tell apart.
 
 const VIDEO_FRAMES_PER_SECOND = 5
 /** Joins this far apart: the next member arrives while the last one is still negotiating */
@@ -27,7 +21,6 @@ const AUDIBLE = 0.05
 
 interface Member {
   name: string
-  browser: Browser
   context: BrowserContext
   page: Page
 }
@@ -50,15 +43,81 @@ async function join(browser: Browser, roomUrl: string, name: string): Promise<Me
     locale: 'zh-TW',
     permissions: ['camera', 'microphone'],
   })
+  // The PeerConnection's states and failed SDP steps, for reading a failure in the CI log
+  await context.addInitScript(() => {
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
+    navigator.mediaDevices.getUserMedia = (constraints) =>
+      getUserMedia(constraints).catch((error: unknown) => {
+        console.info(`[pc] getUserMedia(${JSON.stringify(constraints)}): ${String(error)}`)
+        throw error
+      })
+    const Native = window.RTCPeerConnection
+    let count = 0
+    window.RTCPeerConnection = class extends Native {
+      constructor(config?: RTCConfiguration) {
+        super(config)
+        const id = ++count
+        const say = (text: string) => console.info(`[pc${id}] ${text}`)
+        this.addEventListener('connectionstatechange', () => say(this.connectionState))
+        for (const method of ['setLocalDescription', 'setRemoteDescription'] as const) {
+          const original = this[method].bind(this) as (
+            d?: RTCSessionDescriptionInit,
+          ) => Promise<void>
+          this[method] = ((description?: RTCSessionDescriptionInit) =>
+            original(description).catch((error: unknown) => {
+              say(`${method}(${description?.type}) in ${this.signalingState}: ${String(error)}`)
+              throw error
+            })) as never
+        }
+      }
+    }
+  })
   const page = await context.newPage()
+  // Seconds since this member opened the room, on every line it logs
+  const started = Date.now()
+  const at = () => `${((Date.now() - started) / 1000).toFixed(1)}s`
   page.on('console', (message) => {
-    if (message.type() === 'error') console.log(`[${name}] ${message.text().slice(0, 300)}`)
+    const text = message.text()
+    if (message.type() === 'error' || text.startsWith('[pc')) {
+      console.log(`[${name} ${at()}] ${text.slice(0, 300)}`)
+    }
+  })
+  // Every SFU call and what came back, and what the member tells the room it publishes, for
+  // reading a failure in the CI log
+  page.on('websocket', (socket) =>
+    socket.on('framesent', ({ payload }) => {
+      if (typeof payload !== 'string' || !payload.startsWith('{"t":"tracks"')) return
+      const names = [...payload.matchAll(/"trackName":"([^"]+)"/g)].map((m) => m[1])
+      console.log(`[${name} ${at()}] tracks → room: ${names.join(',')}`)
+    }),
+  )
+  page.on('response', async (response) => {
+    const path = new URL(response.url()).pathname
+    if (!path.startsWith('/api/sfu/')) return
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string
+      errorCode?: string
+      requiresImmediateRenegotiation?: boolean
+      tracks?: { trackName?: string; mid?: string; errorCode?: string }[]
+    }
+    const request = response.request().postData() ?? ''
+    const what = /"location":"(local|remote)"/.exec(request)?.[1] === 'local' ? 'push' : 'pull'
+    const tracks = (body.tracks ?? [])
+      .map((t) => `${t.trackName ?? ''}@${t.mid ?? ''}${t.errorCode ? `!${t.errorCode}` : ''}`)
+      .join(',')
+    const call = path.replace(/^\/api\/sfu\/[^/]+\/sessions\/?/, '').replace(/^[0-9a-f]{64}/, 'S')
+    const errors = [body.error, body.errorCode].filter(Boolean).join(' ')
+    console.log(
+      `[${name} ${at()}] ${response.request().method()} ` +
+        `${call || 'sessions'}${call.endsWith('/tracks') ? ` ${what}` : ''} → ${response.status()}` +
+        `${errors ? ` ${errors}` : ''}${body.requiresImmediateRenegotiation ? ' rir' : ''} ${tracks}`,
+    )
   })
   await page.goto(roomUrl)
   await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill(name)
   await page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
   await expect(page.getByRole('region', { name: strings.room.grid })).toBeVisible()
-  return { name, browser, context, page }
+  return { name, context, page }
 }
 
 const tile = (viewer: Member, other: Member) =>
@@ -132,15 +191,14 @@ async function expectReceiving(viewer: Member, other: Member) {
  * closes their SFU session at once) and, after a failure, leaves a screenshot in the report
  */
 const interop = test.extend<{ room: { url: string; join: (name: string) => Promise<Member> } }>({
-  room: async ({ browser, playwright, launchOptions, channel }, provide, testInfo) => {
+  room: async ({ browser }, provide, testInfo) => {
     const url = await openRoom(browser)
     testInfo.annotations.push({ type: 'room', description: url })
     const members: Member[] = []
-    const options: LaunchOptions = { ...launchOptions, channel }
     await provide({
       url,
       join: async (name) => {
-        const member = await join(await playwright.chromium.launch(options), url, name)
+        const member = await join(browser, url, name)
         members.push(member)
         return member
       },
@@ -156,7 +214,6 @@ const interop = test.extend<{ room: { url: string; join: (name: string) => Promi
         .click({ timeout: 5_000 })
         .catch(() => undefined)
       await member.context.close()
-      await member.browser.close()
     }
   },
 })
