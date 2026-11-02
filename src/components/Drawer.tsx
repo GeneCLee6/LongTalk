@@ -87,7 +87,9 @@ export function Drawer({ title, onClose, children, variant = 'sheet' }: DrawerPr
             <CloseIcon />
           </Close>
         </Header>
-        <Body data-drawer-body="">{children}</Body>
+        <Body data-drawer-body="" $variant={variant}>
+          {children}
+        </Body>
       </Panel>
     </Backdrop>
   )
@@ -187,9 +189,19 @@ const Close = styled.button`
   }
 `
 
-const Body = styled.div`
+const Body = styled.div<{ $variant: DrawerVariant }>`
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0 ${space(2)} ${space(3)};
+
+  /* Full screen: the content fills the rest and scrolls its own parts (the chat's list) */
+  ${({ $variant }) =>
+    $variant === 'full' &&
+    css`
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+    `}
 `

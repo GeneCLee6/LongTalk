@@ -5,6 +5,8 @@ import { HomePage } from './pages/HomePage.tsx'
 
 // The room page is its own chunk: the home page must stay within its JS budget (CLAUDE.md rule 6)
 const RoomPage = lazy(() => import('./pages/RoomPage.tsx'))
+// The owner's dashboard (e11-t03): its own chunk, in neither the home nor the room page's JS
+const AdminPage = lazy(() => import('./pages/AdminPage.tsx'))
 
 export function App() {
   return (
@@ -15,6 +17,7 @@ export function App() {
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/r/:roomId" element={<RoomPage />} />
+            <Route path="/admin" element={<AdminPage />} />
             <Route path="*" element={<HomePage />} />
           </Routes>
         </Suspense>

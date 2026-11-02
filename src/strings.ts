@@ -143,9 +143,11 @@ export const strings = {
     chat: '聊天',
     participants: '參與者',
     participantsCount: (count: number) => `參與者（${count} 人）`,
+    // The chat button's accessible name with its unread badge (D3)
+    chatUnread: (count: number) => (count > 0 ? `聊天（${count} 則未讀）` : '聊天'),
     more: '更多',
     leave: '離開',
-    // Buttons whose feature lands in a later batch (D1, D3, F1)
+    // Buttons whose feature lands in a later batch (F1)
     comingSoon: (feature: string) => `「${feature}」即將推出`,
   },
   // Screen sharing (D1: e3-t01 – e3-t03, e3-t05)
@@ -181,6 +183,86 @@ export const strings = {
     // Where the browser cannot share (e3-t10): the 更多 menu explains instead of a button
     unavailablePhone: '手機瀏覽器不能分享螢幕。要分享，請用電腦加入這間會議室。',
     unavailableBrowser: '這個瀏覽器不能分享螢幕。請改用電腦上的 Chrome、Edge 或 Firefox。',
+  },
+  // Room chat (D3: e5-t01, e5-t02)
+  chat: {
+    title: '聊天',
+    close: '關閉聊天',
+    messages: '聊天訊息',
+    empty: '還沒有訊息。在這裡說的話，房間裡的每個人都看得到。',
+    retention: '訊息只留在這場會議，房間關閉後就會刪除。',
+    inputLabel: '輸入訊息',
+    placeholder: '傳訊息給所有人…',
+    hint: 'Enter 送出，Shift + Enter 換行',
+    send: '送出',
+    you: '你',
+    // 「小潔 · 21:04」 above a message
+    meta: (name: string, time: string) => `${name} · ${time}`,
+    // What a screen reader hears before a message's text
+    spoken: (name: string, time: string) => `${name}，${time}：`,
+    remaining: (left: number) => (left >= 0 ? `還可以打 ${left} 個字` : `超過 ${-left} 個字`),
+    tooLong: (max: number) => `訊息最多 ${max} 個字，請分成幾則傳。`,
+    rateLimited: '你傳得太快了，請等幾秒再傳。',
+    offline: '連線中斷，訊息還沒送出；連上後再按一次送出。',
+    // The bubble that previews a new message while the panel is closed
+    preview: '新訊息',
+    previewOpen: (name: string) => `打開聊天，看 ${name} 的訊息`,
+    openLink: (url: string) => `開啟連結 ${url}（新分頁）`,
+  },
+  // The owner's dashboard (e11-t03): /admin
+  admin: {
+    title: 'LongTalk 管理',
+    lockedTitle: '管理頁',
+    lockedBody: '這一頁只給 LongTalk 的擁有者。輸入管理密碼（Worker 的 ADMIN_TOKEN）才能查看。',
+    tokenLabel: '管理密碼',
+    unlock: '查看',
+    unlocking: '讀取中…',
+    wrongToken: '密碼不對。',
+    notConfigured: '這個部署還沒設定 ADMIN_TOKEN，請照 DEPLOY.md 設定後再試。',
+    loadFailed: '讀取失敗，請再試一次。',
+    lock: '鎖上',
+    refresh: '重新整理',
+    updatedAt: (time: string) => `更新於 ${time}`,
+    alertsTitle: '警示',
+    noAlerts: '目前沒有警示。',
+    alerts: {
+      errors: '最近一兩個小時用戶端錯誤偏多，請看下方「最近的錯誤」。',
+      joinFailures: '近 24 小時進房失敗比例偏高（20% 以上）。',
+    },
+    totalsTitle: '總覽',
+    periods: { last24h: '近 24 小時', last7d: '近 7 天' },
+    metrics: {
+      joins: '進房',
+      joinRate: '進房成功率',
+      joinFailures: '進房失敗',
+      reconnects: '重新連線',
+      rebuilds: '媒體重建',
+      relayRatio: '經由 TURN 轉送',
+      errors: '用戶端錯誤',
+    },
+    reasons: {
+      notFound: '找不到房間',
+      full: '房間已滿',
+      outdated: '版本過舊',
+      lost: '連不上',
+      replaced: '被另一分頁取代',
+    },
+    layers: { socket: '房間連線', media: '媒體連線' },
+    none: '—',
+    percent: (value: number) => `${Math.round(value * 100)}%`,
+    daysTitle: '每日統計',
+    day: '日期（UTC）',
+    recentErrors: '最近的錯誤',
+    noErrors: '沒有錯誤紀錄。',
+    errorCount: (n: number) => `${n} 次`,
+    usageTitle: '本月 Realtime 流量',
+    usage: (month: string, gb: string, state: string) => `${month}：約 ${gb} GB（${state}）`,
+    usageStates: { normal: '正常', low: '低畫質', audioOnly: '只剩音訊' },
+    analyticsEngine: (on: boolean) =>
+      on
+        ? '事件也寫進 Workers Analytics Engine，可用 SQL API 細查（DEPLOY.md §8）。'
+        : '這個部署沒有 Analytics Engine 綁定，只有上方的計數。',
+    privacy: '統計只記事件種類與原因，不含名字、房號、聊天內容或 IP。',
   },
   // A part of the app that could not be loaded (e4-t20): a network blip, or a new deployment
   // replaced the files this page was built with

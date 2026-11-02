@@ -178,3 +178,12 @@ export function ChevronRightIcon() {
     </svg>
   )
 }
+
+/** A paper plane: send a chat message */
+export function SendIcon() {
+  return (
+    <svg {...common}>
+      <path d="M21 3 10 14M21 3l-7 18-4-7-7-4 18-7z" />
+    </svg>
+  )
+}

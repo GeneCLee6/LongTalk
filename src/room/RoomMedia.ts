@@ -96,6 +96,8 @@ export interface RoomMediaState {
   lowQuality: boolean
   /** The media goes through a TURN relay (the selected candidate pair, e2-t07) */
   usingRelay: boolean
+  /** How many times the session was thrown away and built anew (telemetry, e11-t03) */
+  rebuilds: number
 }
 
 /** ICE settings for the next session, and when to ask for fresh ones (TURN credentials expire) */
@@ -155,6 +157,7 @@ export const idleRoomMedia: RoomMediaState = {
   screenRefused: false,
   lowQuality: false,
   usingRelay: false,
+  rebuilds: 0,
 }
 
 const errorCode = (error: unknown): MediaTransportErrorCode =>
@@ -496,6 +499,7 @@ export class RoomMedia {
       published: [],
       received: {},
       usingRelay: false,
+      rebuilds: this.state.rebuilds + 1,
     })
     const transport = this.createTransport()
     this.transport = transport

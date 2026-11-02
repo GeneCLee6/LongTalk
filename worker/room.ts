@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
+import type { ChatMessage } from '../shared/chat.ts'
 import {
   HEARTBEAT_PING,
   HEARTBEAT_PONG,
@@ -28,6 +29,9 @@ const REV_KEY = 'rev'
 const SESSIONS_KEY = 'sessions'
 const USAGE_KEY = 'usage'
 const SCHEDULE_KEY = 'schedule'
+/** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
+const CHAT_PREFIX = 'chat:'
+const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
 
 /** A socket opening asks UsageDO for the month's state when the room has not heard for this long */
 const USAGE_REFRESH_MS = 60_000
@@ -75,6 +79,8 @@ export class RoomDO extends DurableObject<Env> {
         saveSessions: (sessions) => void storage.put(SESSIONS_KEY, sessions),
         saveUsage: (usage) => void storage.put(USAGE_KEY, usage),
         saveSchedule: (schedule) => void storage.put(SCHEDULE_KEY, schedule),
+        saveChat: (message) => void storage.put(chatKey(message.id), message),
+        dropChat: (id) => void storage.delete(chatKey(id)),
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -83,13 +89,14 @@ export class RoomDO extends DurableObject<Env> {
     })
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG))
     void ctx.blockConcurrencyWhile(async () => {
-      const [info, rev, sessions, usage, schedule, alarm] = await Promise.all([
+      const [info, rev, sessions, usage, schedule, alarm, chat] = await Promise.all([
         storage.get<RoomInfo>(ROOM_KEY),
         storage.get<number>(REV_KEY),
         storage.get<SessionRecord[]>(SESSIONS_KEY),
         storage.get<UsageCursor>(USAGE_KEY),
         storage.get<Schedule>(SCHEDULE_KEY),
         storage.getAlarm(),
+        storage.list<ChatMessage>({ prefix: CHAT_PREFIX }),
       ])
       const sockets = ctx
         .getWebSockets()
@@ -103,6 +110,7 @@ export class RoomDO extends DurableObject<Env> {
         sockets,
         usage ?? null,
         schedule ?? null,
+        [...chat.values()],
       )
       // A room stored before C2 has no schedule: restore made one
       await this.syncAlarm()

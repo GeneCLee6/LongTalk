@@ -1,17 +1,22 @@
 import type { HealthResponse } from '../shared/health.ts'
+import { EVENTS_PATH } from '../shared/telemetry.ts'
 import type { UsageState } from '../shared/usage.ts'
+import { handleAdmin, handleEvents, TELEMETRY_OBJECT, type TelemetryEnv } from './events.ts'
 import type { RoomDO } from './room.ts'
 import { handleRooms } from './rooms.ts'
 import { handleSfu, type SfuEnv } from './sfu.ts'
 import { handleTurn, type TurnEnv } from './turn.ts'
+import type { TelemetryDO } from './telemetry-do.ts'
 import type { UsageDO } from './usage-do.ts'
 import { USAGE_OBJECT, type UsageEnv } from './usage.ts'
 
-export interface Env extends SfuEnv, TurnEnv, UsageEnv {
+export interface Env extends SfuEnv, TurnEnv, UsageEnv, TelemetryEnv {
   ASSETS: Fetcher
   ROOM: DurableObjectNamespace<RoomDO>
   /** One object for the whole deployment: the month's Realtime egress (e11-t13) */
   USAGE: DurableObjectNamespace<UsageDO>
+  /** One object for the whole deployment: the telemetry counters behind /admin (e11-t03) */
+  TELEMETRY: DurableObjectNamespace<TelemetryDO>
   // Set at deploy time (wrangler deploy --var APP_VERSION:<commit>)
   APP_VERSION?: string
 }
@@ -76,6 +81,18 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       )
     }
     return Response.json(await usageStub(env).status(), { headers: noStore })
+  }
+  if (url.pathname === EVENTS_PATH || url.pathname.startsWith('/api/admin/')) {
+    const telemetry = () => env.TELEMETRY.get(env.TELEMETRY.idFromName(TELEMETRY_OBJECT))
+    const deps = {
+      record: (client: string, events: Parameters<TelemetryDO['record']>[1]) =>
+        telemetry().record(client, events),
+      summary: () => telemetry().summary(),
+      usage: () => usageStub(env).status(),
+    }
+    return url.pathname === EVENTS_PATH
+      ? handleEvents(request, env, url, deps)
+      : handleAdmin(request, env, url, deps)
   }
   if (url.pathname.startsWith('/api/')) {
     return Response.json({ error: 'not_found' }, { status: 404 })

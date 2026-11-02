@@ -1,3 +1,4 @@
+import { CHAT_CHUNK, CHAT_HISTORY, ChatRateLimit, type ChatMessage } from '../shared/chat.ts'
 import { diff } from '../shared/patch.ts'
 import {
   CloseCode,
@@ -101,6 +102,10 @@ export interface RoomStorage {
   saveUsage(usage: UsageCursor): void
   /** The alarm's jobs (scheduler.ts), saved whenever they change */
   saveSchedule(schedule: Schedule): void
+  /** A chat message the room accepted (D3): each is stored on its own, by id */
+  saveChat(message: ChatMessage): void
+  /** A chat message that fell out of the last CHAT_HISTORY */
+  dropChat(id: number): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -177,6 +182,12 @@ export class RoomHost {
   private schedule = new Scheduler()
   /** The schedule as last stored, to store it only when it changes */
   private storedSchedule = '{}'
+  /** The latest CHAT_HISTORY chat messages, oldest first (D3) */
+  private chat: ChatMessage[] = []
+  /** The id of the last chat message the room accepted (0 before the first) */
+  private chatId = 0
+  /** CHAT_RATE per member; in memory only (an eviction forgets it) */
+  private readonly chatRate = new ChatRateLimit()
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -195,6 +206,7 @@ export class RoomHost {
     sockets: readonly OpenSocket[],
     usage: UsageCursor | null = null,
     schedule: Schedule | null = null,
+    chat: readonly ChatMessage[] = [],
   ): void {
     // Rooms stored before v6 have no name, creator or start time
     this.info = info ? { name: null, createdBy: null, startedAt: null, share: null, ...info } : null
@@ -207,6 +219,9 @@ export class RoomHost {
     this.conns.clear()
     this.baselines.clear()
     this.relayed.clear()
+    this.chatRate.clear()
+    this.chat = [...chat].sort((a, b) => a.id - b.id).slice(-CHAT_HISTORY)
+    this.chatId = this.chat.at(-1)?.id ?? 0
     this.reported = 0
     this.usage = usage?.state ?? 'normal'
     this.usageAt = usage?.at ?? this.deps.now()
@@ -394,7 +409,55 @@ export class RoomHost {
       case 'unshare':
         if (this.info!.share?.memberId === conn.member) this.endShare()
         return
+      case 'chat':
+        this.addChat(connId, conn.member!, message.text)
+        return
     }
+  }
+
+  /**
+   * `chat` (D3, e5-t01): at most CHAT_RATE per member, decided here (CLAUDE.md rule 1). The
+   * message gets the next id, the sender's current name and the server's time, is stored and
+   * goes to everyone joined (the sender too: its acknowledgement). The room keeps the latest
+   * CHAT_HISTORY; older ones leave storage.
+   */
+  private addChat(connId: string, memberId: string, text: string): void {
+    const now = this.deps.now()
+    if (!this.chatRate.take(memberId, now)) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'rate_limited' })
+      return
+    }
+    const member = this.members.get(memberId)!
+    const message: ChatMessage = {
+      id: ++this.chatId,
+      from: memberId,
+      name: member.name,
+      text,
+      at: now,
+    }
+    this.chat.push(message)
+    this.deps.storage.saveChat(message)
+    while (this.chat.length > CHAT_HISTORY) this.deps.storage.dropChat(this.chat.shift()!.id)
+    const frame: ServerMessage = { t: 'chat', messages: [message] }
+    for (const [id, conn] of this.conns) {
+      if (conn.member !== null) this.deps.sockets.send(id, frame)
+    }
+  }
+
+  /** The chat history after a welcome: CHAT_CHUNK messages a frame, the first one with `reset` */
+  private sendChatHistory(connId: string): void {
+    for (let start = 0; start === 0 || start < this.chat.length; start += CHAT_CHUNK) {
+      const messages = this.chat.slice(start, start + CHAT_CHUNK)
+      this.deps.sockets.send(
+        connId,
+        start === 0 ? { t: 'chat', messages, reset: true } : { t: 'chat', messages },
+      )
+    }
+  }
+
+  /** The chat messages the room keeps, oldest first (for tests and the adapter) */
+  get chatHistory(): readonly ChatMessage[] {
+    return this.chat
   }
 
   /**
@@ -703,6 +766,7 @@ export class RoomHost {
       rev: this.rev,
       state: this.sent ?? this.view(),
     })
+    this.sendChatHistory(connId)
   }
 
   private markAway(memberId: string): void {
@@ -725,6 +789,7 @@ export class RoomHost {
     }
     this.baselines.delete(memberId)
     this.relayed.delete(memberId)
+    this.chatRate.forget(memberId)
   }
 
   /** Members are replaced, never mutated: `sent` shares their objects */
@@ -812,6 +877,9 @@ export class RoomHost {
     this.byToken.clear()
     this.baselines.clear()
     this.relayed.clear()
+    this.chat = []
+    this.chatId = 0
+    this.chatRate.clear()
     this.schedule.clearAll()
     this.storedSchedule = '{}'
     this.deps.storage.clear()

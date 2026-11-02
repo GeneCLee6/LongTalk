@@ -15,14 +15,20 @@
       // One object per room (ARCHITECTURE.md §2)
       { "name": "ROOM", "class_name": "RoomDO" },
       // One object for the whole deployment: the month's Realtime egress count (e11-t13)
-      { "name": "USAGE", "class_name": "UsageDO" }
+      { "name": "USAGE", "class_name": "UsageDO" },
+      // One object for the whole deployment: the telemetry counters behind /admin (e11-t03)
+      { "name": "TELEMETRY", "class_name": "TelemetryDO" }
     ]
   },
+  // Workers Analytics Engine (e11-t03, free plan): every accepted telemetry event, for ad-hoc SQL
+  // (DEPLOY.md §8). Optional: /admin reads TelemetryDO's counters, not this.
+  "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "longtalk_events" }],
   // The free plan only offers SQLite-backed Durable Objects. Migrations only ever add: never edit
   // or remove one that was deployed (DEPLOY.md §4)
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RoomDO"] },
-    { "tag": "v2", "new_sqlite_classes": ["UsageDO"] }
+    { "tag": "v2", "new_sqlite_classes": ["UsageDO"] },
+    { "tag": "v3", "new_sqlite_classes": ["TelemetryDO"] }
   ],
   // The Realtime free-tier guard (e11-t13, DEPLOY.md §6): GB of SFU + TURN egress this calendar
   // month (UTC) after which cameras send low quality, and after which new video is refused
@@ -40,9 +46,11 @@
       "durable_objects": {
         "bindings": [
           { "name": "ROOM", "class_name": "RoomDO" },
-          { "name": "USAGE", "class_name": "UsageDO" }
+          { "name": "USAGE", "class_name": "UsageDO" },
+          { "name": "TELEMETRY", "class_name": "TelemetryDO" }
         ]
       },
+      "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "longtalk_events_preview" }],
       "vars": {
         "USAGE_LOW_QUALITY_GB": "800",
         "USAGE_AUDIO_ONLY_GB": "950"

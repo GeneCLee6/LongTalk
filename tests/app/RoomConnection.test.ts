@@ -447,3 +447,57 @@ describe('RoomConnection reconnect (e2-t08)', () => {
     expect(t.connection.getState().view?.members).toEqual({ a: member('a') })
   })
 })
+
+describe('RoomConnection chat (D3, e5-t01)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const message = (id: number, from = 'b') => ({ id, from, name: 'B', text: `m${id}`, at: id })
+
+  it('takes the history after the welcome, then appends new messages once each', () => {
+    const t = connect()
+    t.socket.open()
+    // Before the welcome nothing counts
+    t.socket.receive({ t: 'chat', messages: [message(9)], reset: true })
+    expect(t.connection.getState().chatLoaded).toBe(false)
+    t.socket.receive(welcome(1))
+    t.socket.receive({ t: 'chat', messages: [message(1), message(2)], reset: true })
+    t.socket.receive({ t: 'chat', messages: [message(3)] })
+    // A duplicate (already in a later history) is ignored
+    t.socket.receive({ t: 'chat', messages: [message(3)] })
+    const state = t.connection.getState()
+    expect(state.chatLoaded).toBe(true)
+    expect(state.chat.map((m) => m.id)).toEqual([1, 2, 3])
+  })
+
+  it('replaces the list with the history a rejoin brings, keeping it across the drop', () => {
+    const t = connect()
+    t.socket.open()
+    t.socket.receive(welcome(1))
+    t.socket.receive({ t: 'chat', messages: [message(1)], reset: true })
+    t.socket.serverClose(1006)
+    expect(t.connection.getState().chat).toHaveLength(1)
+    vi.advanceTimersByTime(1000)
+    t.latest().open()
+    t.latest().receive(welcome(2))
+    t.latest().receive({ t: 'chat', messages: [message(1), message(2)], reset: true })
+    expect(t.connection.getState().chat.map((m) => m.id)).toEqual([1, 2])
+  })
+
+  it('sends normalized text, and says why it did not send', () => {
+    const t = connect()
+    t.socket.open()
+    expect(t.connection.sendChat('hi')).toBe('offline')
+    t.socket.receive(welcome(1))
+    expect(t.connection.sendChat('   ')).toBe('empty')
+    expect(t.connection.sendChat('字'.repeat(2001))).toBe('tooLong')
+    expect(t.connection.sendChat('  hi\r\n  ')).toBe('sent')
+    expect(t.socket.sent.at(-1)).toBe(JSON.stringify({ t: 'chat', text: 'hi' }))
+    for (let i = 0; i < 9; i++) t.connection.sendChat(`m${i}`, 1000)
+    expect(t.connection.sendChat('one too many', 1000)).toBe('rateLimited')
+  })
+})

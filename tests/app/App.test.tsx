@@ -35,7 +35,14 @@ class RoomSocket {
     const roomId = /rooms\/([^/]+)\/ws/.exec(this.url)?.[1] ?? ''
     const members = {
       w: { id: 'w', name: 'Wei', role: 'participant', joinedAt: 1, reconnecting: true, tracks: [] },
-      a: { id: 'a', name: message.name, role: 'host', joinedAt: 2, reconnecting: false, tracks: [] },
+      a: {
+        id: 'a',
+        name: message.name,
+        role: 'host',
+        joinedAt: 2,
+        reconnecting: false,
+        tracks: [],
+      },
     }
     const state = { room: { id: roomId, createdAt: 1 }, members, usage: 'normal' }
     queueMicrotask(() =>
@@ -245,5 +252,43 @@ describe('joining a room', () => {
     visit('/r/abc123')
     expect(await screen.findByRole('alert')).toHaveTextContent('找不到這間會議室')
     expect(fetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('chat in the room (D3, e5-t01, e5-t02)', () => {
+  const push = (socket: RoomSocket, frame: unknown) =>
+    act(() => socket.onmessage?.({ data: JSON.stringify(frame) }))
+  const fromWei = (id: number, text: string) => ({ id, from: 'w', name: 'Wei', text, at: id })
+
+  it('counts what arrives as unread with a preview, and sends from the side panel', async () => {
+    stubApi()
+    localStorage.setItem('longtalk.name', 'Gene')
+    sessionStorage.setItem(`longtalk.session.${ROOM_ID}`, TOKEN)
+    visit(`/r/${ROOM_ID}`)
+    await screen.findByText('目前 2 人在線')
+    const socket = RoomSocket.instances.at(-1)!
+    // The history that follows the welcome is not new
+    await push(socket, { t: 'chat', messages: [fromWei(1, '舊訊息')], reset: true })
+    expect(screen.getByRole('button', { name: '聊天' })).toBeInTheDocument()
+    await push(socket, { t: 'chat', messages: [fromWei(2, '看這個 https://example.com')] })
+    expect(screen.getByRole('button', { name: '聊天（1 則未讀）' })).toBeInTheDocument()
+    // The preview bubble opens the chat
+    fireEvent.click(screen.getByRole('button', { name: '打開聊天，看 Wei 的訊息' }))
+    const panel = screen.getByRole('complementary', { name: '聊天' })
+    expect(within(panel).getByRole('link', { name: 'https://example.com' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '聊天' })).toHaveAttribute('aria-expanded', 'true')
+    const box = within(panel).getByRole('textbox', { name: '輸入訊息' })
+    expect(box).toHaveFocus()
+    fireEvent.change(box, { target: { value: '收到' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(socket.sent.at(-1)).toBe(JSON.stringify({ t: 'chat', text: '收到' }))
+    await push(socket, {
+      t: 'chat',
+      messages: [{ id: 3, from: 'a', name: 'Gene', text: '收到', at: 3 }],
+    })
+    expect(within(panel).getByRole('log')).toHaveTextContent('你 · ')
+    // The room refusing a message as too fast is said
+    await push(socket, { t: 'error', code: 'rate_limited' })
+    expect(screen.getByText('你傳得太快了，請等幾秒再傳。')).toBeInTheDocument()
   })
 })
