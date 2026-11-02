@@ -60,7 +60,7 @@ depends_on: [E2]
 
 ## 驗收條件
 
-- [x] AC-4.1 — 首頁：建房主按鈕、加入輸入框（接受完整連結或代碼）、標誌與一句話；JS gzip ≤ 150 kB；深淺色。（#PR：品牌定稿後在 PR 預覽以淺色與深色截圖確認；首頁 JS 約 102 kB gzip，CI 的 budget 擋）
+- [x] AC-4.1 — 首頁：建房主按鈕、加入輸入框（接受完整連結或代碼）、標誌與一句話；JS gzip ≤ 150 kB；深淺色。（#19：品牌定稿後在 PR 預覽以淺色與深色截圖確認；首頁 JS 約 102 kB gzip，CI 的 budget 擋）
 - [ ] AC-4.2 — 預先加入：名字記住、鏡頭預覽鏡像、音量表、三個裝置選單、進房開關；M1 加喇叭測試音；等候室狀態在此頁。
 - [ ] AC-4.3 — 格狀版面 1–8 格依容器寬高比自動排列，加入／離開時平滑重排；有分享時主區＋側列；講話者外框 300 ms 防抖；`layout.ts` 有測試。
 - [ ] AC-4.4 — 演講者版面、釘選（本機）、聚光燈（主持人，全員）、隱藏自己、隱藏無視訊者；多人分享時可選主區。
@@ -84,8 +84,8 @@ depends_on: [E2]
 - [x] `e4-t07` 手機版面：直式單欄、4 格滑動、單手工具列、全屏抽屜 · AC-4.6 · #15
 - [x] `e4-t08` 分享版面：主區＋側列、分享格標籤（與 E3 `e3-t05` 同 PR） · AC-4.3 · #16
 - [x] `e4-t20` 頁面 chunk 載入失敗（網路瞬斷、部署後舊 chunk 不在了）時顯示「載入失敗，請重新整理」與「重新整理」按鈕，不是空白頁（B4 的 e2e 本機跑時遇過） · AC-4.5 · #16
-- [x] `e4-t18` 離開後畫面：評分一題（送到 E11 遙測）、重新加入、回首頁 · AC-4.5 · #PR（評分是 `rating` 事件、只有 1–5 分，`/admin` 顯示平均與分布；房間在你不在時關閉也顯示這個畫面，沒有「重新加入」；沒有文字意見欄）
-- [x] `e4-t19` 品牌定稿：名稱、標誌、favicon、PWA icon、OG image（來源 `docs/design/logo/`） · AC-4.1 · #PR（`npm run brand` 產生 `public/` 的 favicon、apple-touch-icon、192／512 與 maskable 圖示、1200×630 OG 圖、`manifest.webmanifest`；名稱只用英文 LongTalk；沒有 service worker，PWA 其餘是 `e4-t12`）
+- [x] `e4-t18` 離開後畫面：評分一題（送到 E11 遙測）、重新加入、回首頁 · AC-4.5 · #19（評分是 `rating` 事件、只有 1–5 分，`/admin` 顯示平均與分布；房間在你不在時關閉也顯示這個畫面，沒有「重新加入」；沒有文字意見欄）
+- [x] `e4-t19` 品牌定稿：名稱、標誌、favicon、PWA icon、OG image（來源 `docs/design/logo/`） · AC-4.1 · #19（`npm run brand` 產生 `public/` 的 favicon、apple-touch-icon、192／512 與 maskable 圖示、1200×630 OG 圖、`manifest.webmanifest`；名稱只用英文 LongTalk；沒有 service worker，PWA 其餘是 `e4-t12`）
 
 ### M1
 
