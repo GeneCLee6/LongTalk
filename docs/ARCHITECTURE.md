@@ -28,6 +28,7 @@
 - **Realtime SFU**：每位成員一個 SFU session；發布自己的軌（push），依 RoomDO 告知的 track id 訂閱別人的軌（pull）。SFU 的 API 呼叫由 Worker 代理（App token 不進瀏覽器）。
 - **媒體現況（B1）**：代理在 `/api/sfu/<roomId>/*`，每個呼叫帶成員的 session token，由該房 RoomDO 判斷（只服務房內成員、session 屬於建立它的成員、只能 pull 同房的軌；`docs/adr-001-media-layer.md`）。瀏覽器發布後送 `tracks`（協定 v3），RoomDO 把它放進 `Member.tracks` 推給大家；瀏覽器端 `src/room/RoomMedia.ts` 以 desired（RoomDO 的軌清單）／actual（transport 已訂閱）對齊來訂閱與退訂。
 - **開關與裝置（B2）**：協定 v4 的每條軌帶 `muted`。關麥克風或鏡頭不取消發布：`MediaTransport.replaceTrack` 改送 null（不重新協商，訂閱者不用重訂），再送一次 `tracks`（`muted: true`），狀態存在 RoomDO。切換裝置也是 `replaceTrack`。本機裝置由 `src/room/LocalDevices.ts` 管：麥克風靜音時保持開啟（解除靜音不延遲），鏡頭關掉時停止裝置（燈會熄）；裝置被拔掉（track `ended`）就改用同類的另一個，沒有就關掉並提示，接上新裝置（`devicechange`）時自動補回；進房時剛被預先加入頁釋放的裝置若「找不到／被佔用」，600 ms 後安靜地再試一次；選擇存 localStorage（`longtalk.devices`），和預先加入頁共用。伺服器估算流出時不算 muted 的軌。
+- **版面與講話偵測（C1）**：格狀版面是 `shared/layout.ts` 的純函式（人數＋容器尺寸 → 欄、列、格子大小），會議室頁的 `Stage` 以 `ResizeObserver` 量舞台、CSS 排格子，JS 不逐格定位。講話外框在瀏覽器本機算：`src/media/speaking.ts` 把每個格子的麥克風軌（自己的本機軌、別人收到的軌）接到同一個 `AudioContext` 的 analyser，一個 100 ms 計時器讀全部，門檻＋300 ms 防抖，只在變化時通知 React；不經過伺服器，也不需要 SFU 的 audio level 統計。
 - **UsageDO（B1，`e11-t13`）**：整個部署一個（`idFromName('global')`），記這個月（UTC）的 Realtime 流出估算；每間房的 alarm 每 15 秒把「瀏覽器回報的 `bytesReceived` 增量」與「伺服器估算（時間 × 收的軌 × 假設位元率）」取大者交給它。達門檻後 `RoomView.usage` 變成 `low`（鏡頭低畫質）或 `audioOnly`（代理拒絕新的視訊軌）。細節與門檻在 `DEPLOY.md` §6。
 - **TURN**：Worker 發短期憑證給瀏覽器；ICE 設定一律含 TURN，只在直連失敗時用到。
 - **R2**：聊天檔案（24 小時）、雲端錄影（有效期）、白板匯出。
