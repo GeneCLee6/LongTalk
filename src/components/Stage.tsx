@@ -479,8 +479,9 @@ const SpeakerRow = styled.section<{ $bottom: boolean }>`
   align-items: center;
   justify-content: center;
   gap: ${DEFAULT_GRID_GAP}px;
-  width: 100%;
-  height: 100%;
+  /* The stage's exact box: the strip scrolls within it instead of growing it */
+  position: absolute;
+  inset: 0;
 `
 
 /** Scrolls when everyone does not fit; centred when they do (StripInner's auto margins) */
