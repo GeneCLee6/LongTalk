@@ -23,6 +23,8 @@ import {
 export class FakeSfu {
   readonly published = new Map<string, PublishedTrack & { track: MediaStreamTrack }>()
   readonly transports = new Set<FakeTransport>()
+  /** Refuse new video tracks like the proxy does once the month is audio-only (e11-t13) */
+  refuseVideo = false
   #nextSession = 1
 
   createTransport(): FakeTransport {
@@ -47,6 +49,8 @@ export class FakeTransport implements MediaTransport {
   /** Layers asked for via setPreferredLayer, by trackKey */
   readonly preferredLayers = new Map<string, Layer>()
   readonly subscriptions = new Map<string, RemoteTrack>()
+  /** What getStats() reports as received; tests move it forward */
+  bytesReceived = 0
   #emitter = new TransportEmitter()
   #ownTracks = new Set<string>()
   #nextTrack = 1
@@ -66,6 +70,9 @@ export class FakeTransport implements MediaTransport {
 
   async publish(track: MediaStreamTrack, options: PublishOptions): Promise<PublishedTrack> {
     const sessionId = this.#requireSession()
+    if (this.sfu.refuseVideo && (options.kind === 'cam' || options.kind === 'screen')) {
+      throw new MediaTransportError('quota_exceeded', 'usage_audio_only')
+    }
     const published: PublishedTrack = {
       sessionId,
       trackName: `${options.kind}-${this.#nextTrack++}`,
@@ -115,7 +122,7 @@ export class FakeTransport implements MediaTransport {
 
   async getStats(): Promise<TransportStats> {
     this.#requireSession()
-    return { rttMs: 0, usingRelay: false, bytesSent: 0, bytesReceived: 0 }
+    return { rttMs: 0, usingRelay: false, bytesSent: 0, bytesReceived: this.bytesReceived }
   }
 
   on<E extends MediaTransportEvent>(

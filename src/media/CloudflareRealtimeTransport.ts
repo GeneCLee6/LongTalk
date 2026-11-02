@@ -15,6 +15,7 @@ import {
   type MediaTransport,
   type MediaTransportEvent,
   type MediaTransportEvents,
+  type MediaTransportErrorCode,
   type PublishOptions,
   type PublishedTrack,
   type RemoteTrack,
@@ -26,10 +27,11 @@ import {
 // MediaTransport over Cloudflare Realtime SFU (docs/adr-001-media-layer.md). One SFU session and
 // one RTCPeerConnection per participant: publishing pushes local tracks into the session,
 // subscribing pulls other sessions' tracks into it. All SFU calls go through the Worker proxy
-// (/api/sfu/*, worker/sfu.ts), which holds the App Secret.
+// (/api/sfu/<roomId>/*, worker/sfu.ts), which holds the App Secret and only serves a member of
+// the room: every call carries the member's session token.
 //
-// A2 draft: enough for the two-browser spike (publish mic/cam, pull another session's tracks).
-// Reconnection (e2-t08), TURN credentials (e2-t07) and simulcast publishing (e2-t11) build on it.
+// B1: publish mic/cam and pull the room's tracks (e2-t03, e2-t04). Reconnection (e2-t08), TURN
+// credentials (e2-t07) and simulcast publishing (e2-t11) build on it.
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }]
 // Realtime expects complete SDP (no trickle ICE); gathering rarely needs this long
@@ -38,8 +40,10 @@ const ICE_GATHERING_TIMEOUT_MS = 1500
 const LAYER_RID: Record<Layer, SimulcastRid> = { high: 'f', medium: 'h', low: 'q' }
 
 export interface CloudflareRealtimeOptions {
-  /** Base of the Worker proxy; default `/api/sfu` */
-  apiBase?: string
+  /** Base of the Worker proxy for the room, `/api/sfu/<roomId>` (shared/sfu.ts sfuApiBase) */
+  apiBase: string
+  /** The member's session token from the room's `welcome`, sent as a bearer token */
+  token: () => string | null
   fetch?: typeof fetch
   createPeerConnection?: (config: RTCConfiguration) => RTCPeerConnection
 }
@@ -62,8 +66,11 @@ export class CloudflareRealtimeTransport implements MediaTransport {
   #published = new Map<string, RTCRtpTransceiver>()
   #subscriptions = new Map<string, Subscription>()
 
-  constructor(options: CloudflareRealtimeOptions = {}) {
-    this.#apiBase = options.apiBase ?? '/api/sfu'
+  #token: () => string | null
+
+  constructor(options: CloudflareRealtimeOptions) {
+    this.#apiBase = options.apiBase
+    this.#token = options.token
     this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init))
     this.#createPc = options.createPeerConnection ?? ((config) => new RTCPeerConnection(config))
   }
@@ -106,19 +113,26 @@ export class CloudflareRealtimeTransport implements MediaTransport {
             ]
           : undefined,
       })
-      const offer = await this.#localOffer(pc)
-      const mid = transceiver.mid
-      if (!mid) throw new MediaTransportError('negotiation_failed', 'Transceiver has no mid')
-      const trackName = `${options.kind}-${crypto.randomUUID().slice(0, 8)}`
-      const res = await this.#api<TracksResponse>('POST', `/sessions/${sessionId}/tracks`, {
-        sessionDescription: offer,
-        tracks: [{ location: 'local', mid, trackName }],
-      })
-      assertTracksOk(res)
-      if (!res.sessionDescription) throw new MediaTransportError('negotiation_failed', 'No answer')
-      await pc.setRemoteDescription(res.sessionDescription)
-      this.#published.set(trackName, transceiver)
-      return { sessionId, trackName, kind: options.kind }
+      try {
+        const offer = await this.#localOffer(pc)
+        const mid = transceiver.mid
+        if (!mid) throw new MediaTransportError('negotiation_failed', 'Transceiver has no mid')
+        const trackName = `${options.kind}-${crypto.randomUUID().slice(0, 8)}`
+        const res = await this.#api<TracksResponse>('POST', `/sessions/${sessionId}/tracks`, {
+          sessionDescription: offer,
+          tracks: [{ location: 'local', mid, trackName }],
+        })
+        assertTracksOk(res)
+        if (!res.sessionDescription)
+          throw new MediaTransportError('negotiation_failed', 'No answer')
+        await pc.setRemoteDescription(res.sessionDescription)
+        this.#published.set(trackName, transceiver)
+        return { sessionId, trackName, kind: options.kind }
+      } catch (error) {
+        // Refused (no video this month) or failed: take the offer back and stop the sender
+        await discard(pc, transceiver)
+        throw error
+      }
     })
   }
 
@@ -274,15 +288,18 @@ export class CloudflareRealtimeTransport implements MediaTransport {
   }
 
   async #api<T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: unknown): Promise<T> {
+    const headers: Record<string, string> = {}
+    const token = this.#token()
+    if (token) headers.authorization = `Bearer ${token}`
+    if (body !== undefined) headers['content-type'] = 'application/json'
     const res = await this.#fetch(`${this.#apiBase}${path}`, {
       method,
-      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     })
     const json = (await res.json().catch(() => ({}))) as T & { error?: string; errorCode?: string }
-    if (res.status === 503 && json.error === 'sfu_not_configured') {
-      throw new MediaTransportError('sfu_not_configured')
-    }
+    const proxyError = PROXY_ERRORS[json.error ?? '']
+    if (!res.ok && proxyError) throw new MediaTransportError(proxyError, json.error)
     if (!res.ok || json.errorCode) {
       throw new MediaTransportError(
         'sfu_error',
@@ -315,6 +332,26 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     if (this.state === state) return
     this.state = state
     this.#emitter.emit('state', state)
+  }
+}
+
+/** The Worker proxy's own refusals (shared/sfu.ts SfuProxyError), as transport errors */
+const PROXY_ERRORS: Partial<Record<string, MediaTransportErrorCode>> = {
+  sfu_not_configured: 'sfu_not_configured',
+  unauthorized: 'unauthorized',
+  forbidden: 'unauthorized',
+  usage_audio_only: 'quota_exceeded',
+  track_not_in_room: 'not_found',
+}
+
+async function discard(pc: RTCPeerConnection, transceiver: RTCRtpTransceiver): Promise<void> {
+  try {
+    if (pc.signalingState === 'have-local-offer') {
+      await pc.setLocalDescription({ type: 'rollback' })
+    }
+    transceiver.stop()
+  } catch {
+    // The PeerConnection is closing; nothing to take back
   }
 }
 

@@ -14,7 +14,8 @@ import {
 
 const state = {
   room: { id: 'abcdefghij', createdAt: 1 },
-  members: { m1: { id: 'm1', name: 'Gene', joinedAt: 2, reconnecting: false } },
+  members: { m1: { id: 'm1', name: 'Gene', joinedAt: 2, reconnecting: false, tracks: [] } },
+  usage: 'normal' as const,
 }
 const TOKEN = 'A'.repeat(43)
 
@@ -43,6 +44,52 @@ describe('protocol', () => {
     }
     expect(parseClientMessage('{"t":"join","name":"   ","token":null}')).toBeNull()
     expect(parseClientMessage('{"t":"join","token":null}')).toBeNull()
+  })
+
+  it('parses what a member publishes and the bytes it received', () => {
+    const tracks = {
+      t: 'tracks',
+      sessionId: 'sess-1',
+      tracks: [
+        { trackName: 'mic-1a2b', kind: 'mic' },
+        { trackName: 'cam-3c4d', kind: 'cam' },
+      ],
+    }
+    expect(parseClientMessage(JSON.stringify(tracks))).toEqual(tracks)
+    expect(parseClientMessage('{"t":"tracks","sessionId":"s","tracks":[]}')).toEqual({
+      t: 'tracks',
+      sessionId: 's',
+      tracks: [],
+    })
+    expect(parseClientMessage('{"t":"stats","sessionId":"s","bytesReceived":1234}')).toEqual({
+      t: 'stats',
+      sessionId: 's',
+      bytesReceived: 1234,
+    })
+  })
+
+  it('refuses malformed track lists and stats', () => {
+    const bad = [
+      { t: 'tracks', sessionId: 'a/b', tracks: [] },
+      { t: 'tracks', sessionId: 's', tracks: [{ trackName: 'x', kind: 'hologram' }] },
+      { t: 'tracks', sessionId: 's', tracks: [{ trackName: '../x', kind: 'mic' }] },
+      // Two of one kind
+      {
+        t: 'tracks',
+        sessionId: 's',
+        tracks: [
+          { trackName: 'a', kind: 'cam' },
+          { trackName: 'b', kind: 'cam' },
+        ],
+      },
+      { t: 'tracks', sessionId: 's', tracks: 'mic' },
+      { t: 'tracks', sessionId: 's', tracks: [null] },
+      { t: 'stats', sessionId: 's', bytesReceived: -1 },
+      { t: 'stats', sessionId: 's', bytesReceived: 1.5 },
+      { t: 'stats', sessionId: 's', bytesReceived: '10' },
+      { t: 'stats', bytesReceived: 10 },
+    ]
+    for (const message of bad) expect(parseClientMessage(JSON.stringify(message))).toBeNull()
   })
 
   it('normalizes names', () => {

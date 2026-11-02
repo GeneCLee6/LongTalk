@@ -13,14 +13,24 @@
 // 4. A socket that closes without `leave` (reload, network) leaves its member in the room marked
 //    `reconnecting` for RECONNECT_GRACE_MS; `leave` removes the member at once.
 //
-// v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`. A v1 browser is
-// refused at the upgrade with CloseCode.versionMismatch and told to reload.
+// 5. Media (B1): a member creates its SFU session through the Worker proxy (/api/sfu/<roomId>/*,
+//    authorised with its session token; the room records the session as the member's), publishes,
+//    and sends `tracks` with what it publishes now. The room puts the list in `Member.tracks` and
+//    everyone subscribes from it. Every STATS_INTERVAL_MS the browser sends `stats` (bytes it
+//    received), which the room counts towards the month's egress (shared/usage.ts); the month's
+//    state is `RoomView.usage`.
+//
+// v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
+// v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
+// A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
+// to reload.
 //
 // View types are `type` aliases, not interfaces, so they stay assignable to JsonValue.
 import type { JsonValue, PatchOp } from './patch.ts'
+import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -66,9 +76,28 @@ export type RoomInfo = {
 /** What GET /api/rooms/<id> answers, for the pre-join screen */
 export type RoomSummary = RoomInfo & { memberCount: number }
 
+/** What a published track is, as the room and the UI care about it (MediaTransport's TrackKind) */
+export type TrackKind = 'mic' | 'cam' | 'screen' | 'screenAudio'
+
+export const TRACK_KINDS: readonly TrackKind[] = ['mic', 'cam', 'screen', 'screenAudio']
+
+/** One track a member publishes: its global address on the SFU and what it is */
+export type MemberTrack = {
+  /** The publisher's SFU session (always the member's current one) */
+  sessionId: string
+  trackName: string
+  kind: TrackKind
+}
+
+/** Realtime session ids and our track names: short, URL-safe */
+const SFU_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
+
+export const isSfuId = (value: unknown): value is string =>
+  typeof value === 'string' && SFU_ID_PATTERN.test(value)
+
 /**
- * One person in the room. Roles arrive with e1-t04 / e1-t06, tracks with e2-t03. The session
- * token is never part of the view: only its owner gets it, in `welcome`.
+ * One person in the room. Roles arrive with e1-t04 / e1-t06. The session token is never part of
+ * the view: only its owner gets it, in `welcome`.
  */
 export type Member = {
   id: string
@@ -76,12 +105,16 @@ export type Member = {
   joinedAt: number
   /** The socket dropped without `leave`; the member keeps its place for RECONNECT_GRACE_MS */
   reconnecting: boolean
+  /** What the member publishes now, at most one track of each kind */
+  tracks: MemberTrack[]
 }
 
 /** What every member sees of the room: the state `snapshot` sends and `patch` keeps up to date */
 export type RoomView = {
   room: RoomInfo
   members: Record<string, Member>
+  /** The month's Realtime egress state (shared/usage.ts); `normal` until the room hears otherwise */
+  usage: UsageState
 }
 
 // ── Server → browser ─────────────────────────────────────────────────────────────────────────
@@ -116,7 +149,21 @@ export type ResyncMessage = { t: 'resync' }
 /** Leaving on purpose: the member is removed at once instead of waiting for RECONNECT_GRACE_MS */
 export type LeaveMessage = { t: 'leave' }
 
-export type ClientMessage = JoinMessage | ResyncMessage | LeaveMessage
+/**
+ * Everything this member publishes now on its SFU session (replaces the previous list). Ignored
+ * unless `sessionId` is the session the member created through the proxy last.
+ */
+export type TracksMessage = {
+  t: 'tracks'
+  sessionId: string
+  tracks: { trackName: string; kind: TrackKind }[]
+}
+
+/** The transport's cumulative bytes received on `sessionId` (the SFU's egress to this browser) */
+export type StatsMessage = { t: 'stats'; sessionId: string; bytesReceived: number }
+
+export type ClientMessage =
+  JoinMessage | ResyncMessage | LeaveMessage | TracksMessage | StatsMessage
 
 // ── POST /api/rooms ──────────────────────────────────────────────────────────────────────────
 
@@ -184,9 +231,34 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return { t: 'resync' }
     case 'leave':
       return { t: 'leave' }
+    case 'tracks':
+      return parseTracks(value)
+    case 'stats':
+      return isSfuId(value.sessionId) &&
+        Number.isSafeInteger(value.bytesReceived) &&
+        (value.bytesReceived as number) >= 0
+        ? { t: 'stats', sessionId: value.sessionId, bytesReceived: value.bytesReceived as number }
+        : null
     default:
       return null
   }
+}
+
+function parseTracks(value: Record<string, unknown>): TracksMessage | null {
+  if (!isSfuId(value.sessionId) || !Array.isArray(value.tracks)) return null
+  if (value.tracks.length > TRACK_KINDS.length) return null
+  const tracks: TracksMessage['tracks'] = []
+  const kinds = new Set<TrackKind>()
+  for (const item of value.tracks as unknown[]) {
+    if (typeof item !== 'object' || item === null) return null
+    const { trackName, kind } = item as Record<string, unknown>
+    if (!isSfuId(trackName) || !TRACK_KINDS.includes(kind as TrackKind)) return null
+    // One track of each kind
+    if (kinds.has(kind as TrackKind)) return null
+    kinds.add(kind as TrackKind)
+    tracks.push({ trackName, kind: kind as TrackKind })
+  }
+  return { t: 'tracks', sessionId: value.sessionId, tracks }
 }
 
 const isRev = (value: unknown): value is number =>
@@ -199,7 +271,8 @@ function isRoomView(value: unknown): value is RoomView {
     typeof view.room === 'object' &&
     view.room !== null &&
     typeof view.members === 'object' &&
-    view.members !== null
+    view.members !== null &&
+    typeof view.usage === 'string'
   )
 }
 

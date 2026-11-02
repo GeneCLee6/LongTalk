@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { isRoomId } from '../../shared/room-id.ts'
+import type { UsageStatus } from '../../shared/usage.ts'
 import { handleRequest, type Env } from '../../worker/app.ts'
 
 /** A fake ROOM namespace: one object per name, with `create`, `summary` and `fetch` like RoomDO's */
@@ -36,10 +37,27 @@ function fakeRooms() {
   }
 }
 
+/** A fake USAGE namespace: one object answering `status` */
+function fakeUsage(status: UsageStatus | Error = { month: '2026-10', bytes: 12, state: 'normal' }) {
+  const calls: string[] = []
+  const namespace = {
+    idFromName: (name: string) => name,
+    get: (name: string) => ({
+      status: async () => {
+        calls.push(name)
+        if (status instanceof Error) throw status
+        return status
+      },
+    }),
+  }
+  return { namespace: namespace as unknown as Env['USAGE'], calls }
+}
+
 function env(overrides: Partial<Env> = {}): Env {
   return {
     ASSETS: { fetch: vi.fn(async () => new Response('<html>')) } as unknown as Fetcher,
     ROOM: fakeRooms().namespace,
+    USAGE: fakeUsage().namespace,
     ...overrides,
   }
 }
@@ -174,5 +192,36 @@ describe('GET /api/rooms/:id/ws', () => {
   it('asks for a WebSocket upgrade', async () => {
     const res = await handleRequest(new Request('https://x/api/rooms/abcdefghij/ws'), env())
     expect(res.status).toBe(426)
+  })
+})
+
+describe('GET /api/usage', () => {
+  it("answers the month's count from the one UsageDO", async () => {
+    const usage = fakeUsage({ month: '2026-10', bytes: 801e9, state: 'low' })
+    const res = await handleRequest(
+      new Request('https://x/api/usage'),
+      env({ USAGE: usage.namespace }),
+    )
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(await res.json()).toEqual({ month: '2026-10', bytes: 801e9, state: 'low' })
+    expect(usage.calls).toEqual(['global'])
+  })
+
+  it('only answers GET', async () => {
+    const res = await handleRequest(new Request('https://x/api/usage', { method: 'POST' }), env())
+    expect(res.status).toBe(405)
+  })
+})
+
+describe('/api/sfu through the router', () => {
+  it('refuses a caller without a member session token, before any Durable Object', async () => {
+    const e = env({ REALTIME_APP_ID: 'a', REALTIME_APP_SECRET: 's' })
+    const res = await handleRequest(
+      new Request('https://x/api/sfu/abcdefghij/sessions', { method: 'POST' }),
+      e,
+    )
+    expect(res.status).toBe(401)
+    expect(e.ASSETS.fetch).not.toHaveBeenCalled()
   })
 })

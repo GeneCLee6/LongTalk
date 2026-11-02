@@ -3,8 +3,10 @@
 // implementation, FakeTransport runs the tests, LiveKitTransport is the fallback (e2-t17).
 // Decision record: docs/adr-001-media-layer.md. No React in src/media/.
 
-/** What a published track is, as RoomDO and the UI care about it */
-export type TrackKind = 'mic' | 'cam' | 'screen' | 'screenAudio'
+import type { TrackKind } from '../../shared/protocol.ts'
+
+/** What a published track is, as RoomDO and the UI care about it (defined with the protocol) */
+export type { TrackKind }
 
 /** Simulcast layer a receiver asks for; the transport maps it to the SFU's rid */
 export type Layer = 'high' | 'medium' | 'low'
@@ -74,6 +76,10 @@ export type MediaTransportErrorCode =
   | 'closed'
   | 'not_found'
   | 'sfu_not_configured'
+  /** The proxy refused the call: no valid member session token, or not this member's session */
+  | 'unauthorized'
+  /** The month's free allowance is nearly spent: no new video tracks (shared/usage.ts) */
+  | 'quota_exceeded'
   | 'sfu_error'
   | 'negotiation_failed'
 

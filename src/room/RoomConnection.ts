@@ -18,6 +18,8 @@ export interface RoomConnectionState {
   status: RoomStatus
   /** This browser's member id, once welcomed */
   you: string | null
+  /** The member's session token, once welcomed: the SFU proxy asks for it (worker/sfu.ts) */
+  token: string | null
   view: RoomView | null
 }
 
@@ -77,7 +79,12 @@ export class RoomConnection {
   private socket: SocketLike | null = null
   private heartbeat: ReturnType<typeof setInterval> | null = null
   private rev = -1
-  private state: RoomConnectionState = { status: 'connecting', you: null, view: null }
+  private state: RoomConnectionState = {
+    status: 'connecting',
+    you: null,
+    token: null,
+    view: null,
+  }
   private readonly listeners = new Set<() => void>()
 
   constructor(roomId: string, join: JoinAs, options: RoomConnectionOptions = {}) {
@@ -100,7 +107,7 @@ export class RoomConnection {
   start(): void {
     if (this.socket) return
     this.rev = -1
-    this.update({ status: 'connecting', you: null, view: null })
+    this.update({ status: 'connecting', you: null, token: null, view: null })
     const socket = this.createSocket(this.url)
     this.socket = socket
     socket.onopen = () => {
@@ -142,7 +149,7 @@ export class RoomConnection {
         this.rev = message.rev
         this.token = message.token
         this.onToken(message.token)
-        this.update({ status: 'open', you: message.you, view: message.state })
+        this.update({ status: 'open', you: message.you, token: message.token, view: message.state })
         return
       case 'snapshot':
         this.rev = message.rev
@@ -165,7 +172,8 @@ export class RoomConnection {
     }
   }
 
-  private send(message: ClientMessage): void {
+  /** Sends a message if the socket is open; dropped otherwise (the room resends state on join) */
+  send = (message: ClientMessage): void => {
     if (this.socket?.readyState === OPEN) this.socket.send(JSON.stringify(message))
   }
 

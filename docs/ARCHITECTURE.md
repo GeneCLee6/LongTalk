@@ -26,6 +26,8 @@
 - **RoomDO**：單一房間的真相來源。狀態：成員（id、名字、角色、連線狀態、心跳時間）、每位成員的軌道（mic／cam／screen 的 on/off 與 SFU track id）、等候室、鎖房、聊天 200 則、標註與白板（M2）、錄影狀態。用 `alarm()` 做空房關閉與計時。推送只送差異（和牌桌 `views.ts` 同一手法）。
 - **RoomDO 現況（A3）**：`worker/room.ts` 只是接 Cloudflare 的膠水（storage、alarm、hibernation WebSocket，每個 socket 以成員 id 為 tag、attachment 存成員資料，醒來時從 socket 重建成員）；房間邏輯在 `worker/room-host.ts` 的純類別 `RoomHost`，Vitest 直接測。訊息型別在 `shared/protocol.ts`（有版本號，連線帶 `?v=`，版本不合以 4400 關閉）；差異是 `shared/patch.ts` 的 `set`／`del` 路徑操作，每個 patch 帶遞增 `rev`，瀏覽器發現缺號就送 `resync` 拿 `snapshot`。storage 只存房間資訊與 `rev`；成員不寫 storage。房間 id 是 10 碼 base58（去掉 0、O、I、l，約 58.6 bits），由 `POST /api/rooms` 產生並在 RoomDO 初始化；沒建過的 id 連 WebSocket 以 4404 關閉。
 - **Realtime SFU**：每位成員一個 SFU session；發布自己的軌（push），依 RoomDO 告知的 track id 訂閱別人的軌（pull）。SFU 的 API 呼叫由 Worker 代理（App token 不進瀏覽器）。
+- **媒體現況（B1）**：代理在 `/api/sfu/<roomId>/*`，每個呼叫帶成員的 session token，由該房 RoomDO 判斷（只服務房內成員、session 屬於建立它的成員、只能 pull 同房的軌；`docs/adr-001-media-layer.md`）。瀏覽器發布後送 `tracks`（協定 v3），RoomDO 把它放進 `Member.tracks` 推給大家；瀏覽器端 `src/room/RoomMedia.ts` 以 desired（RoomDO 的軌清單）／actual（transport 已訂閱）對齊來訂閱與退訂。
+- **UsageDO（B1，`e11-t13`）**：整個部署一個（`idFromName('global')`），記這個月（UTC）的 Realtime 流出估算；每間房的 alarm 每 15 秒把「瀏覽器回報的 `bytesReceived` 增量」與「伺服器估算（時間 × 收的軌 × 假設位元率）」取大者交給它。達門檻後 `RoomView.usage` 變成 `low`（鏡頭低畫質）或 `audioOnly`（代理拒絕新的視訊軌）。細節與門檻在 `DEPLOY.md` §6。
 - **TURN**：Worker 發短期憑證給瀏覽器；ICE 設定一律含 TURN，只在直連失敗時用到。
 - **R2**：聊天檔案（24 小時）、雲端錄影（有效期）、白板匯出。
 - **錄影（M2）**：ADR 待寫（`e8-t04`）：Realtime 的錄製能力 vs 自架 headless 瀏覽器合成。M1 的本機錄影完全在瀏覽器（Canvas＋Web Audio＋MediaRecorder）。
@@ -45,10 +47,10 @@
 ## 4. 資料流：一個人進房
 
 1. 瀏覽器 `GET /r/abc123` → Worker 的靜態資產回 SPA。
-2. 預先加入頁先 `GET /api/rooms/abc123` 確認房間存在（順便拿人數）才開鏡頭。按「加入」後開 WebSocket `/api/rooms/abc123/ws?v=2`（Worker 檢查 `Origin` 後轉給 RoomDO），第一則訊息是 `join`（名字、這個分頁上次拿到的 session token）→ RoomDO 回 `welcome`：成員 id、session token、房間快照（A4 起）。角色、TURN 憑證、SFU session 資訊在之後的批次加進 `welcome`。
+2. 預先加入頁先 `GET /api/rooms/abc123` 確認房間存在（順便拿人數）才開鏡頭。按「加入」後開 WebSocket `/api/rooms/abc123/ws?v=3`（Worker 檢查 `Origin` 後轉給 RoomDO），第一則訊息是 `join`（名字、這個分頁上次拿到的 session token）→ RoomDO 回 `welcome`：成員 id、session token、房間快照（A4 起）。角色、TURN 憑證、SFU session 資訊在之後的批次加進 `welcome`。
 3. 之後所有狀態變化走這條 WebSocket。
-4. 瀏覽器建立 SFU session，發布 mic／cam 軌；把 SFU track id 回報 RoomDO（`publish` 訊息）。
-5. RoomDO 廣播「成員 X 有新軌」；其他瀏覽器向 SFU 訂閱該軌。
+4. 瀏覽器經 `/api/sfu/abc123/sessions`（帶 session token）建立 SFU session（RoomDO 記成這個成員的），發布 mic／cam 軌；把軌清單回報 RoomDO（`tracks` 訊息，B1 起）。
+5. RoomDO 以 patch 推送 `Member.tracks`；其他瀏覽器向 SFU 訂閱該軌（代理確認那條軌屬於同一間房）。瀏覽器每 10 秒送 `stats`（收到的 bytes），給免費額度保護記帳。
 6. 心跳每 15 秒（文字 `ping`，由 runtime 自動回 `pong`，不喚醒 DO；每 15 秒的 alarm 讀 `getWebSocketAutoResponseTimestamp` 檢查，45 秒沒心跳就關 socket 並移除成員）；A4 起：socket 關閉但沒有先送 `leave`（重新整理、斷網、心跳逾時）時，RoomDO 保留成員 60 秒並標示「重新連線中」；回來後以同一 session token 接回（B1 起重新發布與訂閱），超過 60 秒由 alarm 移除；送 `leave` 立即移除。成員與 session 存在 DO storage。
 7. 最後一人離開 10 分鐘後，`alarm()` 清房間（持久房間除外）。
 
@@ -69,6 +71,8 @@
 | R2 | 聊天檔案 24 小時、錄影有效期 | 10 GB | 雲端錄影是主要用量，M2 才有 |
 
 超額時的自動降級順序（E11 `e11-t09`）：關雲端錄影 → 限制 HD → 降低 simulcast 最高層 → 限制人數。
+
+**B1 起的保護（擁有者決定只用免費額度）**：SFU＋TURN 共用 1,000 GB；`UsageDO` 每月計數，800 GB 起鏡頭低畫質、950 GB 起不再建立新的視訊軌（只留音訊），每月 1 日（UTC）歸零，`GET /api/usage` 可查（`DEPLOY.md` §6）。
 
 ## 7. 與淡江牌桌的關係
 

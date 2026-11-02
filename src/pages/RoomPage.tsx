@@ -1,21 +1,29 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import styled from 'styled-components'
 import { normalizeName } from '../../shared/protocol.ts'
 import { isRoomId } from '../../shared/room-id.ts'
+import type { UsageState } from '../../shared/usage.ts'
 import { getRoom } from '../api/rooms.ts'
 import { Button } from '../components/Button.tsx'
+import { MemberTile } from '../components/MemberTile.tsx'
 import { PreJoin, type DeviceChoice } from '../components/PreJoin.tsx'
+import { ToastViewport } from '../components/Toast.tsx'
+import { useToasts } from '../components/useToasts.ts'
 import { activeDeviceId, canChooseSpeaker } from '../media/devices.ts'
+import { trackKey, type MediaTransportErrorCode } from '../media/MediaTransport.ts'
 import type { RoomConnectionState } from '../room/RoomConnection.ts'
 import { clearSession, loadName, loadSession, saveName } from '../room/session.ts'
 import { useLocalPreview } from '../room/useLocalPreview.ts'
 import { useMicLevel } from '../room/useMicLevel.ts'
 import { useRoomConnection } from '../room/useRoomConnection.ts'
+import type { LocalTracks, RoomMediaState } from '../room/RoomMedia.ts'
+import { useRoomMedia } from '../room/useRoomMedia.ts'
+import { useTransportFactory } from '../room/transportContext.ts'
 import { strings } from '../strings.ts'
-import { color, font, radius, space } from '../styles/tokens.ts'
+import { color, font, space } from '../styles/tokens.ts'
 
-/** What the pre-join screen hands to the room; B1 (e2-t03) publishes with the media choices */
+/** What the pre-join screen hands to the room: the room publishes with the media choices */
 export interface JoinChoices {
   name: string
   mic: boolean
@@ -53,7 +61,7 @@ function RoomEntry({ roomId }: { roomId: string }) {
     // The room is dark whatever the system scheme (DESIGN.md §1.2)
     return (
       <Page data-theme="dark">
-        <Room roomId={roomId} name={joined.name} onLeft={() => navigate('/')} />
+        <Room roomId={roomId} choices={joined} onLeft={() => navigate('/')} />
       </Page>
     )
   }
@@ -162,28 +170,91 @@ function PreJoinScreen({
   )
 }
 
-function Room({ roomId, name, onLeft }: { roomId: string; name: string; onLeft: () => void }) {
-  const { state, leave } = useRoomConnection(roomId, name)
+function Room({
+  roomId,
+  choices,
+  onLeft,
+}: {
+  roomId: string
+  choices: JoinChoices
+  onLeft: () => void
+}) {
+  const { state, leave, send } = useRoomConnection(roomId, choices.name)
   const gone = state.status === 'notFound'
   useEffect(() => {
     if (gone) clearSession(roomId)
   }, [gone, roomId])
+
+  // The microphone and camera chosen on the pre-join screen, opened again for the room
+  const devices = useLocalPreview({
+    mic: choices.mic,
+    cam: choices.cam,
+    micId: choices.devices.mic,
+    camId: choices.devices.cam,
+  })
+  const local = useMemo<LocalTracks | null>(
+    () =>
+      devices.opening
+        ? null
+        : {
+            mic: devices.stream?.getAudioTracks()[0] ?? null,
+            cam: devices.stream?.getVideoTracks()[0] ?? null,
+          },
+    [devices.opening, devices.stream],
+  )
+
+  // The SFU proxy asks for the session token on every call; the transport reads the latest
+  const token = useRef(state.token)
+  useEffect(() => {
+    token.current = state.token
+  }, [state.token])
+  const makeTransport = useTransportFactory()
+  const createTransport = useCallback(
+    () => makeTransport(roomId, () => token.current),
+    [makeTransport, roomId],
+  )
+  const media = useRoomMedia({
+    enabled: state.status === 'open' && state.token !== null,
+    createTransport,
+    local,
+    send,
+    you: state.you,
+    view: state.view,
+  })
+  const toasts = useToasts()
+  useUsageNotices(state.view?.usage ?? 'normal', media.videoRefused, toasts.show)
+
   if (gone) return <NotFound />
   const members = Object.values(state.view?.members ?? {})
+  const mediaProblem = mediaErrorText(media.error)
   return (
     <Panel>
       <h1>{strings.room.title(roomId)}</h1>
       <p role="status">{statusText(state)}</p>
+      {state.status === 'open' && media.status === 'connecting' && (
+        <p>{strings.room.mediaConnecting}</p>
+      )}
+      {mediaProblem && <p role="alert">{mediaProblem}</p>}
       {state.status === 'open' && (
-        <Members aria-label={strings.room.members}>
-          {members.map((member) => (
-            <li key={member.id}>
-              {member.name}
-              {member.id === state.you && <Tag>{strings.common.you}</Tag>}
-              {member.reconnecting && <Tag $warn>{strings.room.reconnecting}</Tag>}
-            </li>
-          ))}
-        </Members>
+        <Grid aria-label={strings.room.grid}>
+          {members.map((member) => {
+            const you = member.id === state.you
+            const received = (kind: 'mic' | 'cam') => {
+              const track = member.tracks.find((t) => t.kind === kind)
+              return (track && media.received[trackKey(track)]?.track) || null
+            }
+            return (
+              <MemberTile
+                key={member.id}
+                name={member.name}
+                you={you}
+                reconnecting={member.reconnecting}
+                video={you ? ownCamera(local, media) : received('cam')}
+                audio={you ? null : received('mic')}
+              />
+            )
+          })}
+        </Grid>
       )}
       <Button
         variant="danger"
@@ -194,8 +265,46 @@ function Room({ roomId, name, onLeft }: { roomId: string; name: string; onLeft: 
       >
         {strings.toolbar.leave}
       </Button>
+      <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
     </Panel>
   )
+}
+
+/** Our own camera on our tile, unless it was refused this month */
+function ownCamera(local: LocalTracks | null, media: RoomMediaState): MediaStreamTrack | null {
+  return media.videoRefused ? null : (local?.cam ?? null)
+}
+
+function mediaErrorText(error: MediaTransportErrorCode | null): string | null {
+  switch (error) {
+    case null:
+    case 'closed':
+      return null
+    case 'sfu_not_configured':
+      return strings.errors.sfuNotConfigured
+    case 'unauthorized':
+      return strings.errors.sfuUnauthorized
+    default:
+      return strings.errors.sfu
+  }
+}
+
+/**
+ * The free-tier notices (e11-t13): a toast whenever the month's state gets worse while we are in
+ * the room (or is already bad when we arrive), and one when our own camera was not sent
+ */
+function useUsageNotices(
+  usage: UsageState,
+  videoRefused: boolean,
+  show: (text: string, tone: 'warn') => void,
+) {
+  useEffect(() => {
+    if (usage === 'low') show(strings.usage.low, 'warn')
+    if (usage === 'audioOnly') show(strings.usage.audioOnly, 'warn')
+  }, [usage, show])
+  useEffect(() => {
+    if (videoRefused) show(strings.usage.videoRefused, 'warn')
+  }, [videoRefused, show])
 }
 
 function statusText({ status, view }: RoomConnectionState): string {
@@ -254,28 +363,9 @@ const Panel = styled.section`
   }
 `
 
-const Members = styled.ul`
+const Grid = styled.section`
   display: grid;
-  gap: ${space(2)};
-  margin: 0;
-  padding: 0;
-  list-style: none;
-
-  li {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: ${space(2)};
-    padding: ${space(2)} ${space(4)};
-    border-radius: ${radius.button};
-    background: ${color.surface};
-  }
-`
-
-const Tag = styled.span<{ $warn?: boolean }>`
-  padding: 0 ${space(2)};
-  border-radius: ${radius.pill};
-  font-size: 12px;
-  background: ${({ $warn }) => ($warn ? color.warn : color.primarySoft)};
-  color: ${({ $warn }) => ($warn ? color.bg : color.fg)};
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: ${space(3)};
+  width: min(100vw - ${space(8)}, 1100px);
 `
