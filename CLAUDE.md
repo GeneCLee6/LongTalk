@@ -15,6 +15,7 @@
 | 產品範圍、為什麼做 | `docs/PRD/00-prd.md`（總 PRD）、`docs/PRD/01-competitive-analysis.md` |
 | 技術架構與選型 | `docs/ARCHITECTURE.md`、`docs/adr-*.md`（A2 起） |
 | 程式慣例、部署 | `RULES.md`、`DEPLOY.md` |
+| 瀏覽器支援、能力偵測 | `docs/BROWSER-SUPPORT.md`、`src/media/capabilities.ts` |
 | 介面、顏色、元件 | `docs/DESIGN.md`、視覺稿 `docs/design/mockup.html` |
 | 對外介紹 | `docs/design/pitch.html`、標誌 `docs/design/logo/` |
 | 文件該怎麼分層 | `docs/PLANNING-METHOD.md` |

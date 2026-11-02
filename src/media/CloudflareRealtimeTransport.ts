@@ -164,12 +164,16 @@ export class CloudflareRealtimeTransport implements MediaTransport {
       const res = await this.#api<TracksResponse>('POST', `/sessions/${sessionId}/tracks`, {
         tracks: [{ location: 'remote', sessionId: ref.sessionId, trackName: ref.trackName }],
       })
-      assertTracksOk(res)
-      const mid = res.tracks?.[0]?.mid
-      if (!mid) throw new MediaTransportError('not_found', `No track ${trackKey(ref)}`)
+      // Realtime can ask for a renegotiation even when the track itself failed (empty_track_error:
+      // the publisher is not sending yet). The session then waits for our answer and refuses
+      // every other call until it gets one (found by the e2e test, e2-t10): answer first, then
+      // look at the track
       if (res.requiresImmediateRenegotiation && res.sessionDescription) {
         await this.#answer(pc, sessionId, res.sessionDescription)
       }
+      assertTracksOk(res)
+      const mid = res.tracks?.[0]?.mid
+      if (!mid) throw new MediaTransportError('not_found', `No track ${trackKey(ref)}`)
       const transceiver = pc.getTransceivers().find((t) => t.mid === mid)
       if (!transceiver) throw new MediaTransportError('negotiation_failed', `No transceiver ${mid}`)
       const subscription: Subscription = { ...ref, mid, track: transceiver.receiver.track }
@@ -321,6 +325,9 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     const json = (await res.json().catch(() => ({}))) as T & { error?: string; errorCode?: string }
     const proxyError = PROXY_ERRORS[json.error ?? '']
     if (!res.ok && proxyError) throw new MediaTransportError(proxyError, json.error)
+    // The SFU no longer has a usable session: fail, so that RoomMedia builds a new one instead of
+    // retrying calls on a session that will refuse them all
+    if (json.errorCode === 'session_error') this.#setState('failed')
     if (!res.ok || json.errorCode) {
       throw new MediaTransportError(
         'sfu_error',
@@ -376,10 +383,13 @@ async function discard(pc: RTCPeerConnection, transceiver: RTCRtpTransceiver): P
   }
 }
 
+/** Per-track errors that mean "not there (yet)": the subscription is retried, not an alarm */
+const TRACK_NOT_READY = new Set(['track_not_found', 'not_found_track_error', 'empty_track_error'])
+
 function assertTracksOk(res: TracksResponse): void {
   const failed = res.tracks?.find((t) => t.errorCode)
   if (failed) {
-    const code = failed.errorCode === 'track_not_found' ? 'not_found' : 'sfu_error'
+    const code = TRACK_NOT_READY.has(failed.errorCode ?? '') ? 'not_found' : 'sfu_error'
     throw new MediaTransportError(code, `${failed.errorCode}: ${failed.errorDescription ?? ''}`)
   }
 }

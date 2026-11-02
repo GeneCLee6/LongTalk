@@ -157,11 +157,6 @@ export function activeDeviceId(stream: MediaStream | null, kind: 'audio' | 'vide
   return track?.getSettings?.().deviceId ?? null
 }
 
-/** Whether this browser can choose the speaker (HTMLMediaElement.setSinkId; not Safari or older Firefox) */
-export function canChooseSpeaker(): boolean {
-  return typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype
-}
-
 /** Thrown by openDevice: why the device could not be opened */
 export class MediaOpenError extends Error {
   readonly problem: MediaProblem
@@ -207,20 +202,12 @@ interface SinkElement {
 }
 
 /**
- * Plays an <audio> through the chosen speaker where the browser can (canChooseSpeaker); null
- * keeps the system default. Failures (the speaker is gone) leave it on the current output.
+ * Plays an <audio> through the chosen speaker where the browser can (canChooseSpeaker in
+ * capabilities.ts); null keeps the system default. Failures (the speaker is gone) leave it on the
+ * current output.
  */
 export function setSpeaker(element: HTMLMediaElement | null, deviceId: string | null): void {
   const sink = element as SinkElement | null
   if (!sink?.setSinkId || deviceId === null) return
   void sink.setSinkId(deviceId).catch(() => undefined)
-}
-
-/**
- * Whether this browser can be in a call at all: WebRTC (RTCPeerConnection). The device side
- * (navigator.mediaDevices, which needs HTTPS) is checked when the devices open: without it the
- * member can still join to watch and listen.
- */
-export function supportsWebRtc(): boolean {
-  return typeof globalThis.RTCPeerConnection === 'function'
 }

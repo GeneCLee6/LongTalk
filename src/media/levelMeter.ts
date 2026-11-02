@@ -1,5 +1,6 @@
 // The microphone level for the pre-join meter (e4-t03), from a Web Audio analyser. Local only;
 // the in-room speaking outline (e4-t05) can reuse it.
+import { canMeasureLevel } from './capabilities.ts'
 
 /** Quietest level the meter shows; anything below reads as 0 */
 const FLOOR_DB = -60
@@ -35,7 +36,7 @@ export interface LevelMeter {
 }
 
 const browserContext = (): AudioContextLike | null =>
-  typeof AudioContext === 'undefined' ? null : new AudioContext()
+  canMeasureLevel() ? new AudioContext() : null
 
 /** A meter on the stream's audio, or null when it has none or there is no Web Audio */
 export function createLevelMeter(

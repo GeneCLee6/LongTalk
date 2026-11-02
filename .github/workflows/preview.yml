@@ -35,6 +35,9 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      sfu: ${{ steps.sfu.outputs.ready }}
     env:
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       FROM_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
@@ -74,16 +77,19 @@ jobs:
 
       - name: Give the preview the Realtime SFU app (optional)
         if: steps.creds.outputs.ready == 'true'
+        id: sfu
         env:
           REALTIME_APP_ID: ${{ secrets.REALTIME_APP_ID }}
           REALTIME_APP_SECRET: ${{ secrets.REALTIME_APP_SECRET }}
         run: |
           if [ -z "$REALTIME_APP_ID" ] || [ -z "$REALTIME_APP_SECRET" ]; then
             echo "::notice::REALTIME_APP_ID / REALTIME_APP_SECRET are not set; /api/sfu answers 503 on this preview (DEPLOY.md §5)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           printf '%s' "$REALTIME_APP_ID" | npx wrangler secret put REALTIME_APP_ID --name "$WORKER"
           printf '%s' "$REALTIME_APP_SECRET" | npx wrangler secret put REALTIME_APP_SECRET --name "$WORKER"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Give the preview the Realtime TURN key (optional)
         if: steps.creds.outputs.ready == 'true'
@@ -125,6 +131,65 @@ jobs:
           else
             gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
           fi
+
+  # e2-t10 (AC-2.2): two Chromium browsers with fake camera and microphone meet in a room on this
+  # preview, through the real Realtime SFU (e2e/interop.spec.ts). Skipped, with a notice, when there
+  # is no preview (forks, no Cloudflare secrets) or the preview has no SFU app. On failure the
+  # traces, screenshots and videos are uploaded as the `e2e` artifact (DEPLOY.md §7).
+  e2e:
+    needs: deploy
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_URL: ${{ needs.deploy.outputs.url }}
+      SFU: ${{ needs.deploy.outputs.sfu }}
+      # The test only drives browsers: keep the deploy credentials out of this job
+      CLOUDFLARE_API_TOKEN: ''
+      CLOUDFLARE_ACCOUNT_ID: ''
+    steps:
+      - name: Is there a preview with the SFU?
+        id: check
+        run: |
+          if [ -z "$BASE_URL" ]; then
+            echo "::notice::No preview was deployed; skipping the interop test"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [ "$SFU" != "true" ]; then
+            echo "::notice::The preview has no Realtime SFU app; skipping the interop test (DEPLOY.md §5)"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.check.outputs.run == 'true'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@v7
+        if: steps.check.outputs.run == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies and Chromium
+        if: steps.check.outputs.run == 'true'
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Interop test against the preview
+        if: steps.check.outputs.run == 'true'
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure() && steps.check.outputs.run == 'true'
+        with:
+          name: e2e
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
 
   cleanup:
     if: github.event.action == 'closed'

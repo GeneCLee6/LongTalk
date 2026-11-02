@@ -75,7 +75,7 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 - [x] `e2-t07` TURN：Worker 發短期憑證 API、ICE 設定、統計是否走 TURN（`POST /api/turn/<roomId>` 只發給帶成員 session token 的呼叫，TTL 3 小時、到 2/3 時以 `setConfiguration` 換新、濾掉 port 53；沒設 TURN secret 或 Cloudflare 失敗時只給 STUN 照常運作；協定 v5 `stats.relay`，自己的名牌標「經由轉送伺服器」；免費額度保護對走 TURN 的接收端 ×1.1；`?ice=relay` 強制走 TURN 的除錯旗標） · AC-2.4 · #10
 - [x] `e2-t08` 斷線重連：WebSocket 指數退避、PeerConnection 重建、媒體恢復、前景／online 事件、「重新連線中」狀態（`RoomConnection` 1、2、4、8 秒＋抖動、同一 token 回同一成員，60 秒後放棄並給「重試」；心跳沒回、`offline`、回前景探測不回就換 socket；`RoomMedia` 在 ICE `failed` 或 `disconnected` 超過 4 秒時重建 session：新的 ICE 伺服器、重新發布與訂閱，同樣退避與上限；`src/room/backoff.ts`、`network.ts`） · AC-2.5 · #10
 - [x] `e2-t09` 權限與裝置錯誤處理：被拒、無裝置、被佔用、不支援的瀏覽器，各有畫面與重試（會議室內的提示＋「重試」；裝置中斷且沒有別的＝`lost`；沒有 WebRTC 的瀏覽器在進房前就看到說明） · AC-2.3 · #9
-- [ ] `e2-t10` 整合測試：Playwright 兩個 Chromium 假裝置互通（音量 > 0、有幀）、`FakeTransport` 跑 `useRoomMedia` 單元測試、進 CI · AC-2.2 · M · ← e2-t08
+- [x] `e2-t10` 整合測試：Playwright 兩個 Chromium 假裝置互通（音量 > 0、有幀）、`FakeTransport` 跑 `useRoomMedia` 單元測試、進 CI（`e2e/interop.spec.ts`、`npm run test:e2e`＋`BASE_URL`；`preview.yml` 的 `e2e` job 在 smoke test 之後對 PR 預覽跑，經真的 Realtime SFU；雙向有幀、音量 > 0、靜音與關鏡頭對方看得到、打開後恢復；沒有預覽或預覽沒有 SFU secret 時略過並留 notice；`tests/app/useRoomMedia.test.tsx` 兩個成員共用 `FakeSfu` 與 RoomDO 替身；測試抓到並修好：pull 同時要求重新協商又回軌錯誤時先回答再檢查，`session_error` 讓 transport `failed` 觸發重建） · AC-2.2 · #11
 
 ### M1
 

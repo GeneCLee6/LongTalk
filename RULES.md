@@ -34,6 +34,8 @@
 - `tests/worker/`：Worker 與 RoomDO 的邏輯（Node 環境）。DO 的邏輯盡量寫成不依賴 `cloudflare:workers` 的純類別，讓 Vitest 直接測。
 - `tests/app/`：元件與頁面，以 Testing Library 依角色與名稱查詢。
 - `tests/` 下的 `.test.ts(x)` 都會被 Vitest 撿到；`tests/worker` 用 Worker 的 tsconfig（有 `@cloudflare/workers-types`）。
+- `e2e/`：Playwright 對部署好的 Worker 跑（`BASE_URL`，`npm run test:e2e`），CI 在 PR 預覽上跑（`DEPLOY.md` §7）；檔名用 `.spec.ts`，Vitest 不會撿到。
+- 瀏覽器能力只透過 `src/media/capabilities.ts` 偵測（不看 user agent）；加一個能力要同時在 `docs/BROWSER-SUPPORT.md` 加一列，測試會比對。
 - 提交前：`npm run lint && npm run typecheck && npm test && npm run build && npm run budget`。
 
 ## 4. Commit、分支、PR

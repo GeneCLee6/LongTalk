@@ -27,7 +27,7 @@ depends_on: []
 - Repo：Vite＋React 19＋TS strict＋styled-components；`worker/`（Hono 或原生）＋ `wrangler.toml`；`shared/`；Vitest；Playwright；oxlint；`npm run budget` 效能預算（首頁 150 kB、會議室 350 kB）。
 - CI：lint、typecheck、test、build、budget、視覺回歸（M1）；PR 預覽部署；合併 `main` 自動部署；兩個環境（preview、production）。
 - 遙測：事件（進房成功／失敗原因、重連次數、TURN 比例、離開評分）送 Analytics Engine 或 D1；錯誤送 Sentry 類（自架或免費方案）；儀表板頁 `/admin`（擁有者）。
-- 瀏覽器支援：`docs/BROWSER-SUPPORT.md` 每功能 × 瀏覽器矩陣；`src/lib/capabilities.ts` 統一能力偵測。
+- 瀏覽器支援：`docs/BROWSER-SUPPORT.md` 每功能 × 瀏覽器矩陣；`src/media/capabilities.ts` 統一能力偵測。
 - 濫用防護：建房每 IP 每小時 10 間、Turnstile 於建房、WebSocket 訊息速率、上傳配額；黑名單 IP。
 - 安全：CSP、HSTS、Permissions-Policy（camera、microphone、display-capture 只給自己）、COOP；依賴稽核；secrets 只在 Worker。
 - 法遵：錄影同意、隱私權政策頁、資料保留表（聊天 24 小時、錄影 7–30 天、遙測 90 天）、個資法檢查清單、刪除請求流程。
@@ -63,7 +63,7 @@ depends_on: []
 - [x] `e11-t01` repo 骨架：Vite／React／TS、`worker/`、`shared/`、wrangler、Vitest、oxlint、`CLAUDE.md`／`RULES.md` · AC-11.1 · #2
 - [x] `e11-t02` CI（lint、typecheck、test、build、budget）、PR 預覽 Worker 與 production 部署、`DEPLOY.md` · AC-11.1, AC-11.2 · #2
 - [ ] `e11-t03` 最小遙測：事件 API、Analytics Engine、錯誤回報、`/admin` 骨架 · AC-11.3 · M · ← e11-t02
-- [ ] `e11-t04` `BROWSER-SUPPORT.md` 初版與 `capabilities.ts` · AC-11.6 · S · ← e11-t01
+- [x] `e11-t04` `BROWSER-SUPPORT.md` 初版與 `capabilities.ts`（`docs/BROWSER-SUPPORT.md`：8 項能力 × 6 個瀏覽器，實測過的才標 ●，其餘標「未實測」；`src/media/capabilities.ts`：`webrtc`、`getUserMedia`、`getDisplayMedia`、`setSinkId`、`replaceTrack`、`senderParameters`、`audioContext`、`deviceChange`，會議室頁與音量表改用它；測試比對文件表格與 `CAPABILITIES`。AC-11.6 不勾：Edge、Firefox、Safari、iOS Safari 都還沒實測，完整版是 `e2-t16`） · AC-11.6 · #11
 - [x] `e11-t13` Realtime 免費額度保護：`UsageDO` 每月流量計數（客戶端 `getStats` 回報與伺服器端以 session 時長×軌數估算取大者）、800 GB 降畫質、950 GB 拒絕新視訊 session、`/api/usage`（2026-10-31 擁有者決定只用免費方案；`e11-t09` 成本儀表板之後接這份計數；做法見 `DEPLOY.md` §6） · AC-11.11 · #8
 
 ### M1
