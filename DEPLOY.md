@@ -44,7 +44,7 @@ LongTalk 是**一個 Cloudflare Worker**：同一個 Worker 回答 `/api/*`、�
 | Workflow | 何時 | 做什麼 |
 | --- | --- | --- |
 | `ci.yml` | 每次 push、每個 PR | `npm ci` → lint → typecheck → test → build → JS 預算（首頁 ≤ 150 kB、會議室 ≤ 350 kB gzip）。全綠才可合併（AC-11.2） |
-| `preview.yml` | PR 開啟、更新 | 部署 `longtalk-pr-<號>`（`CLOUDFLARE_ENV=preview`），smoke test，把網址留言在 PR；PR 關閉時刪除該 Worker 與它的資料 |
+| `preview.yml` | PR 開啟、更新 | 部署 `longtalk-pr-<號>`（`CLOUDFLARE_ENV=preview`），smoke test，把網址留言在 PR；接著 `e2e` job 在這個預覽跑兩個瀏覽器的互通測試（§7）；PR 關閉時刪除該 Worker 與它的資料 |
 | `deploy.yml` | CI 在 `main` 綠了之後 | 部署正式站 `longtalk`，smoke test 確認它正在提供這個 commit |
 
 smoke test（`scripts/smoke.sh`）檢查三件事：首頁 `<meta name="app-version">` 是這個 commit、`/api/health` 回這個 commit、`/r/<id>` 回 200（SPA fallback）。
@@ -141,3 +141,28 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
 - **TURN（B3）**：SFU 與 TURN 共用 1,000 GB；依 Cloudflare 定價頁，TURN 與 SFU 之間的流量不重複計費，計的是 TURN 到瀏覽器的流出（同一份媒體加上 TURN 框架，經 `turns:443` 時還有 TCP／TLS）。瀏覽器的 `stats` 帶 `relay`（選中的 candidate pair 是否走 TURN），RoomDO 對走 TURN 的接收端，兩個數字都 ×1.1（`RELAY_OVERHEAD`，`shared/usage.ts`）。
 - **誤差**：這是估算，不是 Cloudflare 的帳單。真正的用量以 Cloudflare 儀表板為準，`e11-t09` 成本儀表板會拿這份計數和帳單對照。
 - **重設或手動調整**：目前沒有管理介面；真的需要時把門檻 var 暫時調高或調低後重新部署。
+
+## 7. 兩個瀏覽器的互通測試（e2-t10，B4）
+
+`e2e/interop.spec.ts`（Playwright）：兩個 Chromium 用假鏡頭、假麥克風（`--use-fake-device-for-media-stream`，會動的畫面與嗶聲），從首頁開一間房、各自經預先加入頁加入，經**真的 Realtime SFU** 檢查：
+
+- 雙向都看到對方的畫面，而且每秒解出 ≥ 5 幀；雙向都聽得到（`<audio>` 的音量峰值 > 0.05）。
+- Alice 按「靜音」：Bob 看到紅色麥克風、聲音變成靜音；按「關閉視訊」：Bob 的格子換成首字（「鏡頭沒開」）；兩個都打開：Bob 又看到、聽到她。
+- Bob 靜音：Alice 看到，而且還在收他的畫面。
+- 結束時兩人按「離開」，SFU session 立刻關閉（省額度）。
+
+**在哪裡跑**：`preview.yml` 的 `e2e` job，在預覽部署與 smoke test 之後，`BASE_URL` 是這個 PR 的預覽網址。沒有預覽（fork、沒有 Cloudflare secret）或預覽沒有 `REALTIME_APP_ID`／`REALTIME_APP_SECRET` 時，job 留 notice 並略過（顯示成功）。每次約用數十 MB 的 SFU 流量（`longtalk-dev` app）。
+
+**不穩的對策**：CI 重試 1 次（第二次還失敗就是真的壞了）；斷言用輪詢（每項最多 30 秒），不用固定等待；一次只跑一個測試。失敗時上傳 `e2e` artifact（`test-results/` 的 trace、影片、兩邊的截圖，`playwright-report/`），用 `npx playwright show-trace <trace.zip>` 看。
+
+**本機跑**：
+
+```bash
+npx playwright install chromium        # 第一次
+BASE_URL=https://longtalk-pr-<號>.genelee-pro.workers.dev npm run test:e2e
+PW_CHANNEL=chrome BASE_URL=… npm run test:e2e   # 用已安裝的 Chrome，不下載 Chromium
+```
+
+`BASE_URL` 必須是有 SFU secret 的部署（PR 預覽或正式站）；`npm run dev` 的本機 Worker 沒有 secret，媒體連不上。`npm test`（Vitest）只跑 `tests/`，不會撿到 `e2e/`。
+
+**是不是必過的檢查**：目前不是（`main` 的保護只要求 `CI / verify`）。它依賴 Cloudflare 與 SFU secret，fork 的 PR 也不會跑；穩定跑過幾個 PR 後，可以在分支保護加上 Preview workflow 的 `e2e`（略過時算通過）。

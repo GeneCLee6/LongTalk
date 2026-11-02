@@ -186,6 +186,50 @@ describe('CloudflareRealtimeTransport', () => {
     })
   })
 
+  it('answers the renegotiation the SFU asks for even when the pulled track failed (e2-t10)', async () => {
+    const { transport, pc, calls } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        requiresImmediateRenegotiation: true,
+        sessionDescription: { type: 'offer', sdp: 'sfu-offer' },
+        tracks: [
+          { mid: '', sessionId: 'them', trackName: 'mic-1', errorCode: 'empty_track_error' },
+        ],
+      },
+      'PUT /api/sfu/abcdefghij/sessions/me/renegotiate': {},
+    })
+    await transport.connect()
+    await expect(
+      transport.subscribe({ sessionId: 'them', trackName: 'mic-1' }),
+    ).rejects.toMatchObject({ code: 'not_found' })
+    // Otherwise the session would refuse every later push or pull
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toContain(
+      'PUT /api/sfu/abcdefghij/sessions/me/renegotiate',
+    )
+    expect(pc.signalingState).toBe('stable')
+  })
+
+  it('fails when the SFU says the session is gone, so that it gets rebuilt (e2-t10)', async () => {
+    const { transport } = setup(
+      {
+        'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+        'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+          errorCode: 'session_error',
+          errorDescription: 'Session appears to be disconnected.',
+        },
+      },
+      { 'POST /api/sfu/abcdefghij/sessions/me/tracks': 410 },
+    )
+    await transport.connect()
+    const states: string[] = []
+    transport.on('state', (state) => states.push(state))
+    await expect(
+      transport.subscribe({ sessionId: 'them', trackName: 'cam-1' }),
+    ).rejects.toMatchObject({ code: 'sfu_error' })
+    expect(transport.state).toBe('failed')
+    expect(states).toEqual(['failed'])
+  })
+
   it('closes a subscription with a negotiated tracks/close', async () => {
     const { transport, pc, calls } = setup({
       'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
