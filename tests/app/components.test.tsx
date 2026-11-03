@@ -255,3 +255,61 @@ describe('Tile (e4-t04, e4-t05)', () => {
     )
   })
 })
+
+describe('Menu checkbox items (G2)', () => {
+  it('shows a switch on its own as a menuitemcheckbox', () => {
+    const onSelect = vi.fn()
+    render(
+      <Menu
+        label="更多"
+        items={[
+          { id: 'h', label: '隱藏自己', kind: 'checkbox', checked: true, onSelect },
+          { id: 'g', label: '格狀', checked: false, onSelect },
+        ]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '更多' }))
+    expect(screen.getByRole('menuitemcheckbox', { name: '隱藏自己' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(screen.getByRole('menuitemradio', { name: '格狀' })).toBeInTheDocument()
+  })
+})
+
+describe('Tile pin and spotlight (G2, e4-t10, e4-t11)', () => {
+  it('has a pin button, and a spotlight button only when given one; badges when on', () => {
+    const onTogglePin = vi.fn()
+    const { rerender } = render(<Tile name="Wei" video={null} onTogglePin={onTogglePin} />)
+    const pin = screen.getByRole('button', { name: strings.view.pin('Wei') })
+    expect(pin).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByRole('button', { name: strings.view.spotlight('Wei') })).toBeNull()
+    fireEvent.click(pin)
+    expect(onTogglePin).toHaveBeenCalledOnce()
+    const onToggleSpotlight = vi.fn()
+    rerender(
+      <Tile
+        name="Wei"
+        video={null}
+        pinned
+        spotlighted
+        onTogglePin={onTogglePin}
+        onToggleSpotlight={onToggleSpotlight}
+      />,
+    )
+    expect(screen.getByRole('button', { name: strings.view.unpin('Wei') })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    fireEvent.click(screen.getByRole('button', { name: strings.view.unspotlight('Wei') }))
+    expect(onToggleSpotlight).toHaveBeenCalledOnce()
+    const figure = screen.getByRole('figure', { name: 'Wei' })
+    expect(figure).toHaveTextContent(strings.view.pinnedBadge)
+    expect(figure).toHaveTextContent(strings.view.spotlightBadge)
+  })
+
+  it('has no buttons when nothing can be done', () => {
+    render(<Tile name="Gene" you video={null} />)
+    expect(screen.queryAllByRole('button')).toEqual([])
+  })
+})

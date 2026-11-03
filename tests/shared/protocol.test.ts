@@ -25,6 +25,7 @@ const state = {
     locked: false,
     waitingRoom: false,
     passwordSetAt: null,
+    spotlight: null,
   },
   members: {
     m1: {
@@ -73,6 +74,20 @@ describe('protocol', () => {
     expect(parseClientMessage('{"t":"share"}')).toBeNull()
     expect(parseClientMessage('{"t":"share","takeOver":"yes"}')).toBeNull()
     expect(parseClientMessage('{"t":"unshare"}')).toEqual({ t: 'unshare' })
+  })
+
+  it('parses spotlight (G2): a member id, or null to end it', () => {
+    expect(parseClientMessage('{"t":"spotlight","memberId":"m1"}')).toEqual({
+      t: 'spotlight',
+      memberId: 'm1',
+    })
+    expect(parseClientMessage('{"t":"spotlight","memberId":null}')).toEqual({
+      t: 'spotlight',
+      memberId: null,
+    })
+    expect(parseClientMessage('{"t":"spotlight"}')).toBeNull()
+    expect(parseClientMessage('{"t":"spotlight","memberId":5}')).toBeNull()
+    expect(parseClientMessage('{"t":"spotlight","memberId":""}')).toBeNull()
   })
 
   it('parses the messages a browser may send', () => {

@@ -79,7 +79,13 @@
 //    history and is a participant from then on; a denied one is closed with CloseCode.denied
 //    and its browser cannot ask again for DENY_COOLDOWN_MS. Turning the waiting room off admits
 //    everyone in it. Someone waiting WAIT_TIMEOUT_MS is closed with CloseCode.waitExpired.
-// 14. Password (F3, e1-t15): `host` `setPassword` (worker/roles.ts `setPassword`: the host) sets,
+// 14. Spotlight (G2, e4-t11): `spotlight` with a member's id puts that member in everyone's main
+//    area (`RoomInfo.spotlight`); with null it ends the spotlight (worker/roles.ts `spotlight`:
+//    host or co-host; refused with `forbidden`, also for an id that is not a member in the room).
+//    One at a time: a new spotlight replaces the old. It ends when the member leaves or is
+//    removed, not while they reconnect. Each browser decides how to show it: a member's own pin
+//    (local, never sent) wins over the spotlight, and a share keeps the main area (shared/layout.ts).
+// 15. Password (F3, e1-t15): `host` `setPassword` (worker/roles.ts `setPassword`: the host) sets,
 //    changes or clears (null) the room's password; the room keeps only a salted digest
 //    (worker/password.ts) and everyone sees when it was set (`RoomInfo.passwordSetAt`, null for
 //    none). Someone new sends the password in `join` (never in a URL). The order a `join` is
@@ -88,13 +94,13 @@
 //    password: CloseCode.passwordRequired; a wrong one: CloseCode.passwordWrong;
 //    PASSWORD_MAX_FAILS wrong ones in a row from a browser or a network address:
 //    CloseCode.passwordWait, the close reason being the milliseconds left to wait.
-// 15. Co-hosts and handing over (F3, e1-t16): `host` `setCohost` (`on`) makes a participant a
+// 16. Co-hosts and handing over (F3, e1-t16): `host` `setCohost` (`on`) makes a participant a
 //    co-host or a co-host a participant again; `makeHost` hands the host role to a connected
 //    member, the previous host becoming a co-host (worker/roles.ts: the host only). The member
 //    gets `notice` (`madeCohost`, `cohostRevoked`, `madeHost`) before the patch that shows it.
 //    A host leaving hands the role to whom `leave.host` names, else to the earliest-joined
 //    connected co-host, else member.
-// 16. Ending (F3, e1-t17): after `endMeeting` the room remembers for ENDED_TOMBSTONE_MS that it
+// 17. Ending (F3, e1-t17): after `endMeeting` the room remembers for ENDED_TOMBSTONE_MS that it
 //    ended: a socket opening then (a member coming back from a dropped connection) is closed with
 //    CloseCode.ended instead of CloseCode.roomNotFound.
 //
@@ -111,7 +117,8 @@
 // v9 → v10 (F2): `RoomInfo.locked` / `waitingRoom`, `RoomView.waiting`, `lobby`, `host` actions
 //   `lock`, `waitingRoom`, `admit`, `admitAll`, `deny`, close codes `locked`, `denied`,
 //   `waitExpired`.
-// v10 → v11 (F3): `join.password`, `RoomInfo.passwordSetAt`, `host` actions `setPassword`,
+// v10 → v11 (G2): `RoomInfo.spotlight`, `spotlight`.
+// v11 → v12 (F3): `join.password`, `RoomInfo.passwordSetAt`, `host` actions `setPassword`,
 //   `setCohost`, `makeHost`, `leave.host`, notices `madeCohost`, `cohostRevoked`, `madeHost`,
 //   close codes `passwordRequired`, `passwordWrong`, `passwordWait`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
@@ -125,7 +132,7 @@ import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 11
+export const PROTOCOL_VERSION = 12
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -222,6 +229,8 @@ export type RoomInfo = RoomInit & {
   locked: boolean
   /** Someone new waits until a host or co-host admits them (F2, e1-t10) */
   waitingRoom: boolean
+  /** The member a host or co-host put in everyone's main area (G2, e4-t11); null for nobody */
+  spotlight: string | null
   /**
    * When the host last set the password (F3, e1-t15); null when the room has none. The password
    * itself never leaves the room (only a digest is kept)
@@ -442,6 +451,9 @@ export type ShareMessage = { t: 'share'; takeOver: boolean }
 /** Stop sharing (the member's own share) */
 export type UnshareMessage = { t: 'unshare' }
 
+/** Spotlight a member for everyone, or (null) end the spotlight (G2, e4-t11; host or co-host) */
+export type SpotlightMessage = { t: 'spotlight'; memberId: string | null }
+
 /** A chat message to everyone in the room (D3); `text` is normalizeChatText's */
 export type ChatClientMessage = { t: 'chat'; text: string }
 
@@ -502,6 +514,7 @@ export type ClientMessage =
   | RenameRoomMessage
   | ShareMessage
   | UnshareMessage
+  | SpotlightMessage
 
 // ── POST /api/rooms ──────────────────────────────────────────────────────────────────────────
 
@@ -604,6 +617,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return typeof value.takeOver === 'boolean' ? { t: 'share', takeOver: value.takeOver } : null
     case 'unshare':
       return { t: 'unshare' }
+    case 'spotlight':
+      return value.memberId === null || isMemberId(value.memberId)
+        ? { t: 'spotlight', memberId: value.memberId }
+        : null
     case 'chat': {
       const text = normalizeChatText(value.text)
       return text === null ? null : { t: 'chat', text }

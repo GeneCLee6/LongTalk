@@ -206,3 +206,23 @@ export function HourglassIcon() {
     </svg>
   )
 }
+
+/** A push pin (G2: pin a tile for yourself) */
+export function PinIcon() {
+  return (
+    <svg {...common}>
+      <path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z" />
+      <path d="M12 14v6" />
+    </svg>
+  )
+}
+
+/** A spotlight's beam (G2: the host shows someone to everyone) */
+export function SpotlightIcon() {
+  return (
+    <svg {...common}>
+      <path d="M8 3h8l-2 6h-4z" />
+      <path d="M10 9 5 21h14L14 9" />
+    </svg>
+  )
+}

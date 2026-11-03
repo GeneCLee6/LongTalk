@@ -508,6 +508,18 @@ describe('RoomHost co-hosts and handing over (e1-t16)', () => {
     expect(t.host.view().room.locked).toBe(true)
   })
 
+  it('lets a named co-host spotlight someone (G2), and not once revoked', async () => {
+    await t.send(bob.conn, { t: 'spotlight', memberId: carol.id })
+    expect(bob.client.received.at(-1)).toEqual(forbidden)
+    await t.send(alice.conn, { t: 'host', action: 'setCohost', memberId: bob.id, on: true })
+    await t.send(bob.conn, { t: 'spotlight', memberId: carol.id })
+    expect(carol.client.view!.room.spotlight).toBe(carol.id)
+    await t.send(alice.conn, { t: 'host', action: 'setCohost', memberId: bob.id, on: false })
+    await t.send(bob.conn, { t: 'spotlight', memberId: null })
+    expect(bob.client.received.at(-1)).toEqual(forbidden)
+    expect(t.host.view().room.spotlight).toBe(carol.id)
+  })
+
   it('hands the host role over: the previous host is a co-host, the new one is told', async () => {
     await t.send(alice.conn, { t: 'host', action: 'makeHost', memberId: carol.id })
     expect(role(carol.id)).toBe('host')

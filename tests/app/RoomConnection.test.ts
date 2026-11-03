@@ -51,6 +51,7 @@ const room = {
   locked: false,
   waitingRoom: false,
   passwordSetAt: null,
+  spotlight: null,
 }
 const member = (id: string) => ({
   id,

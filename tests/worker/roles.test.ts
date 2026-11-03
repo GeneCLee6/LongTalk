@@ -28,6 +28,7 @@ const EXPECTED: Record<Action, string> = {
   lockRoom: 'HC',
   waitingRoom: 'HC',
   admit: 'HC',
+  spotlight: 'HC',
   setPassword: 'H',
   annotationPolicy: 'HC',
   clearAnnotations: 'HC',

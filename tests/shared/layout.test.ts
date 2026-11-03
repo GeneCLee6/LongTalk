@@ -3,7 +3,10 @@ import {
   clampPage,
   DEFAULT_GRID_GAP,
   DEFAULT_TILE_ASPECT,
+  focusFirst,
   gridLayout,
+  holdSpeaker,
+  isLayoutChoice,
   MAX_GRID_TILES,
   pageCount,
   pagedLayout,
@@ -13,8 +16,13 @@ import {
   pickSpeaker,
   PORTRAIT_TILE_ASPECT,
   shareLayout,
+  SPEAKER_SWITCH_MS,
   speakerLayout,
+  stageFocus,
+  stageLayout,
   tileAspect,
+  visibleTiles,
+  type TileEntry,
 } from '../../shared/layout.ts'
 
 const ASPECT = 16 / 9
@@ -321,6 +329,158 @@ describe('shareLayout (e3-t05, e4-t08; AC-3.1, AC-4.3)', () => {
     expect(shareLayout({ count: 3, width: 0, height: 0 })).toEqual({
       main: { width: 0, height: 0 },
       strip: null,
+    })
+  })
+})
+
+describe('desktop speaker layout (G2, e4-t10): a row under the speaker', () => {
+  it('puts the strip under the speaker even on a wide stage', () => {
+    const { main, strip } = speakerLayout({ count: 5, width: 1600, height: 900, side: 'bottom' })
+    expect(strip?.side).toBe('bottom')
+    expect(strip!.tileWidth / strip!.tileHeight).toBeCloseTo(ASPECT, 1)
+    // The speaker gets what the strip leaves, at 16:9
+    expect(main.height + GAP + strip!.tileHeight).toBeLessThanOrEqual(900)
+    expect(main.width).toBeLessThanOrEqual(1600)
+    expect(main.width / main.height).toBeCloseTo(ASPECT, 1)
+    // About a quarter of the stage, within bounds
+    expect(strip!.tileHeight).toBeGreaterThanOrEqual(112)
+    expect(strip!.tileHeight).toBeLessThanOrEqual(240)
+  })
+
+  it('shrinks the strip tiles to fit everyone, down to the minimum, then scrolls', () => {
+    const few = speakerLayout({ count: 4, width: 1200, height: 800, side: 'bottom' }).strip!
+    const many = speakerLayout({ count: 40, width: 1200, height: 800, side: 'bottom' }).strip!
+    expect(many.tileWidth).toBeLessThan(few.tileWidth)
+    expect(many.tileHeight).toBeGreaterThanOrEqual(72)
+  })
+
+  it('keeps the phone layouts as they were (auto)', () => {
+    expect(speakerLayout({ count: 3, width: 800, height: 360 }).strip?.side).toBe('right')
+    expect(speakerLayout({ count: 3, width: 360, height: 700 }).strip?.side).toBe('bottom')
+    expect(speakerLayout({ count: 3, width: 800, height: 360, side: 'right' }).strip?.side).toBe(
+      'right',
+    )
+  })
+})
+
+/** 'a+ b- c+': a and c with video, b without */
+const tiles = (spec: string): TileEntry[] =>
+  spec.split(' ').map((entry) => ({ id: entry.slice(0, -1), video: entry.endsWith('+') }))
+
+describe('visibleTiles (G2, e4-t11): hide yourself, hide non-video', () => {
+  const base = { you: 'a', hideSelf: false, hideNoVideo: false }
+
+  it('shows everyone by default, in the room order', () => {
+    expect(visibleTiles({ ...base, tiles: tiles('a+ b- c+') })).toEqual({
+      ids: ['a', 'b', 'c'],
+      hiddenNoVideo: 0,
+    })
+  })
+
+  it('hides our own tile, unless that would leave the stage empty', () => {
+    expect(visibleTiles({ ...base, hideSelf: true, tiles: tiles('a+ b- c+') }).ids).toEqual([
+      'b',
+      'c',
+    ])
+    expect(visibleTiles({ ...base, hideSelf: true, tiles: tiles('a+') }).ids).toEqual(['a'])
+    // Everyone else hidden for having no video: we stay too
+    expect(
+      visibleTiles({ ...base, hideSelf: true, hideNoVideo: true, tiles: tiles('a+ b- c-') }),
+    ).toEqual({ ids: ['a'], hiddenNoVideo: 2 })
+  })
+
+  it('hides others without video and counts them; our own tile follows hideSelf only', () => {
+    expect(visibleTiles({ ...base, hideNoVideo: true, tiles: tiles('a- b- c+ d-') })).toEqual({
+      ids: ['a', 'c'],
+      hiddenNoVideo: 2,
+    })
+  })
+
+  it('always shows the pinned and the spotlighted member', () => {
+    expect(
+      visibleTiles({ ...base, hideNoVideo: true, tiles: tiles('a+ b- c- d+'), keep: ['b', null] })
+        .ids,
+    ).toEqual(['a', 'b', 'd'])
+    // Spotlighted ourselves: shown even with 隱藏自己
+    expect(
+      visibleTiles({ ...base, hideSelf: true, tiles: tiles('a+ b+'), keep: [null, 'a'] }).ids,
+    ).toEqual(['a', 'b'])
+  })
+
+  it('handles the time before the room welcomed us', () => {
+    expect(visibleTiles({ ...base, you: null, hideSelf: true, tiles: tiles('b+') }).ids).toEqual([
+      'b',
+    ])
+  })
+})
+
+describe('stageFocus, focusFirst, stageLayout (G2, e4-t10, e4-t11)', () => {
+  const ids = ['a', 'b', 'c']
+
+  it('gives the big tile to our pin, then the spotlight, then the speaker', () => {
+    expect(stageFocus(ids, 'c', 'b', 'a')).toEqual({ id: 'c', reason: 'pin' })
+    expect(stageFocus(ids, null, 'b', 'a')).toEqual({ id: 'b', reason: 'spotlight' })
+    expect(stageFocus(ids, null, null, 'a')).toEqual({ id: 'a', reason: 'speaker' })
+    // Someone not on the stage does not count
+    expect(stageFocus(ids, 'z', 'y', 'x')).toEqual({ id: 'a', reason: 'speaker' })
+    expect(stageFocus([], 'a', null, null)).toBeNull()
+  })
+
+  it('puts the pinned or spotlighted member first (the share strip), not the speaker', () => {
+    expect(focusFirst(ids, { id: 'c', reason: 'pin' })).toEqual(['c', 'a', 'b'])
+    expect(focusFirst(ids, { id: 'b', reason: 'spotlight' })).toEqual(['b', 'a', 'c'])
+    expect(focusFirst(ids, { id: 'c', reason: 'speaker' })).toEqual(ids)
+    expect(focusFirst(ids, null)).toEqual(ids)
+  })
+
+  it('shows the chosen layout on a desktop, the phone layouts on phones', () => {
+    const speaker = { id: 'a', reason: 'speaker' } as const
+    expect(stageLayout('grid', null, speaker)).toBe('grid')
+    expect(stageLayout('speaker', null, speaker)).toBe('speaker')
+    expect(stageLayout('grid', 'portrait', speaker)).toBe('paged')
+    expect(stageLayout('grid', 'landscape', speaker)).toBe('speaker')
+    expect(stageLayout('grid', null, null)).toBe('grid')
+  })
+
+  it('turns any layout into the speaker one for a pin or a spotlight', () => {
+    for (const reason of ['pin', 'spotlight'] as const) {
+      const focus = { id: 'b', reason }
+      expect(stageLayout('grid', null, focus)).toBe('speaker')
+      expect(stageLayout('grid', 'portrait', focus)).toBe('speaker')
+      expect(stageLayout('speaker', 'landscape', focus)).toBe('speaker')
+    }
+  })
+
+  it('knows a layout choice', () => {
+    expect(isLayoutChoice('grid')).toBe(true)
+    expect(isLayoutChoice('speaker')).toBe(true)
+    expect(isLayoutChoice('paged')).toBe(false)
+    expect(isLayoutChoice(null)).toBe(false)
+  })
+})
+
+describe('holdSpeaker (G2, e4-t10): the big tile does not flip back and forth', () => {
+  const ids = ['a', 'b', 'c']
+
+  it('gives it to the first speaker at once', () => {
+    expect(holdSpeaker(null, 'a', ids, 1000)).toEqual({ held: { id: 'a', since: 1000 }, wait: 0 })
+    expect(holdSpeaker(null, null, ids, 1000)).toEqual({ held: null, wait: 0 })
+  })
+
+  it('keeps it with the speaker until SPEAKER_SWITCH_MS have passed', () => {
+    const held = { id: 'a', since: 1000 }
+    expect(holdSpeaker(held, 'a', ids, 1500)).toEqual({ held, wait: 0 })
+    expect(holdSpeaker(held, 'b', ids, 2000)).toEqual({ held, wait: SPEAKER_SWITCH_MS - 1000 })
+    expect(holdSpeaker(held, 'b', ids, 1000 + SPEAKER_SWITCH_MS)).toEqual({
+      held: { id: 'b', since: 1000 + SPEAKER_SWITCH_MS },
+      wait: 0,
+    })
+  })
+
+  it('moves at once when the holder left the stage', () => {
+    expect(holdSpeaker({ id: 'z', since: 1000 }, 'b', ids, 1100)).toEqual({
+      held: { id: 'b', since: 1100 },
+      wait: 0,
     })
   })
 })

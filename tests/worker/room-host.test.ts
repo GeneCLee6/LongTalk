@@ -43,6 +43,7 @@ const INFO = {
   locked: false,
   waitingRoom: false,
   passwordSetAt: null,
+  spotlight: null,
 }
 
 /** A browser as the room sees it: keeps its own copy of the view from what it receives */
@@ -1851,5 +1852,92 @@ describe('RoomHost lock and waiting room (F2, e1-t09, e1-t10)', () => {
     expect(woken.host.view().members[c.id]).toBeUndefined()
     expect(woken.host.view().room).toMatchObject({ waitingRoom: true, locked: false })
     expect(woken.host.sfuAccess(c.token, null, [])).toEqual({ ok: false, reason: 'forbidden' })
+  })
+})
+
+describe('RoomHost spotlight (G2, e4-t11)', () => {
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    t = setup()
+    t.host.create(ROOM)
+  })
+
+  const spotlight = (conn: string, memberId: string | null) =>
+    t.host.message(conn, JSON.stringify({ t: 'spotlight', memberId }))
+  const forbidden = { t: 'error', code: 'forbidden' }
+  const errors = (client: FakeClient) => client.received.filter((m) => m.t === 'error')
+
+  it('lets the host spotlight anyone for everyone, move it, and end it', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    const c = t.join('阿明')
+    spotlight(a.conn, b.id)
+    for (const who of [a, b, c]) expect(who.client.view!.room.spotlight).toBe(b.id)
+    expect((t.saved.room as RoomInfo).spotlight).toBe(b.id)
+    // One at a time: a new spotlight replaces the old; the host may spotlight themselves
+    spotlight(a.conn, a.id)
+    expect(c.client.view!.room.spotlight).toBe(a.id)
+    spotlight(a.conn, null)
+    expect(c.client.view!.room.spotlight).toBeNull()
+    expect(errors(a.client)).toEqual([])
+  })
+
+  it('refuses a participant (worker/roles.ts), and changes nothing', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    spotlight(a.conn, a.id)
+    const rev = b.client.rev
+    spotlight(b.conn, b.id)
+    spotlight(b.conn, null)
+    expect(errors(b.client)).toEqual([forbidden, forbidden])
+    expect(b.client.rev).toBe(rev)
+    expect(a.client.view!.room.spotlight).toBe(a.id)
+  })
+
+  it('refuses someone who is not in the room: gone, or still in the waiting room', () => {
+    const a = t.join('Gene')
+    t.host.message(a.conn, JSON.stringify({ t: 'host', action: 'waitingRoom', on: true }))
+    const socket = t.open()
+    t.host.message(socket.conn, JSON.stringify({ t: 'join', name: '阿明', token: null }))
+    const lobby = socket.client.received.find((m) => m.t === 'lobby')
+    const waitingId = lobby?.t === 'lobby' ? lobby.you : ''
+    expect(waitingId).not.toBe('')
+    spotlight(a.conn, waitingId)
+    spotlight(a.conn, 'nobody')
+    expect(errors(a.client)).toEqual([forbidden, forbidden])
+    expect(a.client.view!.room.spotlight).toBeNull()
+  })
+
+  it('ends when the member leaves, not while they reconnect', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    spotlight(a.conn, b.id)
+    t.host.closed(b.conn)
+    expect(a.client.view!.room.spotlight).toBe(b.id)
+    const back = t.join('小潔', b.token)
+    expect(back.id).toBe(b.id)
+    t.host.message(back.conn, JSON.stringify({ t: 'leave' }))
+    expect(a.client.view!.room.spotlight).toBeNull()
+    expect((t.saved.room as RoomInfo).spotlight).toBeNull()
+  })
+
+  it('keeps the spotlight across the object being evicted; drops one on a member who is gone', () => {
+    const a = t.join('Gene')
+    const b = t.join('小潔')
+    spotlight(a.conn, b.id)
+    const woken = setup('w')
+    woken.host.restore(t.saved.room as RoomInfo, t.saved.rev, t.saved.sessions, [
+      { conn: a.conn, openedAt: woken.now() },
+      { conn: b.conn, openedAt: woken.now() },
+    ])
+    expect(woken.host.view().room.spotlight).toBe(b.id)
+    const stale = setup('s')
+    stale.host.restore({ ...(t.saved.room as RoomInfo), spotlight: 'gone' }, 0, [], [])
+    expect(stale.host.view().room.spotlight).toBeNull()
+    // A room stored before v11 has no spotlight at all
+    const { spotlight: _, ...old } = t.saved.room as RoomInfo
+    const older = setup('o')
+    older.host.restore(old, 0, [], [])
+    expect(older.host.view().room.spotlight).toBeNull()
   })
 })
