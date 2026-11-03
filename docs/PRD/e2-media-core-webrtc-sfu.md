@@ -60,7 +60,7 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 - [ ] AC-2.5 — 斷網 30 秒再恢復，8 秒內自動接回同一席位並恢復收發；回到前景立即重連；期間名牌標示「重新連線中」。
 - [ ] AC-2.6 — cam 三層 simulcast、screen 兩層；接收端依格子大小與頻寬選層；8 人格狀時每人下行 ≤ 4 Mbps。
 - [ ] AC-2.7 — 名牌訊號格（三段）與自己的統計面板（RTT、丟包、位元率、幀率、解析度、TURN）；頻寬不足時依「先降視訊、再停收、最後純音訊」的順序自動處理並提示。
-- [ ] AC-2.8 — Chrome、Edge、Firefox、Safari（macOS）、iOS Safari、Android Chrome 的相容矩陣有 Playwright／實機清單；每個功能的支援度寫進 `docs/BROWSER-SUPPORT.md`。
+- [ ] AC-2.8 — Chrome、Edge、Firefox、Safari（macOS）、iOS Safari、Android Chrome 的相容矩陣有 Playwright／實機清單；每個功能的支援度寫進 `docs/BROWSER-SUPPORT.md`。（H6 #35：矩陣、Playwright 三引擎與實機清單都有了；**還沒勾**：六欄裡 Edge、Firefox、Safari、iOS Safari 都還沒有實機紀錄，Android Chrome 只有加入與互看。擁有者照 `DEPLOY.md` §5「實機測試計畫」每欄至少跑完短版 1–3 步、在 BROWSER-SUPPORT 記成 ● 後才勾。）
 
 ## Task 拆分
 
@@ -84,7 +84,7 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 - [x] `e2-t13` `getStats()` 收集與名牌訊號格（`RoomMedia` 每 2 秒一次 `MediaTransport.getStats()`，`src/media/stats.ts` 依 mid 讀出每條送出與收到的軌、兩次讀數算出位元率／丟包／卡頓／jitter buffer；H3 的 HD 上行檢查也讀同一份；`src/media/quality.ts` 判好／普通／差，三次裡兩次差才算差；自己的名牌用自己的，別人的經協定 v14 `signal`（變了才送、最多每 5 秒，RoomDO 每人每 10 秒最多 3 次）放在 `Member.signal`；訊號格 `SignalBars` 三格＋文字名稱） · AC-2.7 · #31
 - [x] `e2-t14` 統計面板（自己的連線、每條訂閱）、匯出 JSON 給除錯（「更多 › 連線統計」：電腦右側面板、手機全螢幕抽屜，lazy chunk；往返延遲、收送位元率與丟包、直連或 TURN、候選類型與協定、上行估計、自動調整的狀態；送出的每層解析度／幀率／位元率／是否關閉／編碼受限原因；每條訂閱的成員、種類、要求的層、解析度、幀率、位元率、丟包、抖動、卡頓；「匯出 JSON」含名字、不含 token／密碼／SDP） · AC-2.7 · #31
 - [x] `e2-t15` 頻寬自適應策略：下行降層→停收非講話者→純音訊提示；上行降最高層（`src/media/adaptation.ts` 兩個純狀態機，每 2 秒一步：下行連續 2 次「差」就把視訊預算降到要求量的 60%（不低於全部最低層），都最低了還差就退訂釘選／聚光燈／講話者以外的鏡頭（最多留 2 個，講話者換人時保留 15 秒，避免每幾秒退訂又訂閱），再差就出提示條建議 H3 的純音訊模式；連續 5 次「好」往上一段，剛升就又差時等待加倍（最多 60 秒）；「差」一定要有丟包，沒有丟包的隱藏音、jitter buffer、卡頓最多算「普通」（CI 上 CPU 不夠時會這樣）。上行：編碼器因頻寬受限或 SFU 回報丟包 ≥ 10% 連續 10 秒，用 H3 的 `setTopLayer` 關鏡頭的 `f`，再來分享的 `f`、鏡頭的 `h`；CPU 受限只關鏡頭的 `f`；30 秒都正常（有上行估計時要夠）才一層層開回；聲音從不動；toast「網路不穩，已降低畫質」等） · AC-2.7 · #31
-- [ ] `e2-t16` 相容矩陣：Playwright 多瀏覽器、iOS／Android 實機檢查清單、`BROWSER-SUPPORT.md` 完整版 · AC-2.8 · M · ← e2-t10, e11-t04
+- [x] `e2-t16` 相容矩陣：Playwright 多瀏覽器、iOS／Android 實機檢查清單、`BROWSER-SUPPORT.md` 完整版（`e2e/local/browsers.spec.ts` 在 Chromium、Firefox、WebKit 跑 app 自己的 `capabilities.ts` 並和 BROWSER-SUPPORT 的三欄比對、首頁、預先加入（假裝置／拒絕／沒有裝置）、兩人聊天與參與者、手機大小，CI `UI checks / browsers`；`e2e/crossbrowser.spec.ts` 讓 Firefox、WebKit 各和 Chromium 經真的 SFU 互看互聽、靜音、互相看分享並記下 simulcast 層，CI `Preview / e2e-firefox`；`DEPLOY.md` §5「實機測試計畫」短版（一台電腦＋一支手機，15–30 分鐘）與依裝置的完整版；BROWSER-SUPPORT 完整版（● 實機、● CI、○、✕、?）；修了 Firefox 聊天送出鈕被擠出面板） · AC-2.8 · #35
 - [ ] `e2-t17` `LiveKitTransport` 後備實作（選用，當 Realtime 條件變動時啟動） · AC-2.2 · M · ← e2-t10
 
 ### M2
@@ -96,7 +96,7 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 | 風險 | 對策 |
 | --- | --- |
 | Cloudflare Realtime API 細節與文件不足 | `e2-t01` 先做 spike：兩個瀏覽器互通的最小範例，再寫 ADR |
-| Safari 的 simulcast／編碼差異 | M1 `e2-t16` 矩陣；Safari 退化為單層 |
+| Safari 的 simulcast／編碼差異 | M1 `e2-t16` 矩陣；Safari 退化為單層（H6：Playwright 的 WebKit 協商三層、剛加入時只有最高層有畫面，Chromium 照樣看得到；真的 Safari 等實機） |
 | 重連後軌 id 變動造成重複訂閱 | desired／actual 對齊是唯一的訂閱入口；測試覆蓋重連 |
 | 免費流量超額 | E11 成本儀表板；接收端選層本身就是省流量 |
 

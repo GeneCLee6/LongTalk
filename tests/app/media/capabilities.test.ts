@@ -182,4 +182,31 @@ describe('docs/BROWSER-SUPPORT.md (AC-11.6)', () => {
       expect(cells[9], cells[2]).not.toBe('')
     }
   })
+
+  it('has the six browsers as its columns, in order (e2-t16)', () => {
+    const header = doc
+      .split('\n')
+      .find((line) => line.startsWith('|') && line.includes('| `capabilities.ts` |'))
+      ?.split('|')
+      .map((cell) => cell.trim())
+    expect(header?.slice(3, 9)).toEqual([
+      'Chrome',
+      'Edge',
+      'Firefox',
+      'Safari（macOS）',
+      'iOS Safari',
+      'Android Chrome',
+    ])
+  })
+
+  it('says ● CI only where CI runs that engine: Chrome, Firefox and Safari (e2-t16)', () => {
+    // Playwright's Chromium, Firefox and WebKit (e2e/local/browsers.spec.ts, e2e/crossbrowser.spec.ts)
+    const ciColumns = [0, 2, 3]
+    for (const cells of rows) {
+      cells.slice(3, 9).forEach((mark, column) => {
+        if (mark.startsWith('● CI'))
+          expect(ciColumns, `${cells[2]} column ${column}`).toContain(column)
+      })
+    }
+  })
 })

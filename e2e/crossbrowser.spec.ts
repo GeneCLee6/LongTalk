@@ -135,13 +135,24 @@ async function framesOf(video: ReturnType<Page['locator']>): Promise<number> {
   })
 }
 
-/** The loudest sample `viewer` plays of `other`'s microphone over 1.5 seconds */
+/**
+ * How loud `other`'s microphone is where `viewer` plays it, over 1.5 seconds: the loudest sample
+ * of the <audio> element's stream, or the level its RTP receiver reports, whichever is higher.
+ * The receiver's level is there because Firefox on a CI machine without a sound card runs no
+ * audio graph (every sample reads 0) while the sound arrives all the same.
+ */
 async function audioPeak(viewer: Member, other: Member): Promise<number> {
   const audio = viewer.page.locator(`audio[data-member="${other.name}"]`)
   if ((await audio.count()) === 0) return 0
   return audio.evaluate(async (element: HTMLAudioElement) => {
     const stream = element.srcObject
     if (!(stream instanceof MediaStream) || stream.getAudioTracks().length === 0) return 0
+    const track = stream.getAudioTracks()[0]
+    const pcs = (window as unknown as { __pcs: RTCPeerConnection[] }).__pcs
+    const receiver = pcs
+      .filter((pc) => pc.connectionState !== 'closed')
+      .flatMap((pc) => pc.getReceivers())
+      .find((r) => r.track.id === track.id)
     const context = new AudioContext()
     try {
       await context.resume()
@@ -153,6 +164,14 @@ async function audioPeak(viewer: Member, other: Member): Promise<number> {
         await new Promise((resolve) => setTimeout(resolve, 100))
         analyser.getFloatTimeDomainData(samples)
         for (const sample of samples) peak = Math.max(peak, Math.abs(sample))
+        // Only sources heard in the last second count (a muted sender stops sending); the
+        // timestamp is on the epoch in some browsers and on performance.now() in others
+        for (const source of receiver?.getSynchronizationSources() ?? []) {
+          const now = source.timestamp > 1e12 ? Date.now() : performance.now()
+          if (now - source.timestamp < 1000) {
+            peak = Math.max(peak, source.audioLevel ?? 0)
+          }
+        }
       }
       return peak
     } finally {
