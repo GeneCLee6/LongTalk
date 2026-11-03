@@ -4,6 +4,7 @@ import { applyPatch } from '../../shared/patch.ts'
 import {
   BAN_MS,
   CloseCode,
+  DENY_COOLDOWN_MS,
   EMPTY_ROOM_TTL_MS,
   HOST_HANDOFF_MS,
   JOIN_TIMEOUT_MS,
@@ -13,6 +14,7 @@ import {
   RECONNECT_GRACE_MS,
   STALE_AFTER_MS,
   SWEEP_INTERVAL_MS,
+  WAIT_TIMEOUT_MS,
   viewAsJson,
   type RoomInfo,
   type RoomView,
@@ -31,7 +33,15 @@ import type { Schedule } from '../../worker/scheduler.ts'
 const V = String(PROTOCOL_VERSION)
 const ROOM = { id: 'abcdefghij', createdAt: 1000 }
 /** ROOM as created, before anyone joined */
-const INFO = { ...ROOM, name: null, createdBy: null, startedAt: null, share: null }
+const INFO = {
+  ...ROOM,
+  name: null,
+  createdBy: null,
+  startedAt: null,
+  share: null,
+  locked: false,
+  waitingRoom: false,
+}
 
 /** A browser as the room sees it: keeps its own copy of the view from what it receives */
 class FakeClient {
@@ -170,7 +180,7 @@ describe('RoomHost', () => {
     expect(t.host.create(ROOM)).toBe(true)
     expect(t.host.create({ ...ROOM, createdAt: 2 })).toBe(false)
     expect(t.saved.room).toEqual(INFO)
-    expect(t.host.view()).toEqual({ room: INFO, members: {}, usage: 'normal' })
+    expect(t.host.view()).toEqual({ room: INFO, members: {}, waiting: {}, usage: 'normal' })
     expect(t.host.summary()).toEqual({ ...INFO, memberCount: 0 })
   })
 
@@ -199,6 +209,7 @@ describe('RoomHost', () => {
         state: {
           room: { ...INFO, createdBy: '小潔', startedAt: t.now() },
           members: { m1: member('m1', '小潔', t.now(), false, 'host') },
+          waiting: {},
           usage: 'normal',
         },
       },
@@ -1511,5 +1522,319 @@ describe('RoomHost host controls (F1, e1-t07)', () => {
     expect(c.client.received.at(-1)).toEqual(forbidden)
     host(b.conn, 'muteMember', c.id)
     expect(muted(b.client.view, c.id, 'mic')).toBe(true)
+  })
+})
+
+describe('RoomHost lock and waiting room (F2, e1-t09, e1-t10)', () => {
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    t = setup()
+    t.host.create(ROOM)
+  })
+
+  /** Joins with this browser's own id; `id` and `token` come from `welcome` or `lobby` */
+  function joinAs(name: string, client: string | null = null, token: string | null = null) {
+    const socket = t.open()
+    t.host.message(socket.conn, JSON.stringify({ t: 'join', name, token, client }))
+    const first = socket.client.received.find((m) => m.t === 'welcome' || m.t === 'lobby')
+    const id = first?.t === 'welcome' || first?.t === 'lobby' ? first.you : ''
+    const tok = first?.t === 'welcome' || first?.t === 'lobby' ? first.token : ''
+    return { ...socket, id, token: tok }
+  }
+  const host = (conn: string, message: Record<string, unknown>) =>
+    t.host.message(conn, JSON.stringify({ t: 'host', ...message }))
+  const lobbies = (client: FakeClient) => client.received.filter((m) => m.t === 'lobby')
+  const lastLobby = (client: FakeClient) => lobbies(client).at(-1)
+  const forbidden = { t: 'error', code: 'forbidden' }
+  /** Gene (the host) and 小潔 in the room, the waiting room on */
+  function room() {
+    const a = joinAs('Gene', 'browser-gene-000000')
+    const b = joinAs('小潔', 'browser-xiaojie-0000')
+    host(a.conn, { action: 'waitingRoom', on: true })
+    return { a, b }
+  }
+
+  it('lets the host turn the waiting room on and off, and nobody else', () => {
+    const a = joinAs('Gene')
+    const b = joinAs('小潔')
+    expect(a.client.view!.room.waitingRoom).toBe(false)
+    host(b.conn, { action: 'waitingRoom', on: true })
+    expect(b.client.received.at(-1)).toEqual(forbidden)
+    expect(a.client.view!.room.waitingRoom).toBe(false)
+    host(a.conn, { action: 'waitingRoom', on: true })
+    expect(b.client.view!.room.waitingRoom).toBe(true)
+    expect((t.saved.room as RoomInfo).waitingRoom).toBe(true)
+    host(a.conn, { action: 'waitingRoom', on: false })
+    expect(b.client.view!.room.waitingRoom).toBe(false)
+  })
+
+  it('puts someone new in the waiting room: a lobby, no view, no chat, no media', () => {
+    const { a, b } = room()
+    t.host.message(a.conn, JSON.stringify({ t: 'chat', text: 'before' }))
+    t.tick(5)
+    const c = joinAs('阿明', 'browser-aming-000000')
+    expect(c.id).not.toBe('')
+    expect(c.client.received).toEqual([
+      {
+        t: 'lobby',
+        v: PROTOCOL_VERSION,
+        you: c.id,
+        token: c.token,
+        position: 1,
+        count: 1,
+        room: { name: null, createdBy: 'Gene' },
+        hostPresent: true,
+      },
+    ])
+    // The room sees who waits, apart from its members
+    expect(a.client.view!.members[c.id]).toBeUndefined()
+    expect(b.client.view!.waiting).toEqual({
+      [c.id]: { id: c.id, name: '阿明', since: t.now(), reconnecting: false },
+    })
+    expect(t.host.memberCount).toBe(2)
+    expect(t.host.summary()).toMatchObject({ memberCount: 2, waitingRoom: true })
+    // Nothing of the meeting reaches the waiting room: patches, chat
+    t.host.message(b.conn, JSON.stringify({ t: 'rename', name: '小潔潔' }))
+    t.host.message(a.conn, JSON.stringify({ t: 'chat', text: 'after' }))
+    expect(c.client.received.filter((m) => m.t !== 'lobby')).toEqual([])
+    // A resync gets the lobby again, never a snapshot
+    t.host.message(c.conn, '{"t":"resync"}')
+    expect(c.client.received.map((m) => m.t)).toEqual(['lobby', 'lobby'])
+    // Chat, sharing and host controls are refused (worker/roles.ts)
+    t.host.message(c.conn, JSON.stringify({ t: 'chat', text: 'hi' }))
+    expect(c.client.received.at(-1)).toEqual(forbidden)
+    t.host.message(c.conn, JSON.stringify({ t: 'share', takeOver: false }))
+    expect(c.client.received.at(-1)).toEqual(forbidden)
+    host(c.conn, { action: 'admit', memberId: c.id })
+    expect(c.client.received.at(-1)).toEqual(forbidden)
+    // The SFU proxy and TURN refuse it (`media`)
+    expect(t.host.sfuAccess(c.token, null, [])).toEqual({ ok: false, reason: 'forbidden' })
+    expect(t.host.bindSfu(c.token, 'sc')).toBe(false)
+    // Renaming oneself still works, and the room sees it
+    t.host.message(c.conn, JSON.stringify({ t: 'rename', name: '阿明明' }))
+    expect(a.client.view!.waiting[c.id].name).toBe('阿明明')
+  })
+
+  it('admits one: welcome, chat history, a participant with media from then on', () => {
+    const { a, b } = room()
+    t.host.message(a.conn, JSON.stringify({ t: 'chat', text: 'hello' }))
+    const c = joinAs('阿明')
+    t.tick(10)
+    const d = joinAs('阿華')
+    expect(lastLobby(d.client)).toMatchObject({ position: 2, count: 2 })
+    t.tick(10)
+    host(a.conn, { action: 'admit', memberId: c.id })
+    const welcome = c.client.received.find((m) => m.t === 'welcome')
+    expect(welcome).toMatchObject({ you: c.id, token: c.token, rev: a.client.rev })
+    expect(c.client.view!.members[c.id]).toMatchObject({ role: 'participant', joinedAt: t.now() })
+    expect(c.client.view!.waiting).toEqual({ [d.id]: expect.objectContaining({ name: '阿華' }) })
+    expect(c.client.received.at(-1)).toMatchObject({ t: 'chat', reset: true })
+    expect(b.client.view).toEqual(c.client.view)
+    // The next in line moves up
+    expect(lastLobby(d.client)).toMatchObject({ position: 1, count: 1 })
+    expect(t.host.sfuAccess(c.token, null, [])).toMatchObject({ ok: true, memberId: c.id })
+    // From now on c gets the patches like everyone
+    t.host.message(b.conn, JSON.stringify({ t: 'rename', name: '小潔潔' }))
+    expect(c.client.view!.members[b.id].name).toBe('小潔潔')
+    // Admitting again (another co-host with a stale panel) changes nothing
+    const rev = a.client.rev
+    host(a.conn, { action: 'admit', memberId: c.id })
+    expect(a.client.rev).toBe(rev)
+  })
+
+  it('admits everyone at once', () => {
+    const { a } = room()
+    const c = joinAs('阿明')
+    const d = joinAs('阿華')
+    host(a.conn, { action: 'admitAll' })
+    for (const who of [c, d]) {
+      expect(who.client.received.some((m) => m.t === 'welcome')).toBe(true)
+      expect(who.client.view!.waiting).toEqual({})
+    }
+    expect(Object.keys(a.client.view!.members)).toHaveLength(4)
+  })
+
+  it('admits everyone waiting when the waiting room is turned off', () => {
+    const { a, b } = room()
+    const c = joinAs('阿明')
+    host(a.conn, { action: 'waitingRoom', on: false })
+    expect(c.client.received.some((m) => m.t === 'welcome')).toBe(true)
+    expect(b.client.view!.members[c.id].role).toBe('participant')
+    // The next one comes straight in
+    expect(joinAs('阿華').client.received[0].t).toBe('welcome')
+  })
+
+  it('refuses admit and deny from a participant', () => {
+    const { b } = room()
+    const c = joinAs('阿明')
+    for (const action of ['admit', 'deny']) {
+      host(b.conn, { action, memberId: c.id })
+      expect(b.client.received.at(-1)).toEqual(forbidden)
+    }
+    host(b.conn, { action: 'admitAll' })
+    expect(b.client.received.at(-1)).toEqual(forbidden)
+    expect(b.client.view!.waiting[c.id]).toBeDefined()
+    expect(c.client.closed).toBeNull()
+  })
+
+  it('denies: closed with `denied`, then the browser waits out DENY_COOLDOWN_MS (fake clock)', () => {
+    const { a, b } = room()
+    const c = joinAs('阿明', 'browser-aming-000000')
+    host(a.conn, { action: 'deny', memberId: c.id })
+    expect(c.client.closed).toEqual({ code: CloseCode.denied, reason: 'denied' })
+    expect(b.client.view!.waiting).toEqual({})
+    // Asking again at once: refused, with the old token too (it is forgotten)
+    expect(joinAs('阿明', 'browser-aming-000000').client.closed?.code).toBe(CloseCode.denied)
+    const back = joinAs('阿明', 'browser-aming-000000', c.token)
+    expect(back.client.closed?.code).toBe(CloseCode.denied)
+    expect(t.saved.bans).toEqual([
+      { client: 'browser-aming-000000', until: t.now() + DENY_COOLDOWN_MS, denied: true },
+    ])
+    expect(t.saved.schedule.bans).toBe(t.now() + DENY_COOLDOWN_MS)
+    t.tick(DENY_COOLDOWN_MS)
+    t.host.message(a.conn, 'ping')
+    t.host.message(b.conn, 'ping')
+    t.host.alarm()
+    expect(t.host.banList).toEqual([])
+    const later = joinAs('阿明', 'browser-aming-000000')
+    expect(later.client.closed).toBeNull()
+    expect(lastLobby(later.client)).toMatchObject({ position: 1 })
+  })
+
+  it('keeps the longer ban of a removal over a denial', () => {
+    const { a } = room()
+    const c = joinAs('阿明', 'browser-aming-000000')
+    host(a.conn, { action: 'admit', memberId: c.id })
+    host(a.conn, { action: 'remove', memberId: c.id })
+    expect(joinAs('阿明', 'browser-aming-000000').client.closed?.code).toBe(CloseCode.removed)
+    expect(t.host.banList).toEqual([{ client: 'browser-aming-000000', until: t.now() + BAN_MS }])
+  })
+
+  it('locks: nobody new gets in, not even into the waiting room; the host unlocks', () => {
+    const a = joinAs('Gene')
+    const b = joinAs('小潔')
+    host(b.conn, { action: 'lock', on: true })
+    expect(b.client.received.at(-1)).toEqual(forbidden)
+    host(a.conn, { action: 'lock', on: true })
+    expect(b.client.view!.room.locked).toBe(true)
+    expect(t.host.summary()).toMatchObject({ locked: true })
+    const c = joinAs('阿明')
+    expect(c.client.closed).toEqual({ code: CloseCode.locked, reason: 'locked' })
+    expect(c.id).toBe('')
+    host(a.conn, { action: 'waitingRoom', on: true })
+    expect(joinAs('阿明').client.closed?.code).toBe(CloseCode.locked)
+    expect(a.client.view!.waiting).toEqual({})
+    host(a.conn, { action: 'lock', on: false })
+    expect(joinAs('阿明').client.closed).toBeNull()
+  })
+
+  it('lets a member back into a locked room within its grace period, and someone waiting', () => {
+    const { a, b } = room()
+    const c = joinAs('阿明')
+    host(a.conn, { action: 'lock', on: true })
+    // The page of b reloads; the network of c drops
+    t.host.closed(b.conn)
+    t.host.closed(c.conn)
+    t.tick(RECONNECT_GRACE_MS - 1)
+    const b2 = joinAs('小潔', null, b.token)
+    expect(b2.id).toBe(b.id)
+    expect(b2.client.received[0].t).toBe('welcome')
+    const c2 = joinAs('阿明', null, c.token)
+    expect(c2.id).toBe(c.id)
+    expect(c2.client.received).toEqual([expect.objectContaining({ t: 'lobby', position: 1 })])
+    // The host can still admit who waits in a locked room
+    host(a.conn, { action: 'admit', memberId: c.id })
+    expect(c2.client.received.some((m) => m.t === 'welcome')).toBe(true)
+    // After the grace period the token is forgotten: someone new, and refused
+    t.host.closed(b2.conn)
+    t.tick(RECONNECT_GRACE_MS + 1)
+    t.host.message(a.conn, 'ping')
+    t.host.message(c2.conn, 'ping')
+    t.host.sweep()
+    expect(joinAs('小潔', null, b.token).client.closed?.code).toBe(CloseCode.locked)
+  })
+
+  it('keeps a reloading waiting member in its place in the queue', () => {
+    room()
+    const c = joinAs('阿明')
+    t.tick(1)
+    const d = joinAs('阿華')
+    t.host.closed(c.conn)
+    expect(t.host.view().waiting[c.id].reconnecting).toBe(true)
+    const c2 = joinAs('阿明', null, c.token)
+    expect(c2.client.received).toEqual([expect.objectContaining({ position: 1, count: 2 })])
+    expect(lastLobby(d.client)).toMatchObject({ position: 2 })
+  })
+
+  it(`sends away whoever waits for ${WAIT_TIMEOUT_MS / 60_000} minutes (fake clock)`, () => {
+    const { a, b } = room()
+    const c = joinAs('阿明')
+    const cSince = t.now()
+    expect(t.saved.schedule.waiting).toBe(cSince + WAIT_TIMEOUT_MS)
+    t.tick(60_000)
+    const d = joinAs('阿華')
+    const ping = () => {
+      for (const who of [a, b, c, d]) t.host.message(who.conn, 'ping')
+    }
+    // Keep everyone heard from while the clock runs (the sweep would mark them stale)
+    while (t.now() < cSince + WAIT_TIMEOUT_MS - SWEEP_INTERVAL_MS) {
+      t.tick(SWEEP_INTERVAL_MS)
+      ping()
+      t.host.sweep()
+    }
+    t.tick(cSince + WAIT_TIMEOUT_MS - 1 - t.now())
+    ping()
+    t.host.alarm()
+    expect(c.client.closed).toBeNull()
+    t.tick(1)
+    ping()
+    t.host.alarm()
+    expect(c.client.closed).toEqual({ code: CloseCode.waitExpired, reason: 'waited too long' })
+    expect(d.client.closed).toBeNull()
+    expect(lastLobby(d.client)).toMatchObject({ position: 1, count: 1 })
+    expect(t.saved.schedule.waiting).toBe(cSince + 60_000 + WAIT_TIMEOUT_MS)
+    expect(Object.keys(a.client.view!.waiting)).toEqual([d.id])
+  })
+
+  it('hands the host on to someone in the room, never to someone waiting (AC-1.3)', () => {
+    const { a, b } = room()
+    const c = joinAs('阿明')
+    t.host.message(a.conn, '{"t":"leave"}')
+    expect(b.client.view!.members[b.id].role).toBe('host')
+    expect(lastLobby(c.client)).toMatchObject({ hostPresent: true })
+    // The last one in the room leaves: nobody can admit, the waiting member is told
+    t.host.message(b.conn, '{"t":"leave"}')
+    expect(lastLobby(c.client)).toMatchObject({ hostPresent: false })
+    expect(t.host.view().members).toEqual({})
+    expect(t.host.view().waiting[c.id]).toBeDefined()
+    // Someone waiting keeps the room open (it is not empty)
+    expect(t.saved.schedule.close).toBeUndefined()
+  })
+
+  it('tells who waits when the host is reconnecting, and again when it is back', () => {
+    const { a } = room()
+    const c = joinAs('阿明')
+    t.host.closed(a.conn)
+    // 小潔 is still connected but not staff until the handoff
+    expect(lastLobby(c.client)).toMatchObject({ hostPresent: false })
+    const a2 = joinAs('Gene', null, a.token)
+    expect(a2.id).toBe(a.id)
+    expect(lastLobby(c.client)).toMatchObject({ hostPresent: true })
+  })
+
+  it('keeps who waits across the object being evicted', () => {
+    const { a } = room()
+    const c = joinAs('阿明')
+    const woken = setup('w')
+    woken.clients.set(a.conn, a.client)
+    woken.clients.set(c.conn, c.client)
+    woken.host.restore(t.saved.room as RoomInfo, t.saved.rev, t.saved.sessions, [
+      { conn: a.conn, openedAt: woken.now() },
+      { conn: c.conn, openedAt: woken.now() },
+    ])
+    expect(woken.host.view().waiting[c.id]).toBeDefined()
+    expect(woken.host.view().members[c.id]).toBeUndefined()
+    expect(woken.host.view().room).toMatchObject({ waitingRoom: true, locked: false })
+    expect(woken.host.sfuAccess(c.token, null, [])).toEqual({ ok: false, reason: 'forbidden' })
   })
 })

@@ -48,8 +48,8 @@ const USAGE_REFRESH_MS = 60_000
  * sweep reads when each socket last pinged.
  *
  * One alarm for every timed job (e1-t04): RoomHost keeps the jobs (sweep, empty-room close, host
- * handoff, ban expiry; worker/scheduler.ts) and after anything that may change them the object
- * moves its alarm to `host.nextAlarm()` (`syncAlarm`).
+ * handoff, ban expiry, waiting-room timeout; worker/scheduler.ts) and after anything that may
+ * change them the object moves its alarm to `host.nextAlarm()` (`syncAlarm`).
  */
 export class RoomDO extends DurableObject<Env> {
   private readonly host: RoomHost

@@ -13,6 +13,8 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
   showLabel?: boolean
   /** A count in a small pill on the icon's corner (participants, unread messages) */
   badge?: number
+  /** `warn`: the badge asks for attention (people in the waiting room, F2) */
+  badgeTone?: 'primary' | 'warn'
   /** The visible caption when it is shorter than the accessible name (defaults to `label`) */
   caption?: string
   /**
@@ -29,6 +31,7 @@ export function IconButton({
   icon,
   showLabel = false,
   badge,
+  badgeTone = 'primary',
   caption = label,
   pressed,
   tone = 'neutral',
@@ -47,7 +50,7 @@ export function IconButton({
     >
       <Icon aria-hidden="true">
         {icon}
-        {badge !== undefined && <Badge>{badge}</Badge>}
+        {badge !== undefined && <Badge $warn={badgeTone === 'warn'}>{badge}</Badge>}
       </Icon>
       {showLabel && <Caption aria-hidden="true">{caption}</Caption>}
     </Wrapper>
@@ -120,15 +123,15 @@ const Caption = styled.span`
   }
 `
 
-const Badge = styled.span`
+const Badge = styled.span<{ $warn: boolean }>`
   position: absolute;
   top: -${space(1.5)};
   right: -${space(2.5)};
   min-width: 18px;
   padding: 0 ${space(1)};
   border-radius: ${radius.pill};
-  background: ${color.primary};
-  color: ${color.onPrimary};
+  background: ${({ $warn }) => ($warn ? color.warn : color.primary)};
+  color: ${({ $warn }) => ($warn ? color.bg : color.onPrimary)};
   font-size: ${fontSize.badge};
   font-weight: 800;
   line-height: 18px;

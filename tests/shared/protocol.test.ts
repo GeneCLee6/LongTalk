@@ -10,6 +10,7 @@ import {
   parseClientMessage,
   parseServerMessage,
   roomSocketPath,
+  waitingQueue,
   type ServerMessage,
 } from '../../shared/protocol.ts'
 
@@ -21,6 +22,8 @@ const state = {
     createdBy: null,
     startedAt: null,
     share: null,
+    locked: false,
+    waitingRoom: false,
   },
   members: {
     m1: {
@@ -32,6 +35,7 @@ const state = {
       tracks: [],
     },
   },
+  waiting: {},
   usage: 'normal' as const,
 }
 const TOKEN = 'A'.repeat(43)
@@ -237,6 +241,62 @@ describe('protocol', () => {
     expect(
       parseClientMessage(JSON.stringify({ t: 'join', name: 'Gene', token: null, client })),
     ).toEqual({ t: 'join', name: 'Gene', token: null, client })
+  })
+
+  it('parses the lock, the waiting room, admit, admit all and deny (F2)', () => {
+    for (const action of ['lock', 'waitingRoom']) {
+      for (const on of [true, false]) {
+        expect(parseClientMessage(JSON.stringify({ t: 'host', action, on }))).toEqual({
+          t: 'host',
+          action,
+          on,
+        })
+      }
+      expect(parseClientMessage(JSON.stringify({ t: 'host', action }))).toBeNull()
+      expect(parseClientMessage(JSON.stringify({ t: 'host', action, on: 'yes' }))).toBeNull()
+    }
+    for (const action of ['admit', 'deny']) {
+      expect(parseClientMessage(JSON.stringify({ t: 'host', action, memberId: 'm-2' }))).toEqual({
+        t: 'host',
+        action,
+        memberId: 'm-2',
+      })
+      expect(parseClientMessage(JSON.stringify({ t: 'host', action }))).toBeNull()
+    }
+    expect(parseClientMessage('{"t":"host","action":"admitAll"}')).toEqual({
+      t: 'host',
+      action: 'admitAll',
+    })
+  })
+
+  it('parses a lobby (F2), and refuses one of another version or shape', () => {
+    const lobby = {
+      t: 'lobby',
+      v: PROTOCOL_VERSION,
+      you: 'm2',
+      token: TOKEN,
+      position: 2,
+      count: 3,
+      room: { name: null, createdBy: 'Gene' },
+      hostPresent: true,
+    }
+    expect(parseServerMessage(JSON.stringify(lobby))).toEqual(lobby)
+    for (const bad of [
+      { ...lobby, v: PROTOCOL_VERSION - 1 },
+      { ...lobby, position: -1 },
+      { ...lobby, room: null },
+      { ...lobby, hostPresent: 'yes' },
+    ]) {
+      expect(parseServerMessage(JSON.stringify(bad))).toBeNull()
+    }
+  })
+
+  it('orders the waiting room first come, first in (F2)', () => {
+    const entry = (id: string, since: number) => ({ id, name: id, since, reconnecting: false })
+    expect(
+      waitingQueue({ b: entry('b', 5), a: entry('a', 5), c: entry('c', 1) }).map((e) => e.id),
+    ).toEqual(['c', 'a', 'b'])
+    expect(waitingQueue(undefined)).toEqual([])
   })
 
   it('parses a notice (F1)', () => {

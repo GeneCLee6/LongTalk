@@ -25,8 +25,11 @@ class FakeRoom {
       createdBy: null,
       startedAt: null,
       share: null,
+      locked: false,
+      waitingRoom: false,
     },
     members: {},
+    waiting: {},
     usage: 'normal',
   }
   readonly sent: Record<string, ClientMessage[]> = {}
