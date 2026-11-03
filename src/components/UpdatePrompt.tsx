@@ -23,7 +23,13 @@ export interface UpdateCardProps {
 export function UpdateCard({ state, inRoom, onReload, onLater }: UpdateCardProps) {
   if (state !== 'available' && state !== 'applying') return null
   return (
-    <Card role="status" aria-label={strings.pwa.updateLabel} $room={inRoom}>
+    <Card
+      role="status"
+      aria-label={strings.pwa.updateLabel}
+      $room={inRoom}
+      // The room is dark whatever the system scheme (DESIGN.md §1.2): so is its card
+      data-theme={inRoom ? 'dark' : undefined}
+    >
       <RefreshIcon />
       <p>{inRoom ? strings.pwa.updateRoom : strings.pwa.update}</p>
       <Actions>
