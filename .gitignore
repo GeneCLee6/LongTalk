@@ -43,3 +43,6 @@ playwright-report/
 
 # Lighthouse reports (scripts/lighthouse.ts)
 lighthouse-report/
+
+# The cross-browser suite's report of what each browser detected (e2e/local/browsers.spec.ts)
+browser-report/

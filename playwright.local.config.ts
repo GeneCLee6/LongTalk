@@ -1,4 +1,5 @@
-import { defineConfig } from '@playwright/test'
+import { defineConfig, devices } from '@playwright/test'
+import { chromiumFakeMedia, firefoxFakeMedia } from './e2e/fakeDevices.ts'
 import { fakeMediaFiles } from './e2e/local/fakeMedia.ts'
 
 /**
@@ -13,6 +14,13 @@ import { fakeMediaFiles } from './e2e/local/fakeMedia.ts'
  * CI runs them in the Playwright Docker image (ui.yml), and the visual baselines in
  * e2e/local/__screenshots__ are made there: fonts and rendering differ between systems, so the
  * visual tests are skipped elsewhere unless VISUAL=1 (DEPLOY.md §7 has how to update them).
+ *
+ * The cross-browser smoke suite (H6, e2-t16; e2e/local/browsers.spec.ts) also runs in Firefox
+ * (its fake camera and microphone, from prefs) and WebKit (Playwright's build of Safari's engine;
+ * camera and microphone where that build has them):
+ *
+ *   npx playwright install firefox webkit   # once
+ *   npm run build && npm run test:browsers
  */
 const media = fakeMediaFiles()
 const port = 4173
@@ -37,25 +45,50 @@ export default defineConfig({
   },
   use: {
     baseURL: `http://localhost:${port}`,
-    browserName: 'chromium',
     locale: 'zh-TW',
     timezoneId: 'Asia/Taipei',
-    permissions: ['camera', 'microphone'],
     // No service worker: an update prompt must never appear in a screenshot
     serviceWorkers: 'block',
-    launchOptions: {
-      args: [
-        '--use-fake-device-for-media-stream',
-        '--use-fake-ui-for-media-stream',
-        `--use-file-for-fake-video-capture=${media.video}`,
-        `--use-file-for-fake-audio-capture=${media.audio}`,
-        '--autoplay-policy=no-user-gesture-required',
-        // The same text rendering on every machine of one kind
-        '--font-render-hinting=none',
-        '--disable-lcd-text',
-      ],
-    },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
+  projects: [
+    {
+      // Everything: accessibility, visual, noise suppression and the cross-browser suite
+      name: 'chromium',
+      use: {
+        browserName: 'chromium',
+        permissions: ['camera', 'microphone'],
+        launchOptions: {
+          args: [
+            ...chromiumFakeMedia,
+            `--use-file-for-fake-video-capture=${media.video}`,
+            `--use-file-for-fake-audio-capture=${media.audio}`,
+            // The same text rendering on every machine of one kind
+            '--font-render-hinting=none',
+            '--disable-lcd-text',
+          ],
+        },
+      },
+    },
+    {
+      name: 'firefox',
+      testMatch: 'browsers.spec.ts',
+      use: {
+        ...devices['Desktop Firefox'],
+        viewport: { width: 1280, height: 800 },
+        // Playwright cannot grant camera or microphone in Firefox: its prefs do instead
+        launchOptions: { firefoxUserPrefs: firefoxFakeMedia },
+      },
+    },
+    {
+      name: 'webkit',
+      testMatch: 'browsers.spec.ts',
+      use: {
+        ...devices['Desktop Safari'],
+        viewport: { width: 1280, height: 800 },
+        permissions: ['camera', 'microphone'],
+      },
+    },
+  ],
 })
