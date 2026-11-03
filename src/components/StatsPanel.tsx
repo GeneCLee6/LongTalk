@@ -4,6 +4,7 @@ import type { TrackKind } from '../../shared/protocol.ts'
 import type { Layer } from '../media/MediaTransport.ts'
 import type { InboundSample, OutboundSample, StatsSample } from '../media/stats.ts'
 import type { StatsSnapshot, StatsStore } from '../room/statsStore.ts'
+import type { NoiseLoadStore, NoiseStatus } from '../room/useNoiseSuppression.ts'
 import { strings } from '../strings.ts'
 import { color, font, fontSize, radius, space } from '../styles/tokens.ts'
 import { Button } from './Button.tsx'
@@ -15,7 +16,12 @@ export interface StatsPanelProps {
   describe: (key: string) => { name: string; kind: TrackKind } | null
   /** The export was downloaded (the page says so) */
   onExported?: () => void
+  /** The advanced noise suppression (e6-t02): where it stands, and its load while on */
+  noise?: { status: NoiseStatus; load: NoiseLoadStore } | null
 }
+
+const noSubscribe = () => () => {}
+const noLoad = () => null
 
 /**
  * 更多 › 連線統計 (e2-t14, AC-2.7): our own connection (round trip, loss, bitrates, the path and
@@ -26,8 +32,12 @@ export interface StatsPanelProps {
  * Loaded lazily: the room's first JS does not carry it. The page puts it in the desktop side
  * panel or the phone drawer.
  */
-export default function StatsPanel({ store, describe, onExported }: StatsPanelProps) {
+export default function StatsPanel({ store, describe, onExported, noise }: StatsPanelProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.get)
+  const noiseLoad = useSyncExternalStore(
+    noise?.load.subscribe ?? noSubscribe,
+    noise?.load.get ?? noLoad,
+  )
   const text = strings.stats
   if (!snapshot) {
     return (
@@ -90,6 +100,34 @@ export default function StatsPanel({ store, describe, onExported }: StatsPanelPr
               ? text.uplinkNormal
               : text.uplinkLimited}
           </Row>
+        </Rows>
+      </Section>
+
+      <Section aria-labelledby="stats-modes">
+        <Heading id="stats-modes">{text.modes}</Heading>
+        <Rows>
+          <Row label={text.hd}>
+            {
+              text.hdStates[
+                snapshot.powerSaving
+                  ? 'powerSaving'
+                  : !snapshot.hd
+                    ? 'off'
+                    : snapshot.hdLimited
+                      ? 'limited'
+                      : 'on'
+              ]
+            }
+          </Row>
+          <Row label={text.powerSaving}>{snapshot.powerSaving ? text.on : text.off}</Row>
+          <Row label={text.audioOnly}>{snapshot.audioOnly ? text.on : text.off}</Row>
+          {noise && (
+            <Row label={text.noise}>
+              {noise.status === 'on' && noiseLoad
+                ? text.noiseLoad(percent(noiseLoad.load), ms(noiseLoad.latencyMs))
+                : text.noiseStates[noise.status]}
+            </Row>
+          )}
         </Rows>
       </Section>
 

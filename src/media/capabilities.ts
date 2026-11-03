@@ -36,6 +36,12 @@ export interface Capabilities {
    * know is not shown
    */
   audioProcessing: boolean
+  /**
+   * The advanced noise suppression (e6-t02): AudioContext with `audioWorklet` (only in secure
+   * contexts), AudioWorkletNode, a MediaStream destination and WebAssembly; RNNoise runs in the
+   * worklet. SharedArrayBuffer is not needed. Without it the switch is not shown.
+   */
+  advancedNoiseSuppression: boolean
   /** The `devicechange` event: noticing a device plugged in or out (B2) */
   deviceChange: boolean
   /** navigator.clipboard.writeText: the top bar's copy link (only on HTTPS or localhost) */
@@ -59,6 +65,11 @@ export interface Capabilities {
    * shows a one-time hint 「分享 › 加入主畫面」 instead
    */
   homeScreenHint: boolean
+  /**
+   * navigator.getBattery (the Battery Status API, Chromium only; e6-t05): a low battery suggests
+   * 省電模式 once; elsewhere there is no suggestion (the mode itself works everywhere)
+   */
+  battery: boolean
 }
 
 export type Capability = keyof Capabilities
@@ -74,6 +85,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'senderParameters',
   'audioContext',
   'audioProcessing',
+  'advancedNoiseSuppression',
   'deviceChange',
   'clipboard',
   'webShare',
@@ -81,6 +93,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'serviceWorker',
   'installPrompt',
   'homeScreenHint',
+  'battery',
 ]
 
 /** Where detection looks: the browser's globals, or a stand-in in tests */
@@ -89,6 +102,8 @@ export interface CapabilityEnv {
   RTCRtpSender?: { prototype: object }
   HTMLMediaElement?: { prototype: object }
   AudioContext?: unknown
+  AudioWorkletNode?: unknown
+  WebAssembly?: { instantiate?: unknown }
   onbeforeinstallprompt?: unknown
   navigator?: {
     serviceWorker?: object | null
@@ -97,7 +112,14 @@ export interface CapabilityEnv {
     clipboard?: object | null
     share?: unknown
     permissions?: object | null
+    getBattery?: unknown
   }
+}
+
+/** The bits of BatteryManager the low-battery hint reads */
+export interface BatteryLike extends EventTarget {
+  level: number
+  charging: boolean
 }
 
 const browser = (): CapabilityEnv => globalThis as unknown as CapabilityEnv
@@ -154,6 +176,22 @@ export function canMeasureLevel(env: CapabilityEnv = browser()): boolean {
   return typeof env.AudioContext === 'function'
 }
 
+/**
+ * Whether the advanced noise suppression can run (e6-t02): an AudioWorklet that can take the
+ * microphone and give a track back, and WebAssembly for RNNoise
+ */
+export function canSuppressNoise(env: CapabilityEnv = browser()): boolean {
+  if (typeof env.AudioContext !== 'function' || typeof env.AudioWorkletNode !== 'function') {
+    return false
+  }
+  const context = (env.AudioContext as { prototype?: object }).prototype
+  return (
+    has(context, 'audioWorklet') &&
+    has(context, 'createMediaStreamDestination') &&
+    typeof env.WebAssembly?.instantiate === 'function'
+  )
+}
+
 /** Whether text can be copied to the clipboard (navigator.clipboard.writeText) */
 export function canCopy(env: CapabilityEnv = browser()): boolean {
   return has(env.navigator?.clipboard, 'writeText')
@@ -187,6 +225,22 @@ export function hasHomeScreenHint(env: CapabilityEnv = browser()): boolean {
   return typeof env.navigator?.standalone === 'boolean'
 }
 
+/** Whether the battery level can be read (navigator.getBattery: Chromium) */
+export function canReadBattery(env: CapabilityEnv = browser()): boolean {
+  return typeof env.navigator?.getBattery === 'function'
+}
+
+/** The battery, where the browser tells it; null elsewhere */
+export function batteryManager(env: CapabilityEnv = browser()): Promise<BatteryLike> | null {
+  if (!canReadBattery(env)) return null
+  try {
+    const navigator = env.navigator as { getBattery: () => Promise<BatteryLike> }
+    return navigator.getBattery()
+  } catch {
+    return null
+  }
+}
+
 /** Everything at once (the doc's table, for this browser) */
 export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities {
   const devices = env.navigator?.mediaDevices
@@ -201,6 +255,7 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     senderParameters: has(sender, 'setParameters'),
     audioContext: canMeasureLevel(env),
     audioProcessing: audioProcessingSupport(env).length > 0,
+    advancedNoiseSuppression: canSuppressNoise(env),
     deviceChange: has(devices, 'ondevicechange'),
     clipboard: canCopy(env),
     webShare: canWebShare(env),
@@ -208,5 +263,6 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     serviceWorker: canUseServiceWorker(env),
     installPrompt: canPromptInstall(env),
     homeScreenHint: hasHomeScreenHint(env),
+    battery: canReadBattery(env),
   }
 }

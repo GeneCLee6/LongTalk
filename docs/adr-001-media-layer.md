@@ -224,6 +224,28 @@ interface MediaTransport {
 - Safari、Firefox 的統計欄位（`qualityLimitationReason`、`freezeCount`、`mid`、`active` 有的沒有）：沒有就當不知道，不會誤判成差，但也少了訊號。
 - 頻寬一直很低（例如 300 kbps）時下行會停在「建議純音訊」；音訊本身的頻寬（約 32–64 kbps × 人數）不在自適應裡。
 
+## 進階噪音抑制與省電模式（H4，2026-11-03，`e6-t02`、`e6-t05`，#33）
+
+### 進階噪音抑制：RNNoise 在 AudioWorklet 裡
+
+- **送出的路徑**：麥克風的軌 → `AudioContext`（`sampleRate: 48000`、`latencyHint: 'interactive'`）→ `AudioWorkletNode`（`longtalk-rnnoise`，單聲道）→ `MediaStreamAudioDestinationNode` 的軌 → `RoomMedia.setLocal({ mic })` → `MediaTransport.replaceTrack`（同一條已發布的麥克風軌，**不重新協商**；規則 2 不變：管線不碰 PeerConnection）。關掉就把麥克風本身換回去。房間頁在 `AudioContext` 沒在跑的時候（沒有使用者手勢、Safari 來電）照送麥克風本身。
+- **wasm**：xiph/rnnoise（BSD-3-Clause），shiguredo/rnnoise-wasm 編的兩個檔（一般 153 kB、SIMD 157 kB；gzip 約 114 kB），取自 `@sapphi-red/web-noise-suppressor` 0.4.1（MIT）。不用 emscripten glue：模組只 import `emscripten_memcpy_big`、`emscripten_resize_heap`、`__assert_fail`，由 `src/media/rnnoiseCore.ts` 提供，worklet 因此只有一個 3 kB 的檔。頁面 `fetch` wasm（自己的 `/assets/`），用 `processorOptions` 交給 worklet，worklet 自己 `WebAssembly.instantiate`。有 SIMD 就拿 SIMD 版。授權：`THIRD_PARTY_NOTICES.md`（建置時也放 `/third-party-notices.txt`）。
+- **分幀與延遲**：RNNoise 一幀 480 樣本；render quantum 128。輸出延遲 448 樣本（9.3 ms）是不會斷音的最小值（15 個 quantum 一循環，128·k mod 480 最大 448）；context 的 `baseLatency` 在 headless Chromium（Windows）是 10 ms，合計約 19 ms。樣本乘 32768（RNNoise 用 16-bit 的刻度）再除回來。
+- **CPU**：worklet 每 100 幀（1 秒）回報處理時間占比與最慢一幀；連續 5 秒 > 35 % 或有一幀 > 2.4 ms 就關掉並提示（`src/media/noiseLoad.ts`）。Node（同一台 Windows 筆電）一幀 0.13 ms／SIMD 0.09 ms；headless Chromium 的 worklet 裡 0.1–0.9 %。Chromium 的 `AudioWorkletGlobalScope` 沒有 `performance`，用 `Date.now()`（1 ms 解析度，加總仍不偏）。
+- **瀏覽器的噪音抑制**：進階的開著時關掉（`noiseSuppression: false`，Chrome 改不了就重開麥克風，管線換輸入、送出的軌不變），避免兩次處理；回音消除、自動增益照常。
+- **不需要** `SharedArrayBuffer`／cross-origin isolation：wasm 只在 worklet 的執行緒裡，主執行緒與 worklet 之間只傳一次 wasm 的 bytes 和每秒一則負載。
+
+### 省電模式
+
+- `RoomMedia.setPowerSaving`：選層預算 0（`POWER_SAVING_BUDGET_BPS`，`chooseLayers` 把每條都降到最低層：鏡頭 `q` 180p 15 fps、分享 `h` 一半大小 15 fps）；鏡頭的最高層 `medium`（和 HD、上行自適應取最低）；鏡頭擷取 `frameRate: { max: 15 }`（新的鏡頭開始送時也套用；關掉時拿掉，本月低畫質時保留）。自適應照常在底下跑。
+- 頁面：動畫關（`MotionOffContext`＋`html[data-motion='off']`）、進階噪音抑制暫停；Battery Status API（Chromium）電量 ≤ 20 % 且沒充電時提示一次，不自動開。
+- 統計面板的「模式」一段顯示 HD、省電、純音訊、進階噪音抑制（負載與延遲），AC-6.4 的「統計面板反映變化」。
+
+### 驗證與沒有驗證的
+
+- 已驗證：分幀、延遲、wasm 在 Node 裡真的壓低白雜訊而保留穩定的音（`tests/app/media/rnnoise.test.ts`）；管線接線、失敗與暫停（假的 Web Audio，`tests/app/h4.test.tsx`）；房間頁送出的軌、瀏覽器噪音抑制暫停、CPU 超標自動關、省電模式擋住它（`tests/app/h4Room.test.tsx`）；省電模式的選層、HD、幀率（`FakeTransport`）；headless Chromium 裡 worklet 與 wasm 從自己的 `/assets/` lazy 載入並在跑（`e2e/local/noise.spec.ts`，CI 的 `UI checks`）；經真的 SFU 打開後對方仍聽得到（`e2e/interop.spec.ts`，PR 預覽）。
+- **沒有驗證的**：鍵盤、風扇聲在接收端是否明顯降低（AC-6.2 要兩台裝置錄音比對，`DEPLOY.md` §5 第 23 步）；低階筆電與手機上的實際 CPU 與門檻是否合適；Safari／Firefox 上 worklet 是否正常（Firefox 麥克風非 48 kHz 時預期會失敗並提示）；省電模式的實際省電量。
+
 ## 後果
 
 - **要自己做的**：房間與軌清單（RoomDO，A3／B1）、desired／actual 訂閱對齊（`e2-t04`）、重連（`e2-t08`）、選層策略（`e2-t12`、`e2-t15`）、統計（`e2-t13`）。這些 LiveKit SDK 會送，Realtime 不會；已經排進 E2 的 task。

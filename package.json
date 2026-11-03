@@ -22,6 +22,7 @@
     "lighthouse": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/lighthouse.ts"
   },
   "dependencies": {
+    "@sapphi-red/web-noise-suppressor": "0.4.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.5",

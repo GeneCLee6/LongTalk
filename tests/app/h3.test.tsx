@@ -109,14 +109,20 @@ describe('LocalDevices: processing switches (e6-t01)', () => {
 
 describe('remembered media settings (H3)', () => {
   it('keeps the switches and HD, and defaults HD by device', () => {
-    expect(loadMediaPrefs()).toEqual({ processing: DEFAULT_PROCESSING, hd: null })
-    saveMediaPrefs({ processing: { ...DEFAULT_PROCESSING, noiseSuppression: false }, hd: false })
+    const fresh = { advancedNoise: false, powerSaving: false }
+    expect(loadMediaPrefs()).toEqual({ processing: DEFAULT_PROCESSING, hd: null, ...fresh })
+    saveMediaPrefs({
+      processing: { ...DEFAULT_PROCESSING, noiseSuppression: false },
+      hd: false,
+      ...fresh,
+    })
     expect(loadMediaPrefs()).toEqual({
       processing: { ...DEFAULT_PROCESSING, noiseSuppression: false },
       hd: false,
+      ...fresh,
     })
     localStorage.setItem('longtalk.media', '{"processing":{"echoCancellation":"x"},"hd":3}')
-    expect(loadMediaPrefs()).toEqual({ processing: DEFAULT_PROCESSING, hd: null })
+    expect(loadMediaPrefs()).toEqual({ processing: DEFAULT_PROCESSING, hd: null, ...fresh })
     expect(defaultHd(false)).toBe(true)
     expect(defaultHd(true)).toBe(false)
   })

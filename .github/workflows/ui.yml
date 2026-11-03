@@ -7,7 +7,8 @@ name: UI checks
 #
 #   a11y    axe-core on every screen and open state, keyboard paths (e2e/local/a11y.spec.ts), and
 #           Lighthouse's accessibility score ≥ 0.95 on home, pre-join and room, desktop and phone
-#           (scripts/lighthouse.ts; the scores are in the run's summary)
+#           (scripts/lighthouse.ts; the scores are in the run's summary); also the RNNoise worklet
+#           loading lazily and running in Chromium (e2e/local/noise.spec.ts, H4)
 #   visual  screenshots of home, pre-join, room × light / dark × desktop / phone against
 #           e2e/local/__screenshots__. When they differ (or are missing) the job fails and uploads
 #           `visual-baselines`: the new screenshots, laid out to be copied over the old ones once
@@ -55,8 +56,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: axe and keyboard checks
-        run: npx playwright test -c playwright.local.config.ts a11y.spec.ts
+      - name: axe and keyboard checks, advanced noise suppression in Chromium
+        run: npx playwright test -c playwright.local.config.ts a11y.spec.ts noise.spec.ts
 
       - name: Lighthouse accessibility ≥ 0.95
         env:

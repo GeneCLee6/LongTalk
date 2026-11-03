@@ -675,6 +675,37 @@ interop(
     )
 
     await interop.step(
+      'Alice turns 進階噪音抑制 on: Bob and Carol still hear her through RNNoise (H4)',
+      async () => {
+        await toolbarButton(alice, strings.toolbar.more).click()
+        await alice.page.getByRole('menuitem', { name: strings.settings.menu }).click()
+        const settings = alice.page.getByRole('dialog', { name: strings.settings.title })
+        await settings.getByRole('switch', { name: strings.settings.advancedNoise }).check()
+        // Running: neither loading nor waiting for a tap, and no failure notice
+        await expect(settings.getByText(strings.settings.advancedNoiseLoading)).toHaveCount(0)
+        await expect(settings.getByText(strings.settings.advancedNoisePaused)).toHaveCount(0)
+        await alice.page.keyboard.press('Escape')
+        await expect(alice.page.getByText(strings.settings.advancedNoiseFailed)).toHaveCount(0)
+        // The fake microphone's tone goes through RNNoise (a steady tone reads as voice): any
+        // energy at all shows the processed track is what the sender sends
+        for (const listener of [bob, carol]) {
+          await expect
+            .poll(() => audioPeak(listener, alice), {
+              message: `${listener.name} hears Alice through the noise suppression`,
+            })
+            .toBeGreaterThan(0)
+        }
+        await toolbarButton(alice, strings.toolbar.more).click()
+        await alice.page.getByRole('menuitem', { name: strings.settings.menu }).click()
+        await settings.getByRole('switch', { name: strings.settings.advancedNoise }).uncheck()
+        await alice.page.keyboard.press('Escape')
+        await expect
+          .poll(() => audioPeak(bob, alice), { message: 'Bob hears Alice after it is off' })
+          .toBeGreaterThan(AUDIBLE)
+      },
+    )
+
+    await interop.step(
       'Alice (the host) mutes Carol from the participants panel: Carol is told and muted (F1)',
       async () => {
         await toolbarButton(alice, strings.toolbar.participantsCount(3)).click()
