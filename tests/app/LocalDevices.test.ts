@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { LocalDevices, type DeviceNotice } from '../../src/room/LocalDevices.ts'
+import { CAMERA_CAPTURE } from '../../src/media/devices.ts'
 import { defaultDevices, type DeviceChoices } from '../../src/room/session.ts'
 import { createFakeStream, fakeMediaDevices, type FakeTrack } from './media/fakeMedia.ts'
 
@@ -33,7 +34,7 @@ describe('LocalDevices', () => {
     await t.devices.start({ mic: true, cam: true })
     expect(t.fake.getUserMedia).toHaveBeenCalledExactlyOnceWith({
       audio: { deviceId: { ideal: 'mic-2' } },
-      video: true,
+      video: CAMERA_CAPTURE,
     })
     expect(t.state()).toMatchObject({ ready: true, mic: { on: true }, cam: { on: true } })
     expect(t.track('mic')?.deviceId).toBe('mic-2')

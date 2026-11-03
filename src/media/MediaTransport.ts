@@ -8,7 +8,10 @@ import type { TrackKind } from '../../shared/protocol.ts'
 /** What a published track is, as RoomDO and the UI care about it (defined with the protocol) */
 export type { TrackKind }
 
-/** Simulcast layer a receiver asks for; the transport maps it to the SFU's rid */
+/**
+ * Simulcast layer a receiver asks for; the transport maps it to the SFU's rid (high `f`, medium
+ * `h`, low `q`). A screen has two layers (high, medium): asking for low gets medium.
+ */
 export type Layer = 'high' | 'medium' | 'low'
 
 /**
@@ -41,8 +44,19 @@ export interface RemoteTrack extends TrackRef {
 
 export interface PublishOptions {
   kind: TrackKind
-  /** Send three layers (cam) or two (screen); M1 (e2-t11). Ignored for audio. */
+  /**
+   * Send three layers (cam) or two (screen) for receivers to pick from (e2-t11, encoding.ts
+   * SIMULCAST). Ignored for audio; a browser that refuses simulcast encodings sends one layer.
+   */
   simulcast?: boolean
+}
+
+export interface SubscribeOptions {
+  /**
+   * The simulcast layer to start with (video only, e2-t12); the SFU falls back to the next one
+   * when the publisher does not send it. Without it the SFU picks.
+   */
+  layer?: Layer
 }
 
 export interface ConnectOptions {
@@ -118,10 +132,13 @@ export interface MediaTransport {
   replaceTrack(trackName: string, track: MediaStreamTrack | null): Promise<void>
 
   /** Starts receiving someone else's track; rejects with `not_found` if it is not published */
-  subscribe(ref: TrackRef): Promise<RemoteTrack>
+  subscribe(ref: TrackRef, options?: SubscribeOptions): Promise<RemoteTrack>
   /** Stops receiving; a no-op for a track that is not subscribed */
   unsubscribe(ref: TrackRef): Promise<void>
-  /** Asks the SFU for another simulcast layer of a subscribed track (e2-t12) */
+  /**
+   * Asks the SFU for another simulcast layer of a subscribed video track (e2-t12); asking for
+   * the layer already asked for does nothing. Rejects with `not_found` when not subscribed.
+   */
   setPreferredLayer(ref: TrackRef, layer: Layer): Promise<void>
 
   getStats(): Promise<TransportStats>

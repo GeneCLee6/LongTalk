@@ -435,7 +435,7 @@ describe('device memory (e4-t09)', () => {
     await waitFor(() =>
       expect(fake.getUserMedia).toHaveBeenLastCalledWith({
         audio: true,
-        video: { deviceId: { ideal: 'cam-1' } },
+        video: { deviceId: { ideal: 'cam-1' }, width: { ideal: 1280 }, height: { ideal: 720 } },
       }),
     )
     expect(select('鏡頭').value).toBe('cam-1')

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   activeDeviceId,
+  CAMERA_CAPTURE,
   listDevices,
   MediaOpenError,
   mediaProblem,
@@ -66,7 +67,10 @@ describe('openLocalMedia', () => {
   it('opens the microphone and camera in one request', async () => {
     const fake = fakeMediaDevices()
     const media = await openLocalMedia(fake.devices, both)
-    expect(fake.getUserMedia).toHaveBeenCalledExactlyOnceWith({ audio: true, video: true })
+    expect(fake.getUserMedia).toHaveBeenCalledExactlyOnceWith({
+      audio: true,
+      video: CAMERA_CAPTURE,
+    })
     expect(media.micProblem).toBeNull()
     expect(media.camProblem).toBeNull()
     expect(activeDeviceId(media.stream, 'audio')).toBe('mic-1')
@@ -142,7 +146,7 @@ describe('openDevice (e2-t06)', () => {
     expect(track.getSettings().deviceId).toBe('cam-2')
     expect(fake.getUserMedia).toHaveBeenLastCalledWith({
       audio: false,
-      video: { deviceId: { exact: 'cam-2' } },
+      video: { deviceId: { exact: 'cam-2' }, ...CAMERA_CAPTURE },
     })
     fake.unplug('cam-2')
     await expect(openDevice(fake.devices, 'video', 'cam-2', true)).rejects.toMatchObject({

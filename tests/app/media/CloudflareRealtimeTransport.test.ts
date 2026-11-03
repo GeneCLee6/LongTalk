@@ -196,6 +196,187 @@ describe('CloudflareRealtimeTransport', () => {
     expect(pc.remoteDescriptions[2].sdp).toBe(answer)
   })
 
+  it('publishes a camera in three layers and a screen in two, start bitrate kept (e2-t11)', async () => {
+    const answer = [
+      'v=0',
+      'm=video 9 UDP/TLS/RTP/SAVPF 96 97',
+      'a=rtpmap:96 VP8/90000',
+      'a=rtpmap:97 rtx/90000',
+      'a=fmtp:97 apt=96',
+      'a=rid:f recv',
+      'a=rid:h recv',
+      'a=rid:q recv',
+      'a=simulcast:recv f;h;q',
+    ].join('\r\n')
+    const { transport, pc } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: answer },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    await transport.connect()
+    const video = { kind: 'video' } as MediaStreamTrack
+    await transport.publish(video, { kind: 'cam', simulcast: true })
+    expect(pc.inits[0]).toEqual({
+      direction: 'sendonly',
+      sendEncodings: [
+        {
+          rid: 'f',
+          scaleResolutionDownBy: 1,
+          maxBitrate: 1_200_000,
+          maxFramerate: 30,
+          priority: 'low',
+          networkPriority: 'low',
+        },
+        {
+          rid: 'h',
+          scaleResolutionDownBy: 2,
+          maxBitrate: 400_000,
+          maxFramerate: 30,
+          priority: 'low',
+          networkPriority: 'low',
+        },
+        {
+          rid: 'q',
+          scaleResolutionDownBy: 4,
+          maxBitrate: 120_000,
+          maxFramerate: 15,
+          priority: 'low',
+          networkPriority: 'low',
+        },
+      ],
+    })
+    // The answer's simulcast lines pass through; only the VP8 fmtp gains the start bitrate
+    expect(pc.remoteDescriptions[0].sdp).toContain('a=fmtp:96 x-google-start-bitrate=1000')
+    expect(pc.remoteDescriptions[0].sdp).toContain('a=simulcast:recv f;h;q')
+
+    await transport.publish(video, { kind: 'screen', simulcast: true })
+    expect(pc.inits[1]).toMatchObject({
+      sendEncodings: [
+        { rid: 'f', scaleResolutionDownBy: 1, maxBitrate: 2_500_000, priority: 'high' },
+        { rid: 'h', scaleResolutionDownBy: 2, maxBitrate: 600_000, maxFramerate: 15 },
+      ],
+    })
+    expect(pc.transceivers[1].sender!.setParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ degradationPreference: 'balanced' }),
+    )
+
+    // Simulcast is for video: a microphone asking for it gets the browser's defaults
+    await transport.publish(track, { kind: 'mic', simulcast: true })
+    expect(pc.inits[2]).toEqual({ direction: 'sendonly', sendEncodings: undefined })
+  })
+
+  it('sends one layer where the browser refuses simulcast encodings', async () => {
+    const { transport, pc } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: 'sfu-answer' },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    const addTransceiver = pc.addTransceiver.bind(pc)
+    pc.addTransceiver = (t: unknown, init?: unknown) => {
+      const encodings = (init as { sendEncodings?: { rid?: string }[] })?.sendEncodings
+      if (encodings?.some((e) => e.rid)) throw new Error('OperationError: simulcast')
+      return addTransceiver(t, init)
+    }
+    await transport.connect()
+    await transport.publish({ kind: 'video' } as MediaStreamTrack, { kind: 'cam', simulcast: true })
+    expect(pc.inits).toEqual([
+      { direction: 'sendonly', sendEncodings: [expect.objectContaining({ maxBitrate: 800_000 })] },
+    ])
+  })
+
+  it('pulls a video with a starting layer, and asks for each new layer once (e2-t12)', async () => {
+    const { transport, calls } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        requiresImmediateRenegotiation: true,
+        sessionDescription: { type: 'offer', sdp: 'pull-mid-3' },
+        tracks: [{ mid: '3', sessionId: 'them', trackName: 'cam-1' }],
+      },
+      'PUT /api/sfu/abcdefghij/sessions/me/renegotiate': {},
+      'PUT /api/sfu/abcdefghij/sessions/me/tracks/update': { tracks: [{ mid: '3' }] },
+    })
+    await transport.connect()
+    const ref = { sessionId: 'them', trackName: 'cam-1' }
+    await transport.subscribe(ref, { layer: 'medium' })
+    expect(calls[1].body).toEqual({
+      tracks: [
+        {
+          location: 'remote',
+          sessionId: 'them',
+          trackName: 'cam-1',
+          simulcast: {
+            preferredRid: 'h',
+            priorityOrdering: 'none',
+            ridNotAvailable: 'asciibetical',
+          },
+        },
+      ],
+    })
+    const updates = () => calls.filter((c) => c.url.endsWith('/tracks/update'))
+    // Already medium: nothing to ask
+    await transport.setPreferredLayer(ref, 'medium')
+    expect(updates()).toHaveLength(0)
+    await transport.setPreferredLayer(ref, 'high')
+    await transport.setPreferredLayer(ref, 'high')
+    expect(updates().map((c) => c.body)).toEqual([
+      {
+        tracks: [
+          {
+            location: 'remote',
+            mid: '3',
+            sessionId: 'them',
+            trackName: 'cam-1',
+            simulcast: {
+              preferredRid: 'f',
+              priorityOrdering: 'none',
+              ridNotAvailable: 'asciibetical',
+            },
+          },
+        ],
+      },
+    ])
+    // An audio pull carries no layer
+    await transport.subscribe({ sessionId: 'them', trackName: 'mic-1' })
+    expect(calls.at(-2)?.body).toEqual({
+      tracks: [{ location: 'remote', sessionId: 'them', trackName: 'mic-1' }],
+    })
+  })
+
+  it('answers an SFU offer that comes back from tracks/update, and asks again after a refusal', async () => {
+    const { transport, calls, pc } = setup(
+      {
+        'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+        'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+          requiresImmediateRenegotiation: true,
+          sessionDescription: { type: 'offer', sdp: 'pull-mid-3' },
+          tracks: [{ mid: '3' }],
+        },
+        'PUT /api/sfu/abcdefghij/sessions/me/renegotiate': {},
+        'PUT /api/sfu/abcdefghij/sessions/me/tracks/update': {
+          requiresImmediateRenegotiation: true,
+          sessionDescription: { type: 'offer', sdp: 'update-offer' },
+          tracks: [{ mid: '3', errorCode: 'invalid_rid' }],
+        },
+      },
+      {},
+    )
+    await transport.connect()
+    const ref = { sessionId: 'them', trackName: 'cam-1' }
+    await transport.subscribe(ref)
+    await expect(transport.setPreferredLayer(ref, 'low')).rejects.toMatchObject({
+      code: 'sfu_error',
+    })
+    expect(pc.remoteDescriptions.at(-1)).toEqual({ type: 'offer', sdp: 'update-offer' })
+    expect(calls.at(-1)?.url).toBe('/api/sfu/abcdefghij/sessions/me/renegotiate')
+    // Not taken: the same layer is asked for again next time
+    await expect(transport.setPreferredLayer(ref, 'low')).rejects.toBeTruthy()
+    expect(calls.filter((c) => c.url.endsWith('/tracks/update'))).toHaveLength(2)
+  })
+
   it('replaces what a published track sends without another SFU call (B2)', async () => {
     const { transport, pc, calls } = setup({
       'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },

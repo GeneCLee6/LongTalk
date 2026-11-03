@@ -10,6 +10,7 @@ import { TransportEmitter } from './emitter.ts'
 import {
   applyDegradation,
   sendEncoding,
+  simulcastEncodings,
   videoSendParameters,
   withStartBitrate,
 } from './encoding.ts'
@@ -26,6 +27,7 @@ import {
   type PublishOptions,
   type PublishedTrack,
   type RemoteTrack,
+  type SubscribeOptions,
   type TrackRef,
   type TransportStats,
   type Unsubscribe,
@@ -40,7 +42,8 @@ import {
 // B1: publish mic/cam and pull the room's tracks (e2-t03, e2-t04). B3: ICE servers with TURN
 // credentials from the Worker (e2-t07, ConnectOptions) and refreshed ones (setIceServers);
 // `disconnected` is reported as `reconnecting` and `failed` as `failed`, and RoomMedia rebuilds
-// the session (e2-t08). Simulcast publishing (e2-t11) builds on it.
+// the session (e2-t08). H1: cameras and screens go out in simulcast layers (e2-t11, encoding.ts)
+// and each subscription asks for the layer its tile needs (e2-t12, setPreferredLayer).
 //
 // Negotiation rules, learned in rooms of three or more (docs/adr-001-media-layer.md):
 // - one SDP exchange at a time per session (the queue); an exchange is over only once the SFU's
@@ -68,6 +71,20 @@ const TRANSCEIVER_TIMEOUT_MS = 3_000
 
 const LAYER_RID: Record<Layer, SimulcastRid> = { high: 'f', medium: 'h', low: 'q' }
 
+/**
+ * A subscription's layer preference for Realtime: the rid asked for, kept whatever the SFU's own
+ * estimate says (`priorityOrdering: none`), and when the publisher does not send it (a small
+ * camera, a single layer, a screen's two) the next one in `asciibetical` order (`f`, `h`, `q`).
+ * Measured on the PR preview (ADR-001 「Simulcast」): with `asciibetical` ordering the SFU moved
+ * grid tiles up to `f` and kept a pinned tile from reaching it for 35 s; with `none` it sends
+ * what is asked for within seconds. The layer choice keeps to a budget itself (media/layers.ts).
+ */
+const simulcastPreference = (layer: Layer) => ({
+  preferredRid: LAYER_RID[layer],
+  priorityOrdering: 'none' as const,
+  ridNotAvailable: 'asciibetical' as const,
+})
+
 export interface CloudflareRealtimeOptions {
   /** Base of the Worker proxy for the room, `/api/sfu/<roomId>` (shared/sfu.ts sfuApiBase) */
   apiBase: string
@@ -81,6 +98,8 @@ export interface CloudflareRealtimeOptions {
 
 interface Subscription extends RemoteTrack {
   mid: string
+  /** The simulcast layer last asked for; null: none (the SFU's choice) */
+  layer: Layer | null
 }
 
 export class CloudflareRealtimeTransport implements MediaTransport {
@@ -136,21 +155,25 @@ export class CloudflareRealtimeTransport implements MediaTransport {
   async publish(track: MediaStreamTrack, options: PublishOptions): Promise<PublishedTrack> {
     const { published, transceiver } = await this.#serial(async () => {
       const { pc, sessionId } = this.#require()
-      const simulcast = options.simulcast && track.kind === 'video'
       // Bitrate, frame rate and priority by kind (encoding.ts, measured in ADR-001)
       const video = track.kind === 'video' ? videoSendParameters(options.kind) : null
-      const transceiver = pc.addTransceiver(track, {
-        direction: 'sendonly',
-        sendEncodings: simulcast
-          ? [
-              { rid: 'f', scaleResolutionDownBy: 1 },
-              { rid: 'h', scaleResolutionDownBy: 2 },
-              { rid: 'q', scaleResolutionDownBy: 4 },
-            ]
-          : video
-            ? [sendEncoding(video)]
-            : undefined,
-      })
+      const single = video ? [sendEncoding(video)] : undefined
+      const layered =
+        options.simulcast && video && (options.kind === 'cam' || options.kind === 'screen')
+          ? simulcastEncodings(options.kind)
+          : null
+      let transceiver: RTCRtpTransceiver
+      try {
+        transceiver = pc.addTransceiver(track, {
+          direction: 'sendonly',
+          sendEncodings: layered ?? single,
+        })
+      } catch (error) {
+        // A browser that refuses simulcast encodings still sends one layer (receivers' layer
+        // preferences then fall back to it: ridNotAvailable)
+        if (!layered) throw error
+        transceiver = pc.addTransceiver(track, { direction: 'sendonly', sendEncodings: single })
+      }
       if (track.kind === 'video') sendVp8(transceiver)
       const trackName = `${options.kind}-${crypto.randomUUID().slice(0, 8)}`
       let answer: SessionDescription
@@ -203,15 +226,25 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     await transceiver.sender.replaceTrack(track)
   }
 
-  subscribe(ref: TrackRef): Promise<RemoteTrack> {
+  subscribe(ref: TrackRef, options: SubscribeOptions = {}): Promise<RemoteTrack> {
     return this.#serial(async () => {
       const existing = this.#subscriptions.get(trackKey(ref))
       if (existing) return toRemote(existing)
       const { pc, sessionId } = this.#require()
+      const layer = options.layer ?? null
       const { res, json } = await this.#request<TracksResponse>(
         'POST',
         `/sessions/${sessionId}/tracks`,
-        { tracks: [{ location: 'remote', sessionId: ref.sessionId, trackName: ref.trackName }] },
+        {
+          tracks: [
+            {
+              location: 'remote',
+              sessionId: ref.sessionId,
+              trackName: ref.trackName,
+              ...(layer ? { simulcast: simulcastPreference(layer) } : {}),
+            },
+          ],
+        },
       )
       // Realtime can ask for a renegotiation even when the track itself failed (empty_track_error:
       // the publisher is not sending yet), or the call as a whole. The session then waits for our
@@ -235,7 +268,12 @@ export class CloudflareRealtimeTransport implements MediaTransport {
         this.#setState('failed')
         throw new MediaTransportError('negotiation_failed', `No transceiver ${mid}`)
       }
-      const subscription: Subscription = { ...ref, mid, track: transceiver.receiver.track }
+      const subscription: Subscription = {
+        ...ref,
+        mid,
+        track: transceiver.receiver.track,
+        layer,
+      }
       this.#subscriptions.set(trackKey(ref), subscription)
       const remote = toRemote(subscription)
       this.#emitter.emit('track', remote)
@@ -256,33 +294,48 @@ export class CloudflareRealtimeTransport implements MediaTransport {
 
   setPreferredLayer(ref: TrackRef, layer: Layer): Promise<void> {
     return this.#serial(async () => {
-      const { sessionId } = this.#require()
+      const { pc, sessionId } = this.#require()
       const subscription = this.#subscriptions.get(trackKey(ref))
       if (!subscription)
         throw new MediaTransportError('not_found', `Not subscribed to ${trackKey(ref)}`)
-      const res = await this.#api<TracksResponse>('PUT', `/sessions/${sessionId}/tracks/update`, {
-        tracks: [
-          {
-            location: 'remote',
-            mid: subscription.mid,
-            sessionId: ref.sessionId,
-            trackName: ref.trackName,
-            simulcast: {
-              preferredRid: LAYER_RID[layer],
-              priorityOrdering: 'asciibetical',
-              ridNotAvailable: 'asciibetical',
+      if (subscription.layer === layer) return
+      // Realtime (Simulcast): the receiving session's tracks/update with the subscription's mid
+      // and the new preference. No SDP changes; should the SFU ask for a renegotiation anyway, it
+      // gets its answer first (or the session refuses every later call).
+      const { res, json } = await this.#request<TracksResponse>(
+        'PUT',
+        `/sessions/${sessionId}/tracks/update`,
+        {
+          tracks: [
+            {
+              location: 'remote',
+              mid: subscription.mid,
+              sessionId: ref.sessionId,
+              trackName: ref.trackName,
+              simulcast: simulcastPreference(layer),
             },
-          },
-        ],
-      })
-      assertTracksOk(res)
+          ],
+        },
+      )
+      const offer = json.sessionDescription
+      if (json.requiresImmediateRenegotiation && offer?.type === 'offer') {
+        await this.#exchange(() => this.#answer(pc, sessionId, offer))
+      }
+      this.#check(res, json)
+      assertTracksOk(json)
+      subscription.layer = layer
     })
   }
 
   async getStats(): Promise<TransportStats> {
     const { pc } = this.#require()
     const report = await pc.getStats()
-    const stats: TransportStats = { rttMs: null, usingRelay: false, bytesSent: 0, bytesReceived: 0 }
+    const stats: TransportStats = {
+      rttMs: null,
+      usingRelay: false,
+      bytesSent: 0,
+      bytesReceived: 0,
+    }
     const byId = new Map<string, Record<string, unknown>>()
     report.forEach((entry: Record<string, unknown>) => byId.set(String(entry.id), entry))
     for (const entry of byId.values()) {

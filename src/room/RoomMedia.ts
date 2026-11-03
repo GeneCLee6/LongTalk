@@ -1,16 +1,19 @@
 import { RECONNECT_GRACE_MS, type ClientMessage, type MemberTrack } from '../../shared/protocol.ts'
 import { STATS_INTERVAL_MS, type UsageState } from '../../shared/usage.ts'
+import { chooseLayers, DOWNLINK_BUDGET_BPS, type LayerInput } from '../media/layers.ts'
 import {
   MediaTransportError,
   trackKey,
   type ConnectOptions,
   type ConnectionState,
+  type Layer,
   type MediaTransport,
   type MediaTransportErrorCode,
   type PublishedTrack,
   type TrackKind,
 } from '../media/MediaTransport.ts'
 import { Backoff } from './backoff.ts'
+import type { VideoDemandStore } from './videoDemand.ts'
 
 // One member's media in the room (e2-t03, e2-t04, e2-t05, e2-t08), on top of a MediaTransport
 // and nothing else (CLAUDE.md rule 2): publishes the local microphone and camera, tells the room
@@ -44,6 +47,14 @@ import { Backoff } from './backoff.ts'
 // SFU; or a refused call) is retried with backoff, 2, 4, 8 s up to every RETRY_MAX_MS, for as long
 // as the track is listed: the publisher may only become ready later. A change to the listed track
 // (its publisher reported it again) retries at once. A publish that fails is retried the same way.
+//
+// Layers (H1, e2-t11, e2-t12): the camera and the screen are published in simulcast layers, and
+// every received camera or screen asks the SFU for the layer its tile needs. Tiles report where
+// they draw each track (`demand`, videoDemand.ts); a change (a resize, a page turned, a strip
+// scrolled, a tile hidden) or a new subscription recomputes every layer after LAYER_DEBOUNCE_MS
+// (media/layers.ts: size, visibility, budget, hysteresis), and only the ones that changed go to
+// the SFU. A camera starts at medium and a screen at high until its tile reports. Without a
+// demand store nothing is recomputed.
 //
 // Rebuilding (e2-t08): when the transport fails, or stays `reconnecting` (ICE disconnected) for
 // DISCONNECT_GRACE_MS, the session is thrown away and a new one built from the factory: new ICE
@@ -98,6 +109,8 @@ export interface RoomMediaState {
   usingRelay: boolean
   /** How many times the session was thrown away and built anew (telemetry, e11-t03) */
   rebuilds: number
+  /** The simulcast layer asked for per received camera or screen, by trackKey (e2-t12) */
+  layers: Readonly<Record<string, Layer>>
 }
 
 /** ICE settings for the next session, and when to ask for fresh ones (TURN credentials expire) */
@@ -126,6 +139,10 @@ export interface RoomMediaOptions {
   /** A session this long without failing resets the rebuild backoff */
   stableAfterMs?: number
   backoff?: Backoff
+  /** Where tiles draw each received video, for choosing layers (e2-t12) */
+  demand?: VideoDemandStore
+  /** Wait after a layout change before recomputing layers */
+  layerDebounceMs?: number
 }
 
 const RETRY_DELAY_MS = 2_000
@@ -134,6 +151,10 @@ export const RETRY_MAX_MS = 15_000
 /** ICE `disconnected` often heals by itself within a few seconds (a Wi-Fi hiccup) */
 export const DISCONNECT_GRACE_MS = 4_000
 export const STABLE_AFTER_MS = 20_000
+/** Layout changes come in bursts (a resize, a scroll, the strip's animation): settle first */
+export const LAYER_DEBOUNCE_MS = 400
+/** The layer a received video starts with, before its tile reports (e2-t12) */
+export const INITIAL_LAYER: Record<'cam' | 'screen', Layer> = { cam: 'medium', screen: 'high' }
 
 /** Errors that a new session would not fix */
 const FINAL_ERRORS: ReadonlySet<MediaTransportErrorCode> = new Set([
@@ -158,6 +179,7 @@ export const idleRoomMedia: RoomMediaState = {
   lowQuality: false,
   usingRelay: false,
   rebuilds: 0,
+  layers: {},
 }
 
 const errorCode = (error: unknown): MediaTransportErrorCode =>
@@ -219,6 +241,10 @@ export class RoomMedia {
   private iceTimer: Timer | null = null
   /** Why the last attempt failed, for when the backoff gives up */
   private lastError: MediaTransportErrorCode | null = null
+  private readonly demand: VideoDemandStore | null
+  private readonly layerDebounceMs: number
+  private layerTimer: Timer | null = null
+  private offDemand: (() => void) | null = null
 
   /** Every other member's tracks, by trackKey (from RoomDO) */
   private desired = new Map<string, MemberTrack>()
@@ -242,6 +268,9 @@ export class RoomMedia {
     this.disconnectGraceMs = options.disconnectGraceMs ?? DISCONNECT_GRACE_MS
     this.stableAfterMs = options.stableAfterMs ?? STABLE_AFTER_MS
     this.backoff = options.backoff ?? new Backoff({ giveUpAfterMs: RECONNECT_GRACE_MS })
+    this.demand = options.demand ?? null
+    this.layerDebounceMs = options.layerDebounceMs ?? LAYER_DEBOUNCE_MS
+    this.offDemand = this.demand?.subscribe(() => this.scheduleLayers()) ?? null
     this.attach(first)
   }
 
@@ -376,7 +405,9 @@ export class RoomMedia {
     this.clearSessionTimers()
     this.clearRetries()
     this.detach()
-    this.update({ status: 'closed', received: {} })
+    this.offDemand?.()
+    this.offDemand = null
+    this.update({ status: 'closed', received: {}, layers: {} })
     await this.transport.close()
   }
 
@@ -441,6 +472,8 @@ export class RoomMedia {
       if (this.state.status === 'reconnecting') {
         this.update({ status: 'connected' })
         this.reconcile()
+        // Layout changes while the connection was down were not sent
+        this.scheduleLayers()
       }
     } else if (status === 'reconnecting') {
       if (this.disconnectTimer !== null) return
@@ -498,6 +531,7 @@ export class RoomMedia {
       error: null,
       published: [],
       received: {},
+      layers: {},
       usingRelay: false,
       rebuilds: this.state.rebuilds + 1,
     })
@@ -527,10 +561,57 @@ export class RoomMedia {
       this.disconnectTimer,
       this.stableTimer,
       this.iceTimer,
+      this.layerTimer,
     ]) {
       if (timer !== null) clearTimeout(timer)
     }
     this.rebuildTimer = this.disconnectTimer = this.stableTimer = this.iceTimer = null
+    this.layerTimer = null
+  }
+
+  /** Recomputes the layers once things settle (a burst of layout changes is one recompute) */
+  private scheduleLayers(): void {
+    if (this.closed || !this.demand) return
+    if (this.layerTimer !== null) clearTimeout(this.layerTimer)
+    this.layerTimer = setTimeout(() => {
+      this.layerTimer = null
+      this.applyLayers()
+    }, this.layerDebounceMs)
+  }
+
+  /** Asks the SFU for each received video's layer, where it changed (media/layers.ts) */
+  private applyLayers(): void {
+    const demand = this.demand
+    if (this.closed || !demand || !this.ready || this.state.status !== 'connected') return
+    const transport = this.transport
+    const inputs: LayerInput[] = []
+    for (const [key, received] of Object.entries(this.state.received)) {
+      if (received.kind !== 'cam' && received.kind !== 'screen') continue
+      inputs.push({
+        key,
+        kind: received.kind,
+        demand: demand.get(received.track),
+        current: this.state.layers[key] ?? null,
+      })
+    }
+    const chosen = chooseLayers(inputs, DOWNLINK_BUDGET_BPS)
+    const changes = [...chosen].filter(([key, layer]) => this.state.layers[key] !== layer)
+    if (changes.length === 0) return
+    this.update({ layers: { ...this.state.layers, ...Object.fromEntries(changes) } })
+    for (const [key, layer] of changes) {
+      const { sessionId, trackName } = this.state.received[key]
+      transport.setPreferredLayer({ sessionId, trackName }, layer).catch(() => {
+        // Not applied (unsubscribed meanwhile, or the call failed): forget it, so that the next
+        // recompute asks again
+        if (this.closed || transport !== this.transport || this.state.layers[key] !== layer) return
+        const layers = { ...this.state.layers }
+        delete layers[key]
+        this.update({ layers })
+        if (key in this.state.received) {
+          setTimeout(() => this.scheduleLayers(), this.retryDelayMs)
+        }
+      })
+    }
   }
 
   private syncLocal(): Promise<void> {
@@ -601,7 +682,7 @@ export class RoomMedia {
       return
     }
     try {
-      const published = await transport.publish(want, { kind: 'screen' })
+      const published = await transport.publish(want, { kind: 'screen', simulcast: true })
       if (this.closed || transport !== this.transport) return
       if (this.wantedScreen !== want) {
         // Stopped while it was being published
@@ -713,7 +794,8 @@ export class RoomMedia {
       }
     }
     try {
-      const published = await transport.publish(track, { kind })
+      // The camera goes out in three layers for receivers to pick from (e2-t11)
+      const published = await transport.publish(track, { kind, simulcast: kind === 'cam' })
       if (this.closed || transport !== this.transport) return
       this.sending[kind] = track
       this.publishFailures = 0
@@ -738,8 +820,9 @@ export class RoomMedia {
   private async subscribeTo(key: string, track: MemberTrack): Promise<void> {
     const transport = this.transport
     this.pending.add(key)
+    const layer = track.kind === 'cam' || track.kind === 'screen' ? INITIAL_LAYER[track.kind] : null
     try {
-      const remote = await transport.subscribe(track)
+      const remote = await transport.subscribe(track, layer ? { layer } : undefined)
       if (transport !== this.transport) return
       this.pending.delete(key)
       if (this.closed) return
@@ -759,7 +842,9 @@ export class RoomMedia {
             track: remote.track,
           },
         },
+        layers: layer ? { ...this.state.layers, [key]: layer } : this.state.layers,
       })
+      if (layer) this.scheduleLayers()
     } catch {
       if (transport !== this.transport) return
       this.pending.delete(key)
@@ -841,7 +926,9 @@ export class RoomMedia {
   private removeReceived(key: string): void {
     const received = { ...this.state.received }
     delete received[key]
-    this.update({ received })
+    const layers = { ...this.state.layers }
+    delete layers[key]
+    this.update({ received, layers })
   }
 
   private update(changes: Partial<RoomMediaState>): void {

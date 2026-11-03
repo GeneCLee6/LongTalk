@@ -11,6 +11,7 @@ import {
   type PublishOptions,
   type PublishedTrack,
   type RemoteTrack,
+  type SubscribeOptions,
   type TrackRef,
   type TransportStats,
   type Unsubscribe,
@@ -47,8 +48,12 @@ export class FakeTransport implements MediaTransport {
   readonly sfu: FakeSfu
   sessionId: string | null = null
   state: ConnectionState = 'new'
-  /** Layers asked for via setPreferredLayer, by trackKey */
+  /** The layer each subscription asks for now (subscribe's, then setPreferredLayer's), by trackKey */
   readonly preferredLayers = new Map<string, Layer>()
+  /** Every setPreferredLayer call that changed a layer, in order */
+  readonly layerRequests: { key: string; layer: Layer }[] = []
+  /** What publish() was asked for, by trackName (simulcast or not) */
+  readonly publishOptions = new Map<string, PublishOptions>()
   readonly subscriptions = new Map<string, RemoteTrack>()
   /**
    * What each published track sends now, by trackName (set on publish, changed by replaceTrack;
@@ -91,6 +96,7 @@ export class FakeTransport implements MediaTransport {
       kind: options.kind,
     }
     this.sfu.published.set(trackKey(published), { ...published, track })
+    this.publishOptions.set(published.trackName, options)
     this.#ownTracks.add(published.trackName)
     this.sending.set(published.trackName, track)
     return published
@@ -113,7 +119,7 @@ export class FakeTransport implements MediaTransport {
     this.sending.set(trackName, track)
   }
 
-  async subscribe(ref: TrackRef): Promise<RemoteTrack> {
+  async subscribe(ref: TrackRef, options: SubscribeOptions = {}): Promise<RemoteTrack> {
     this.#requireSession()
     const existing = this.subscriptions.get(trackKey(ref))
     if (existing) return existing
@@ -125,6 +131,7 @@ export class FakeTransport implements MediaTransport {
       track: source.track,
     }
     this.subscriptions.set(trackKey(ref), remote)
+    if (options.layer) this.preferredLayers.set(trackKey(ref), options.layer)
     this.#emitter.emit('track', remote)
     return remote
   }
@@ -139,7 +146,9 @@ export class FakeTransport implements MediaTransport {
     if (!this.subscriptions.has(trackKey(ref))) {
       throw new MediaTransportError('not_found', `Not subscribed to ${trackKey(ref)}`)
     }
+    if (this.preferredLayers.get(trackKey(ref)) === layer) return
     this.preferredLayers.set(trackKey(ref), layer)
+    this.layerRequests.push({ key: trackKey(ref), layer })
   }
 
   async getStats(): Promise<TransportStats> {

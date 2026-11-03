@@ -23,6 +23,7 @@ import { zhTW as strings } from '../src/i18n/zh-TW.ts'
 // herself only, and she hides her own tile and shows it again. Right after the chat, raised hands
 // and reactions (G3): a member raises his hand, the host sees it on his tile and first in the
 // participants list and lowers it (he is told); another reacts and the others see it float.
+// With the pin (H1) the big tile must come in at a higher simulcast layer than a strip tile.
 // A second, shorter test (F3)
 // covers the password, co-hosts and ending: the host sets a password; a newcomer tries a wrong
 // one and is asked again, then gets in with the right one; another comes through a link with
@@ -606,6 +607,22 @@ interop(
             message: "Carol decodes frames of Alice's camera in the main area",
           })
           .toBeGreaterThanOrEqual(VIDEO_FRAMES_PER_SECOND)
+        // Simulcast layers (H1, e2-t12): Carol's big tile asks for Alice's top layer and the
+        // strip for Bob's lowest, so the big picture ends up taller than the strip's
+        await expect
+          .poll(
+            async () => {
+              const height = (other: Member) =>
+                remoteVideo(carol, other).evaluate((v: HTMLVideoElement) => v.videoHeight)
+              const [main, strip] = await Promise.all([height(alice), height(bob)])
+              return strip > 0 && main > strip
+            },
+            {
+              message: 'Carol receives Alice (big) at a higher resolution than Bob (strip)',
+              timeout: 30_000,
+            },
+          )
+          .toBe(true)
         await carol.page.getByRole('button', { name: strings.view.unpin(alice.name) }).click()
         await expect(
           mainTile(carol).getByRole('figure', { name: bob.name, exact: true }),

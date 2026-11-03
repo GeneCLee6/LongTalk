@@ -3,6 +3,7 @@ import { strings } from '../strings.ts'
 import { color, fontSize, radius, space } from '../styles/tokens.ts'
 import { ScreenShareIcon } from './icons.tsx'
 import { useTrack } from './useTrack.ts'
+import { useVideoDemand } from './useVideoDemand.ts'
 
 export interface ShareTileProps {
   /** Who shares */
@@ -18,6 +19,8 @@ export interface ShareTileProps {
  */
 export function ShareTile({ name, video }: ShareTileProps) {
   const videoRef = useTrack<HTMLVideoElement>(video)
+  // The share's drawn size picks its simulcast layer (e2-t12)
+  useVideoDemand(videoRef, video)
   return (
     <Frame aria-label={strings.screenShare.region(name)} data-share-tile="">
       {video ? (

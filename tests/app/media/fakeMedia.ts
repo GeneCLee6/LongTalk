@@ -94,7 +94,7 @@ export function fakeMediaDevices(options: FakeDevicesOptions = {}) {
   const pick = (constraint: boolean | MediaTrackConstraints | undefined, kind: string) => {
     if (!constraint) return null
     const available = DEVICES.filter((d) => d.kind === kind && present.has(d.deviceId))
-    const wanted = constraint === true ? {} : (constraint.deviceId as DeviceConstraint)
+    const wanted = constraint === true ? {} : ((constraint.deviceId as DeviceConstraint) ?? {})
     if (wanted.exact !== undefined) {
       if (!present.has(wanted.exact)) throw mediaError('OverconstrainedError')
       return DEVICES.find((d) => d.deviceId === wanted.exact)!

@@ -50,6 +50,8 @@
 
 **規則**：所有媒體相關的呼叫經過 `src/media/MediaTransport.ts` 介面（`connect`、`publish`、`unpublish`、`subscribe`、`unsubscribe`、`setPreferredLayer`、`getStats`、`on`、`close`）。`CloudflareRealtimeTransport` 是第一個實作；介面的測試用 `FakeTransport` 跑。**A2 定稿：決定、Realtime 實際端點、介面與切換條件見 [`adr-001-media-layer.md`](adr-001-media-layer.md)。**
 
+**Simulcast（H1）**：鏡頭以 1280×720 擷取、發三層（`f`／`h`／`q`），分享兩層，都是 VP8（`src/media/encoding.ts`）。每個接收端自己選層：格子把畫出的大小與是否看得見報給 `VideoDemandStore`（`src/components/useVideoDemand.ts`），`RoomMedia` 用 `src/media/layers.ts` 的純函式（大小、可見、每人 3.4 Mbps 的視訊下行預算、遲滯）決定，經 `MediaTransport.setPreferredLayer` 對 SFU 的 `tracks/update` 送出；SFU 照要的層送（`priorityOrdering: none`），頻寬比預算少時的降層是 H2 的 `e2-t15`。層是接收端與 SFU 之間的事，RoomDO 不參與。細節與實測在 ADR-001「Simulcast」。
+
 ## 4. 資料流：一個人進房
 
 1. 瀏覽器 `GET /r/abc123` → Worker 的靜態資產回 SPA。
@@ -77,7 +79,7 @@
 
 | 項目 | 假設 | 每月免費額度（規劃時） | 說明 |
 | --- | --- | --- | --- |
-| SFU 流出 | 4 人、720p 1.5 Mbps、每人收 3 路 ⇒ 18 Mbps ⇒ 2 小時約 16 GB | 1 TB | 約 60 場 4 人 2 小時；8 人會議約 4 倍流量，simulcast 後接收端可降層 |
+| SFU 流出 | 4 人、720p 1.5 Mbps、每人收 3 路 ⇒ 18 Mbps ⇒ 2 小時約 16 GB | 1 TB | 約 60 場 4 人 2 小時；8 人會議約 4 倍流量，simulcast 後接收端可降層（H1：格狀的格子多半收 360p 約 0.3–0.4 Mbps、每人視訊下行上限 3.4 Mbps） |
 | TURN | 10–15% 的連線走 TURN | 1 TB（和 SFU 共用） | TURN 與 SFU 之間的流量不重複計費（Cloudflare 定價頁），計的是 TURN 到瀏覽器的流出；保護把走 TURN 的接收端 ×1.1（框架開銷） |
 | Workers／DO | 每房一個 DO，每秒數則訊息 | 免費方案 | 和牌桌同等級 |
 | R2 | 聊天檔案 24 小時、錄影有效期 | 10 GB | 雲端錄影是主要用量，M2 才有 |
