@@ -243,7 +243,7 @@ const failed = (counts: EventCounts) =>
   Object.values(counts.joinFail).reduce((total, n) => total + (n ?? 0), 0)
 
 const ratio = (part: number, whole: number) =>
-  whole === 0 ? strings.admin.none : `${strings.admin.percent(part / whole)}（${part}／${whole}）`
+  whole === 0 ? strings.admin.none : strings.admin.ratio(part, whole)
 
 const listed = <K extends string>(
   keys: readonly K[],
@@ -253,7 +253,7 @@ const listed = <K extends string>(
   const parts = keys
     .filter((key) => (counts[key] ?? 0) > 0)
     .map((key) => `${names[key]} ${counts[key]}`)
-  return parts.length === 0 ? strings.admin.none : parts.join('、')
+  return parts.length === 0 ? strings.admin.none : parts.join(strings.admin.listSeparator)
 }
 
 /** The average score with how many gave one, or — */
@@ -271,7 +271,7 @@ const ratingDistribution = (counts: EventCounts) => {
     .reverse()
     .filter((score) => byScore[score] > 0)
     .map((score) => strings.admin.ratingScore(score, byScore[score]))
-  return parts.length === 0 ? strings.admin.none : parts.join('、')
+  return parts.length === 0 ? strings.admin.none : parts.join(strings.admin.listSeparator)
 }
 
 const metricRows: { label: string; value: (counts: EventCounts) => string }[] = [

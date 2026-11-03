@@ -1,4 +1,4 @@
-import { useContext } from 'react'
+import { useContext, useId } from 'react'
 import styled, { css, keyframes } from 'styled-components'
 import { strings } from '../strings.ts'
 import {
@@ -11,6 +11,7 @@ import {
   radius,
   space,
 } from '../styles/tokens.ts'
+import type { Role } from '../../shared/roles.ts'
 import type { FloatingReaction } from '../room/floatingReactions.ts'
 import {
   HandIcon,
@@ -50,6 +51,8 @@ export interface TileProps {
   hand?: number | null
   /** Their reactions floating over the tile now (G3, e5-t03) */
   reactions?: readonly FloatingReaction[]
+  /** Host or co-host: said with the tile's state to a screen reader (G5, e4-t14) */
+  role?: Role
 }
 
 /**
@@ -74,14 +77,30 @@ export function Tile({
   onToggleSpotlight,
   hand = null,
   reactions = NO_REACTIONS,
+  role,
 }: TileProps) {
   const visible = useContext(TileVisibleContext)
   const shown = visible ? video : null
   const videoRef = useTrack<HTMLVideoElement>(shown)
   const outlined = speaking && !micMuted && !reconnecting
+  const stateId = useId()
+  // The name is the tile's name; its state is the description (G5, e4-t14): role, microphone,
+  // camera, hand, pinned, spotlight, reconnecting. Speaking is left out on purpose: it changes
+  // every few seconds, and the outline is not something a screen reader needs to hear.
+  const state = strings.room.tileState({
+    host: role === 'host',
+    cohost: role === 'cohost',
+    micMuted,
+    camOff: !video,
+    hand,
+    pinned,
+    spotlighted,
+    reconnecting,
+  })
   return (
     <Frame
-      aria-label={you ? `${name}（${strings.common.you}）` : name}
+      aria-label={you ? strings.room.tileYou(name) : name}
+      aria-describedby={stateId}
       data-speaking={outlined || undefined}
       data-reconnecting={reconnecting || undefined}
       $speaking={outlined}
@@ -178,6 +197,9 @@ export function Tile({
         {relayed && <Quiet>{strings.room.relayed}</Quiet>}
         {!video && <VisuallyHidden> · {strings.room.camOff}</VisuallyHidden>}
       </Nameplate>
+      <span id={stateId} hidden>
+        {state}
+      </span>
     </Frame>
   )
 }

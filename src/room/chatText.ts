@@ -9,7 +9,7 @@ export type ChatSegment =
 
 // A URL starts at http:// or https:// and runs to whitespace or a character that cannot be
 // part of one in running text (quotes, angle brackets, CJK punctuation)
-const URL_PATTERN = /https?:\/\/[^\s<>"'`，。、；：！？「」『』（）【】《》]+/giu
+const URL_PATTERN = /https?:\/\/[^\s<>"'`，。、；：！？「」『』（）【】《》]+/giu // literal-ok: full-width punctuation that ends a link
 // Punctuation that ends a sentence rather than the URL
 const TRAILING = /[.,;:!?)\]}'"]$/u
 
