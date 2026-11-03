@@ -280,9 +280,12 @@ async function expectSeesShare(viewer: Member, sharer: Member) {
     'data-mode',
     'share',
   )
+  // The tag on the share itself (with several shares the picker repeats the name, H5)
   await expect(
-    viewer.page.getByText(strings.screenShare.label(sharer.name), { exact: true }),
-  ).toBeVisible()
+    viewer.page
+      .getByRole('figure', { name: strings.screenShare.region(sharer.name) })
+      .locator('figcaption'),
+  ).toHaveText(strings.screenShare.label(sharer.name))
   await expect
     .poll(() => shareFramesPerSecond(viewer, sharer), {
       message: `${viewer.name} decodes frames of ${sharer.name}'s screen`,
