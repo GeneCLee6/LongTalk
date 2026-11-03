@@ -59,12 +59,21 @@ jobs:
         run: npx playwright test -c playwright.local.config.ts a11y.spec.ts
 
       - name: Lighthouse accessibility ≥ 0.95
+        env:
+          BASE_URL: http://127.0.0.1:4173
         run: |
-          npx vite preview --port 4173 --strictPort > preview.log 2>&1 &
+          npx vite preview --host 127.0.0.1 --port 4173 --strictPort > preview.log 2>&1 &
           node -e "
-            const up = async () => { for (let i = 0; i < 60; i++) {
-              try { if ((await fetch('http://localhost:4173/api/health')).ok) return } catch {}
-              await new Promise((r) => setTimeout(r, 1000)) } process.exit(1) }; up()"
+            (async () => {
+              let last
+              for (let i = 0; i < 60; i++) {
+                try { if ((await fetch(process.env.BASE_URL + '/api/health')).ok) return }
+                catch (error) { last = error }
+                await new Promise((resolve) => setTimeout(resolve, 1000))
+              }
+              console.error('vite preview did not answer:', last)
+              process.exit(1)
+            })()"
           npm run lighthouse
 
       - uses: actions/upload-artifact@v4
