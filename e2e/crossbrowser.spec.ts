@@ -139,8 +139,8 @@ async function framesOf(video: ReturnType<Page['locator']>): Promise<number> {
  * How loud `other`'s microphone is where `viewer` plays it, over 1.5 seconds: the loudest sample
  * of the <audio> element's stream, or what the RTP receivers say (the synchronization sources'
  * level, and the RMS from inbound-rtp's totalAudioEnergy), whichever is highest. The receivers'
- * numbers are there because Firefox on a CI machine without a sound card may run no audio graph
- * (every sample reads 0) while the sound arrives all the same. Only two members are in these
+ * numbers are there because Firefox on a CI machine without a sound card never resumes an
+ * AudioContext (the samples read 0, resume() never settles) while the sound arrives all the same. Only two members are in these
  * rooms, so every audio receiver is `other`'s.
  */
 async function audioPeak(viewer: Member, other: Member): Promise<number> {
@@ -173,7 +173,9 @@ async function audioPeak(viewer: Member, other: Member): Promise<number> {
     }
     const context = new AudioContext()
     try {
-      await context.resume()
+      // Without a sound card Firefox never resumes it: go on after half a second (the receivers
+      // still tell)
+      await Promise.race([context.resume(), new Promise((resolve) => setTimeout(resolve, 500))])
       const analyser = context.createAnalyser()
       context.createMediaStreamSource(stream).connect(analyser)
       const samples = new Float32Array(analyser.fftSize)
@@ -202,7 +204,7 @@ async function audioPeak(viewer: Member, other: Member): Promise<number> {
           `rms ${rms.toFixed(3)} receivers ${receivers.length} inbound ${after.seen.join(',')}`,
       }
     } finally {
-      await context.close()
+      void context.close()
     }
   })
   if (peak <= AUDIBLE)
