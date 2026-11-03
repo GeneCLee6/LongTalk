@@ -45,7 +45,6 @@ test('advanced noise suppression loads lazily from our own assets and runs', asy
   await expect(page.getByText(strings.settings.advancedNoiseOverloaded)).toHaveCount(0)
   await expect(advanced).toBeChecked()
   const files = await loaded()
-  console.log(files)
   expect(files.some((entry) => /^true:\/assets\/rnnoise(_simd)?-.*\.wasm$/.test(entry))).toBe(true)
   expect(files.every((entry) => entry.startsWith('true:'))).toBe(true)
 
