@@ -13,6 +13,7 @@ import {
   simulcastEncodings,
   videoSendParameters,
   withStartBitrate,
+  withTopLayer,
 } from './encoding.ts'
 import {
   MediaTransportError,
@@ -47,7 +48,7 @@ import { readStatsReport } from './stats.ts'
 // the session (e2-t08). H1: cameras and screens go out in simulcast layers (e2-t11, encoding.ts)
 // and each subscription asks for the layer its tile needs (e2-t12, setPreferredLayer). H2: the
 // connection's statistics per track (e2-t13, getStats → media/stats.ts) and turning off the top
-// layers we send when the uplink cannot carry them (e2-t15, limitSendLayers).
+// layers we send when the uplink cannot carry them (e2-t15, setTopLayer from H3).
 //
 // Negotiation rules, learned in rooms of three or more (docs/adr-001-media-layer.md):
 // - one SDP exchange at a time per session (the queue); an exchange is over only once the SFU's
@@ -118,8 +119,8 @@ export class CloudflareRealtimeTransport implements MediaTransport {
   // Realtime allows one SDP exchange at a time per session: every mutation runs in this queue
   #queue: Promise<unknown> = Promise.resolve()
   #published = new Map<string, RTCRtpTransceiver>()
-  /** What each published track is, by trackName (for the stats) */
-  #kinds = new Map<string, TrackKind>()
+  /** What each published track is (setTopLayer needs a video's kind) */
+  #publishedKinds = new Map<string, TrackKind>()
   #subscriptions = new Map<string, Subscription>()
 
   #token: () => string | null
@@ -207,7 +208,7 @@ export class CloudflareRealtimeTransport implements MediaTransport {
       await this.#exchange(() => pc.setRemoteDescription(remote))
       if (video) await applyDegradation(transceiver.sender, video)
       this.#published.set(trackName, transceiver)
-      this.#kinds.set(trackName, options.kind)
+      this.#publishedKinds.set(trackName, options.kind)
       const published: PublishedTrack = { sessionId, trackName, kind: options.kind }
       return { published, transceiver }
     })
@@ -221,7 +222,7 @@ export class CloudflareRealtimeTransport implements MediaTransport {
       const transceiver = this.#published.get(trackName)
       if (!transceiver?.mid) return
       this.#published.delete(trackName)
-      this.#kinds.delete(trackName)
+      this.#publishedKinds.delete(trackName)
       await this.#closeTransceivers([transceiver])
     })
   }
@@ -335,13 +336,29 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     })
   }
 
+  async setTopLayer(trackName: string, top: Layer): Promise<void> {
+    this.#require()
+    const transceiver = this.#published.get(trackName)
+    const kind = this.#publishedKinds.get(trackName)
+    if (!transceiver) throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    if (kind !== 'cam' && kind !== 'screen') return
+    const sender = transceiver.sender
+    if (typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') {
+      return
+    }
+    // setParameters needs no SDP exchange either: the layers simply stop or start
+    const params = sender.getParameters()
+    if (!params.encodings || params.encodings.length === 0) return
+    await sender.setParameters({ ...params, encodings: withTopLayer(params.encodings, kind, top) })
+  }
+
   async getStats(): Promise<TransportStats> {
     const { pc } = this.#require()
     const report = await pc.getStats()
     // Which track each mid carries: the report only knows mids (media/stats.ts)
     const published = new Map<string, { trackName: string; kind: TrackKind }>()
     for (const [trackName, transceiver] of this.#published) {
-      const kind = this.#kinds.get(trackName)
+      const kind = this.#publishedKinds.get(trackName)
       if (transceiver.mid && kind) published.set(transceiver.mid, { trackName, kind })
     }
     const subscribed = new Map<string, TrackRef>()
@@ -351,33 +368,6 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     const entries: Record<string, unknown>[] = []
     report.forEach((entry: Record<string, unknown>) => entries.push(entry))
     return readStatsReport(entries, { published, subscribed })
-  }
-
-  async limitSendLayers(trackName: string, highest: Layer): Promise<void> {
-    this.#require()
-    const transceiver = this.#published.get(trackName)
-    if (!transceiver) throw new MediaTransportError('not_found', `Not published: ${trackName}`)
-    const sender = transceiver.sender
-    if (typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') {
-      return
-    }
-    // Like replaceTrack: no SDP exchange (encodings' `active` is the sender's own), no queue
-    const params = sender.getParameters()
-    const encodings = params.encodings ?? []
-    if (encodings.length < 2 || encodings.some((e) => !e.rid)) return
-    const order: Record<string, number> = { f: 2, h: 1, q: 0 }
-    const ceiling = { high: 2, medium: 1, low: 0 }[highest]
-    const lowest = Math.min(...encodings.map((e) => order[e.rid!] ?? 0))
-    const next = encodings.map((e) => {
-      const rank = order[e.rid!] ?? 0
-      return { ...e, active: rank <= ceiling || rank === lowest }
-    })
-    if (next.every((e, i) => e.active === (encodings[i].active ?? true))) return
-    try {
-      await sender.setParameters({ ...params, encodings: next })
-    } catch {
-      // Refused (renegotiating, or the browser does not let layers go): it keeps sending them all
-    }
   }
 
   setIceServers(iceServers: RTCIceServer[]): void {
@@ -410,7 +400,7 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     }
     this.#subscriptions.clear()
     this.#published.clear()
-    this.#kinds.clear()
+    this.#publishedKinds.clear()
     this.#setState('closed')
     this.#emitter.clear()
   }

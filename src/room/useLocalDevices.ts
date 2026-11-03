@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { LocalDevices, type DeviceNotice, type LocalDevicesState } from './LocalDevices.ts'
+import { DEFAULT_PROCESSING, type AudioProcessing } from '../media/audioProcessing.ts'
 import { useMediaDevices } from './devicesContext.ts'
 import { saveDevice, type DeviceChoices } from './session.ts'
 
@@ -9,12 +10,13 @@ export interface UseLocalDevices {
   devices: LocalDevices | null
 }
 
-const idleState = (chosen: DeviceChoices): LocalDevicesState => ({
+const idleState = (chosen: DeviceChoices, processing: AudioProcessing): LocalDevicesState => ({
   ready: false,
   mic: { on: false, track: null, problem: null, opening: false },
   cam: { on: false, track: null, problem: null, opening: false },
   devices: { audioinput: [], videoinput: [], audiooutput: [] },
   chosen,
+  processing,
 })
 
 const noSubscribe = () => () => {}
@@ -28,20 +30,23 @@ export function useLocalDevices(
   wanted: { mic: boolean; cam: boolean },
   chosen: DeviceChoices,
   onNotice: (notice: DeviceNotice) => void,
+  /** The microphone's processing switches to open it with (e6-t01); setProcessing changes them */
+  processing: AudioProcessing = DEFAULT_PROCESSING,
 ): UseLocalDevices {
   const mediaDevices = useMediaDevices()
   const [devices, setDevices] = useState<LocalDevices | null>(null)
-  const latest = useRef({ wanted, chosen, onNotice })
+  const latest = useRef({ wanted, chosen, onNotice, processing })
   useEffect(() => {
-    latest.current = { wanted, chosen, onNotice }
+    latest.current = { wanted, chosen, onNotice, processing }
   })
-  const [idle] = useState(() => idleState(chosen))
+  const [idle] = useState(() => idleState(chosen, processing))
 
   useEffect(() => {
-    const { wanted: start, chosen: startChosen } = latest.current
+    const { wanted: start, chosen: startChosen, processing: startProcessing } = latest.current
     const run = new LocalDevices({
       mediaDevices,
       chosen: startChosen,
+      processing: startProcessing,
       saveChoice: saveDevice,
       onNotice: (notice) => latest.current.onNotice(notice),
     })

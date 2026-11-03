@@ -571,6 +571,39 @@ describe('CloudflareRealtimeTransport', () => {
     expect(pc.signalingState).toBe('stable')
   })
 
+  it('turns the camera’s top layer off and on with setParameters, no SFU call (e6-t04)', async () => {
+    const { transport, pc, calls } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: 'answer' },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    await transport.connect()
+    const { trackName } = await transport.publish({ kind: 'video' } as MediaStreamTrack, {
+      kind: 'cam',
+      simulcast: true,
+    })
+    const sender = pc.transceivers[0].sender!
+    sender.getParameters = () => ({
+      transactionId: 't2',
+      encodings: [{ rid: 'f' }, { rid: 'h' }, { rid: 'q' }],
+    })
+    sender.setParameters.mockClear()
+    const before = calls.length
+    await transport.setTopLayer(trackName, 'medium')
+    expect(sender.setParameters).toHaveBeenCalledWith({
+      transactionId: 't2',
+      encodings: [
+        { rid: 'f', active: false },
+        { rid: 'h', active: true },
+        { rid: 'q', active: true },
+      ],
+    })
+    expect(calls.length).toBe(before)
+    await expect(transport.setTopLayer('nope', 'high')).rejects.toMatchObject({ code: 'not_found' })
+  })
+
   it('summarises the selected candidate pair, including TURN use', async () => {
     const { transport } = setup({ 'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' } })
     await transport.connect()
@@ -624,48 +657,6 @@ describe('CloudflareRealtimeTransport', () => {
     ])
     // A mid no subscription of ours has is left out
     expect(stats.inbound).toEqual([])
-  })
-
-  it('turns simulcast layers above a ceiling off and back on, keeping the lowest (e2-t15)', async () => {
-    const { transport, pc } = setup({
-      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
-      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
-        sessionDescription: { type: 'answer', sdp: 'sfu-answer' },
-        tracks: [{ mid: '0', trackName: 'x' }],
-      },
-    })
-    await transport.connect()
-    const cam = await transport.publish({ kind: 'video' } as MediaStreamTrack, {
-      kind: 'cam',
-      simulcast: true,
-    })
-    const sender = pc.transceivers[0].sender!
-    let encodings: Record<string, unknown>[] = [
-      { rid: 'f', active: true },
-      { rid: 'h', active: true },
-      { rid: 'q', active: true },
-    ]
-    sender.getParameters = () => ({ transactionId: 't2', encodings })
-    sender.setParameters.mockClear()
-    sender.setParameters.mockImplementation(async (params: { encodings: typeof encodings }) => {
-      encodings = params.encodings
-    })
-    await transport.limitSendLayers(cam.trackName, 'medium')
-    expect(encodings.map((e) => e.active)).toEqual([false, true, true])
-    expect(sender.setParameters).toHaveBeenCalledWith(
-      expect.objectContaining({ transactionId: 't2' }),
-    )
-    await transport.limitSendLayers(cam.trackName, 'low')
-    expect(encodings.map((e) => e.active)).toEqual([false, false, true])
-    await transport.limitSendLayers(cam.trackName, 'high')
-    expect(encodings.map((e) => e.active)).toEqual([true, true, true])
-    // Asking for what it already sends changes nothing
-    sender.setParameters.mockClear()
-    await transport.limitSendLayers(cam.trackName, 'high')
-    expect(sender.setParameters).not.toHaveBeenCalled()
-    await expect(transport.limitSendLayers('nope', 'low')).rejects.toMatchObject({
-      code: 'not_found',
-    })
   })
 
   it('closes the PeerConnection and refuses further calls', async () => {

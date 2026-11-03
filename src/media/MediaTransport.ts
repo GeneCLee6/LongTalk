@@ -96,7 +96,7 @@ export interface TransportStats {
 export interface OutboundLayerStats {
   /** The layer's rid (`f`／`h`／`q`); null for a single encoding */
   rid: string | null
-  /** False once the sender stopped this layer (limitSendLayers, e2-t15) */
+  /** False once the sender stopped this layer (setTopLayer: HD off, or e2-t15) */
   active: boolean
   bytesSent: number
   packetsSent: number
@@ -144,6 +144,23 @@ export interface InboundTrackStats extends TrackRef {
   /** Audio: samples the decoder made up for lost packets, and all samples */
   concealedSamples: number
   totalSamplesReceived: number
+}
+
+/**
+ * Why the browser sends a video below what it was asked for (RTCOutboundRtpStreamStats
+ * `qualityLimitationReason`): `bandwidth` is the uplink
+ */
+export type QualityLimitation = 'none' | 'bandwidth' | 'cpu' | 'other'
+
+/**
+ * How a published video's uplink is doing (e6-t04: may it send HD), read from the connection's
+ * statistics (media/stats.ts uplinkOf; one getStats() path for everything, H2)
+ */
+export interface UplinkStats {
+  /** The browser's estimate of what it can send now, bits per second; null when not reported */
+  availableOutgoingBitrate: number | null
+  /** The worst limitation across the track's layers that are sending; null when not reported */
+  limitation: QualityLimitation | null
 }
 
 export interface MediaTransportEvents {
@@ -212,18 +229,19 @@ export interface MediaTransport {
   setPreferredLayer(ref: TrackRef, layer: Layer): Promise<void>
 
   /**
+   * The highest simulcast layer a published video sends (e6-t04, HD): `high` sends every layer,
+   * `medium` leaves the top one out (a camera then sends at most 360p; a receiver asking for
+   * `high` gets the next one down from the SFU). A single-layer sender is scaled down instead.
+   * Kept across replaceTrack; a new publish starts with every layer. Rejects with `not_found`
+   * for a track this transport did not publish.
+   */
+  setTopLayer(trackName: string, top: Layer): Promise<void>
+
+  /**
    * Reads the connection's statistics (e2-t13): one call to the PeerConnection's getStats(),
    * summarised per track. RoomMedia polls it (STATS_POLL_MS); nothing else should.
    */
   getStats(): Promise<TransportStats>
-
-  /**
-   * Sends no simulcast layer above `highest` of a published video (e2-t15: the uplink cannot
-   * carry the top layer); `high` sends them all again. The lowest layer always stays on. A
-   * single-layer track, or an audio, is left as it is. Rejects with `not_found` for a track
-   * this transport did not publish.
-   */
-  limitSendLayers(trackName: string, highest: Layer): Promise<void>
 
   /**
    * Fresh ICE servers for the open connection (TURN credentials expire, e2-t07); used by the

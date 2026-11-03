@@ -15,6 +15,7 @@ import {
   type TrackRef,
   type TransportStats,
   type Unsubscribe,
+  type UplinkStats,
 } from './MediaTransport.ts'
 
 /**
@@ -60,6 +61,13 @@ export class FakeTransport implements MediaTransport {
    * subscribers keep the track they got, like a real receiver keeps its track)
    */
   readonly sending = new Map<string, MediaStreamTrack | null>()
+  /** The highest layer each published video sends, by trackName (setTopLayer; `high` on publish) */
+  readonly topLayers = new Map<string, Layer>()
+  /**
+   * The uplink getStats() reports (e6-t04): the estimate, and the limitation of every camera
+   * and screen we send; tests set it. `stats` overrides it
+   */
+  uplink: UplinkStats = { availableOutgoingBitrate: 3_000_000, limitation: 'none' }
   /** What getStats() reports as received; tests move it forward */
   bytesReceived = 0
   /** What getStats() reports as the path; tests set it (e2-t07) */
@@ -69,8 +77,6 @@ export class FakeTransport implements MediaTransport {
    * of the time, for a link that degrades) and move them forward
    */
   stats: Partial<TransportStats> | (() => Partial<TransportStats>) = {}
-  /** What limitSendLayers asked for, by trackName (e2-t15); absent: every layer */
-  readonly sendCeilings = new Map<string, Layer>()
   /** What connect() was given, and the servers setIceServers() handed over since */
   connectOptions: ConnectOptions | null = null
   readonly iceServerUpdates: RTCIceServer[][] = []
@@ -106,6 +112,9 @@ export class FakeTransport implements MediaTransport {
     this.publishOptions.set(published.trackName, options)
     this.#ownTracks.add(published.trackName)
     this.sending.set(published.trackName, track)
+    if (options.kind === 'cam' || options.kind === 'screen') {
+      this.topLayers.set(published.trackName, 'high')
+    }
     return published
   }
 
@@ -113,6 +122,7 @@ export class FakeTransport implements MediaTransport {
     const sessionId = this.#requireSession()
     if (!this.#ownTracks.delete(trackName)) return
     this.sending.delete(trackName)
+    this.topLayers.delete(trackName)
     const ref = { sessionId, trackName }
     this.sfu.published.delete(trackKey(ref))
     this.sfu.trackRemoved(ref)
@@ -158,6 +168,14 @@ export class FakeTransport implements MediaTransport {
     this.layerRequests.push({ key: trackKey(ref), layer })
   }
 
+  async setTopLayer(trackName: string, top: Layer): Promise<void> {
+    this.#requireSession()
+    if (!this.#ownTracks.has(trackName)) {
+      throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    }
+    if (this.topLayers.has(trackName)) this.topLayers.set(trackName, top)
+  }
+
   async getStats(): Promise<TransportStats> {
     this.#requireSession()
     const extra = typeof this.stats === 'function' ? this.stats() : this.stats
@@ -169,20 +187,32 @@ export class FakeTransport implements MediaTransport {
       protocol: 'udp',
       bytesSent: 0,
       bytesReceived: this.bytesReceived,
-      availableOutgoingBitrate: null,
-      outbound: [],
+      availableOutgoingBitrate: this.uplink.availableOutgoingBitrate,
+      outbound: [...this.topLayers.keys()].map((trackName) => ({
+        trackName,
+        kind: this.publishOptions.get(trackName)?.kind ?? 'cam',
+        codec: 'VP8',
+        bytesSent: 0,
+        packetsSent: 0,
+        packetsLost: 0,
+        fractionLost: null,
+        layers: [
+          {
+            rid: null,
+            active: true,
+            bytesSent: 0,
+            packetsSent: 0,
+            framesEncoded: 0,
+            width: null,
+            height: null,
+            fps: null,
+            qualityLimitationReason: this.uplink.limitation,
+          },
+        ],
+      })),
       inbound: [],
       ...extra,
     }
-  }
-
-  async limitSendLayers(trackName: string, highest: Layer): Promise<void> {
-    this.#requireSession()
-    if (!this.#ownTracks.has(trackName)) {
-      throw new MediaTransportError('not_found', `Not published: ${trackName}`)
-    }
-    if (highest === 'high') this.sendCeilings.delete(trackName)
-    else this.sendCeilings.set(trackName, highest)
   }
 
   setIceServers(iceServers: RTCIceServer[]): void {

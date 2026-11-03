@@ -300,11 +300,11 @@ describe('RoomMedia: uplink adaptation (e2-t15)', () => {
     simulateUplink(transport, link)
     const cam = [...transport.sending.keys()].find((name) => name.startsWith('cam'))!
     await until(() => media.getState().uplink.cam === 'medium')
-    expect(transport.sendCeilings.get(cam)).toBe('medium')
+    expect(transport.topLayers.get(cam)).toBe('medium')
     link.reason = 'none'
     const ticks = await until(() => media.getState().uplink.cam === 'high')
     expect(ticks).toBeGreaterThanOrEqual(15)
-    expect(transport.sendCeilings.has(cam)).toBe(false)
+    expect(transport.topLayers.get(cam)).toBe('high')
     await media.close()
   })
 })
