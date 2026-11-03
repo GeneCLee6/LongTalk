@@ -7,6 +7,7 @@ import { usePhoneLayout } from './layoutContext.ts'
 import { MediaControls, type MediaControlsProps } from './MediaControls.tsx'
 import { Menu, type MenuItem } from './Menu.tsx'
 import { ReactionsButton, type ReactionsButtonProps } from './ReactionsButton.tsx'
+import { shortcutKey } from '../room/shortcuts.ts'
 
 export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
   /** Members in the room, on the participants button */
@@ -77,6 +78,9 @@ export function Toolbar({
   reactions,
   ...media
 }: ToolbarProps) {
+  // The keys in the tooltips (G4, e4-t13): only where there is a keyboard to press them
+  const key = (action: Parameters<typeof shortcutKey>[0]) =>
+    media.shortcuts ? shortcutKey(action) : undefined
   const phone = usePhoneLayout() !== null
   // On a phone 反應 takes participants' key; participants is the first of 更多 then
   const participantsInMore = phone && reactions !== undefined
@@ -113,10 +117,11 @@ export function Toolbar({
           icon={<ScreenShareIcon />}
           showLabel
           tone={sharing ? 'danger' : 'neutral'}
+          shortcut={key('share')}
           onClick={onToggleShare}
         />
       )}
-      {reactions && <ReactionsButton {...reactions} />}
+      {reactions && <ReactionsButton {...reactions} handShortcut={key('hand')} />}
       <IconButton
         label={strings.toolbar.chatUnread(chatUnread)}
         caption={strings.toolbar.chat}
@@ -124,6 +129,7 @@ export function Toolbar({
         badge={chatUnread > 0 ? chatUnread : undefined}
         showLabel
         aria-expanded={chatOpen}
+        shortcut={key('chat')}
         onClick={onToggleChat}
       />
       {!participantsInMore && (
@@ -135,6 +141,7 @@ export function Toolbar({
           badgeTone={waitingCount > 0 ? 'warn' : 'primary'}
           showLabel
           aria-expanded={participantsOpen}
+          shortcut={key('participants')}
           onClick={onToggleParticipants}
         />
       )}
@@ -162,6 +169,7 @@ export function Toolbar({
             icon={<LeaveIcon />}
             tone="danger"
             showLabel
+            shortcut={key('leave')}
             onClick={onLeave}
           />
         </Leave>

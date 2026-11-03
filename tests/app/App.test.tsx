@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PROTOCOL_VERSION } from '../../shared/protocol.ts'
 import { App } from '../../src/App.tsx'
 import { telemetry } from '../../src/telemetry.ts'
+import { preloadRoomPage } from './preloadRoom.ts'
+
+preloadRoomPage()
 
 const ROOM_ID = 'abcdefghij'
 const TOKEN = 'S'.repeat(43)

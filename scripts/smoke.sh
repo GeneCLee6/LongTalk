@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test after a deploy: the site serves the expected commit, the API answers, a room URL
-# falls through to the app, and the brand files are served with their types (e4-t19).
+# falls through to the app, the brand files are served with their types (e4-t19), and the
+# service worker is this commit's, never cached long, and precaches no /api path (e4-t12).
 # Usage: scripts/smoke.sh <site-url> <commit>
 set -euo pipefail
 url="${1:?site url}"
@@ -52,3 +53,17 @@ curl -fsS "$url/manifest.webmanifest" | grep -q '"short_name": "LongTalk"' \
   || { echo "::error::manifest.webmanifest does not name LongTalk"; exit 1; }
 curl -fsS "$url/" | grep -q '<link rel="manifest" href="/manifest.webmanifest"' \
   || { echo "::error::index.html does not link the manifest"; exit 1; }
+
+# The service worker (e4-t12): a script, this commit's build, revalidated every time, no /api
+sw_file=$(mktemp)
+sw_headers=$(curl -fsS -D - -o "$sw_file" "$url/sw.js" | tr -d '\r')
+echo "/sw.js -> $(echo "$sw_headers" | grep -i '^content-type:' || true)"
+echo "$sw_headers" | grep -qi '^content-type: .*javascript' \
+  || { echo "::error::/sw.js is not served as JavaScript"; exit 1; }
+echo "$sw_headers" | grep -qi '^cache-control: .*no-cache' \
+  || { echo "::error::/sw.js should be Cache-Control: no-cache"; exit 1; }
+grep -q "\"appVersion\":\"$sha\"" "$sw_file" \
+  || { echo "::error::/sw.js is not this commit's build"; exit 1; }
+if grep -o '"precache":\[[^]]*\]' "$sw_file" | grep -q '"/api'; then
+  echo "::error::/sw.js precaches an /api path"; exit 1
+fi

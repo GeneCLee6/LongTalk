@@ -4,6 +4,9 @@ import { App } from '../../src/App.tsx'
 import type { AudioContextLike } from '../../src/media/levelMeter.ts'
 import { MIC_LEVEL_INTERVAL_MS, useMicLevel } from '../../src/room/useMicLevel.ts'
 import { FakeStream, FakeTrack, asStream, fakeMediaDevices } from './media/fakeMedia.ts'
+import { preloadRoomPage } from './preloadRoom.ts'
+
+preloadRoomPage()
 
 const ROOM_ID = 'abcdefghij'
 

@@ -7,6 +7,9 @@ import { FakeSfu } from '../../src/media/FakeTransport.ts'
 import { DEFAULT_VIEW, loadView, saveView } from '../../src/room/session.ts'
 import { TransportContext } from '../../src/room/transportContext.ts'
 import { getLocale, strings } from '../../src/strings.ts'
+import { preloadRoomPage } from './preloadRoom.ts'
+
+preloadRoomPage()
 
 // What the stage shows (G2, e4-t10, e4-t11): the layout switch in 更多, pinning a tile for
 // ourselves, the host's spotlight (sent to the room, shown when the room says so), hiding our

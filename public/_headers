@@ -19,3 +19,8 @@
 /manifest.webmanifest
   Content-Type: application/manifest+json
   Cache-Control: public, max-age=3600
+
+# The service worker (e4-t12, DEPLOY.md §10): always revalidated, so a deploy is noticed at once.
+# Browsers already skip the HTTP cache for it (updateViaCache: imports); this keeps proxies honest.
+/sw.js
+  Cache-Control: no-cache

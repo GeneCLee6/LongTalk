@@ -17,6 +17,9 @@ import {
   takePasswordFromUrl,
 } from '../../src/room/roomPassword.ts'
 import { Telemetry } from '../../src/telemetry.ts'
+import { preloadRoomPage } from './preloadRoom.ts'
+
+preloadRoomPage()
 
 const ROOM_ID = 'abcdefghij'
 const TOKEN = 'S'.repeat(43)

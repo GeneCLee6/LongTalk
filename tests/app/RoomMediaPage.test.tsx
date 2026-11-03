@@ -9,6 +9,9 @@ import type { MediaDevicesLike } from '../../src/media/devices.ts'
 import { MediaDevicesContext } from '../../src/room/devicesContext.ts'
 import { TransportContext } from '../../src/room/transportContext.ts'
 import { fakeMediaDevices } from './media/fakeMedia.ts'
+import { preloadRoomPage } from './preloadRoom.ts'
+
+preloadRoomPage()
 
 // The room page with its media on a FakeSfu (e2-t03, e2-t04): the page publishes through the
 // transport the context gives it, reports its tracks to the room and shows a tile per member

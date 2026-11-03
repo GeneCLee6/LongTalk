@@ -20,6 +20,9 @@ import {
   strings,
 } from '../../src/strings.ts'
 import { fakeMediaDevices } from './media/fakeMedia.ts'
+import { preloadRoomPage } from './preloadRoom.ts'
+
+preloadRoomPage()
 
 // G1 (e4-t09, e4-t15): the two dictionaries, choosing and switching the language, dates and
 // times through Intl, the permission tutorial per browser, the speaker test, device memory by

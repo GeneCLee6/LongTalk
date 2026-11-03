@@ -31,6 +31,9 @@ import {
 } from '../../src/room/sounds.ts'
 import { useReactions } from '../../src/room/useReactions.ts'
 import { media } from '../../src/styles/tokens.ts'
+import { preloadRoomPage } from './preloadRoom.ts'
+
+preloadRoomPage()
 
 const ROOM_ID = 'abcdefghij'
 const TOKEN = 'S'.repeat(43)

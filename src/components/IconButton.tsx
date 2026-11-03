@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import styled, { css } from 'styled-components'
+import { strings } from '../strings.ts'
 import { color, fontSize, motion, radius, size, media, space } from '../styles/tokens.ts'
 
 export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
@@ -23,6 +24,11 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
    */
   pressed?: boolean
   tone?: 'neutral' | 'danger'
+  /**
+   * The keyboard shortcut (G4, e4-t13): in the tooltip (「靜音（M）」) and as aria-keyshortcuts;
+   * the accessible name stays the label
+   */
+  shortcut?: string
 }
 
 /** Square icon button, 44×44 (48×48 on phones), for the toolbar and panels */
@@ -35,6 +41,7 @@ export function IconButton({
   caption = label,
   pressed,
   tone = 'neutral',
+  shortcut,
   type = 'button',
   ...rest
 }: IconButtonProps) {
@@ -44,7 +51,8 @@ export function IconButton({
       type={type}
       aria-label={label}
       aria-pressed={pressed}
-      title={label}
+      title={shortcut ? strings.shortcuts.tooltip(label, shortcut) : label}
+      aria-keyshortcuts={shortcut}
       $danger={tone === 'danger' || off}
       {...rest}
     >

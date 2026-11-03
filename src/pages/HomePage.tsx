@@ -5,8 +5,11 @@ import { parseRoomInput } from '../../shared/room-id.ts'
 import { createRoom } from '../api/rooms.ts'
 import { Button } from '../components/Button.tsx'
 import { TextInput } from '../components/Field.tsx'
+import { OfflineIcon } from '../components/icons.tsx'
+import { InstallPrompt } from '../components/InstallPrompt.tsx'
 import { LanguageSelect } from '../components/LanguageSelect.tsx'
 import { Logo } from '../components/Logo.tsx'
+import { useOnline } from '../pwa/online.ts'
 import { strings } from '../strings.ts'
 import { breakpoint, color, font, fontSize, radius, space } from '../styles/tokens.ts'
 
@@ -17,6 +20,8 @@ export function HomePage() {
   const [createFailed, setCreateFailed] = useState(false)
   const [joinInput, setJoinInput] = useState('')
   const [joinInvalid, setJoinInvalid] = useState(false)
+  // The shell opens offline (e4-t12); rooms need the network
+  const online = useOnline()
 
   async function onCreate() {
     setCreating(true)
@@ -69,12 +74,20 @@ export function HomePage() {
             </Button>
           </JoinForm>
         </Actions>
+        {!online && (
+          <Offline role="status">
+            <OfflineIcon />
+            {strings.pwa.offlineHome}
+          </Offline>
+        )}
         {createFailed && <Notice role="alert">{strings.home.createRoomFailed}</Notice>}
         {joinInvalid && (
           <Notice id="join-error" role="alert">
             {strings.home.joinInvalid}
           </Notice>
         )}
+        {/* Install LongTalk (e4-t12): on the home page only, until used or dismissed */}
+        <InstallPrompt />
       </Hero>
       <Perks>
         {strings.home.perks.map((perk) => (
@@ -159,6 +172,21 @@ const JoinForm = styled.form`
 const Notice = styled.p`
   margin: 0;
   color: ${color.danger};
+`
+
+const Offline = styled.p`
+  display: inline-flex;
+  align-items: center;
+  gap: ${space(2)};
+  margin: 0;
+  font-weight: 600;
+
+  svg {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    color: ${color.warn};
+  }
 `
 
 const Perks = styled.ul`

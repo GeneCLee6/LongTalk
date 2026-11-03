@@ -6,6 +6,7 @@ import { color, radius, media, space } from '../styles/tokens.ts'
 import { IconButton } from './IconButton.tsx'
 import { CamIcon, CamOffIcon, ChevronUpIcon, MicIcon, MicOffIcon } from './icons.tsx'
 import { Menu, type MenuItem } from './Menu.tsx'
+import { shortcutKey } from '../room/shortcuts.ts'
 
 export type DeviceMenuChoice = 'mic' | 'cam' | 'speaker'
 
@@ -23,6 +24,8 @@ export interface MediaControlsProps {
   onSelect: (choice: DeviceMenuChoice, deviceId: string) => void
   /** Offer the speakers (HTMLMediaElement.setSinkId; not Safari or older Firefox) */
   speakerSupported: boolean
+  /** The room's keyboard shortcuts are on (G4): the tooltips and aria-keyshortcuts say them */
+  shortcuts?: boolean
   /** More buttons after the media ones (Toolbar: share, chat, participants, more, leave) */
   children?: ReactNode
 }
@@ -69,6 +72,7 @@ export function MediaControls(props: MediaControlsProps) {
           icon={props.micOn ? <MicIcon /> : <MicOffIcon />}
           showLabel
           pressed={props.micOn}
+          shortcut={props.shortcuts ? shortcutKey('mic') : undefined}
           disabled={props.micBusy}
           onClick={props.onToggleMic}
         />
@@ -87,6 +91,7 @@ export function MediaControls(props: MediaControlsProps) {
           icon={props.camOn ? <CamIcon /> : <CamOffIcon />}
           showLabel
           pressed={props.camOn}
+          shortcut={props.shortcuts ? shortcutKey('cam') : undefined}
           disabled={props.camBusy}
           onClick={props.onToggleCam}
         />
