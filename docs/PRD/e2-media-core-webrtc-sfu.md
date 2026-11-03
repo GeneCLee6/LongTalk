@@ -81,9 +81,9 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 
 - [x] `e2-t11` simulcast 發布：cam 三層、screen 兩層、編碼參數（VP8；鏡頭改要 1280×720，Chrome 從 640×480 只送兩層；cam `f` 720p 1.2 Mbps／`h` 360p 400 kbps／`q` 180p 120 kbps 15 fps，screen `f` 原尺寸 2.5 Mbps／`h` 一半 600 kbps 15 fps；`src/media/encoding.ts` `SIMULCAST`；瀏覽器拒絕 simulcast 時送一層；起始頻寬與只送 VP8 照舊，三人以上 payload type 問題沒有回來） · AC-2.6 · #29
 - [x] `e2-t12` 接收端選層：依格子像素尺寸與頻寬估計 `setPreferredLayer`，版面變動時重算（`src/media/layers.ts` 純函式：格子畫出的像素（×devicePixelRatio，最多 2 倍）、看不見（翻頁、捲出條帶、只顯示首字、分頁在背景）就最低層、每人視訊下行預算 3.4 Mbps（小格先讓）、遲滯；`useVideoDemand` 用 ResizeObserver／IntersectionObserver 回報，`RoomMedia` 400 ms 去抖動後只送有變的層；拉軌時就帶起始層（鏡頭 medium、分享 high）；Realtime 照要的層送（`priorityOrdering: none`：讓 SFU 自己估計時，格狀的格子被換到 720p、釘選的大格 35 秒都到不了 720p），沒有那層才往下找（`ridNotAvailable: asciibetical`）；瀏覽器的 `availableIncomingBitrate` 跟著已收到的量走、當上限會把層鎖在最低，所以不用，依丟包與凍結降層是 H2 的 `e2-t15`；Realtime 沒有暫停訂閱的 API，看不見就最低層） · AC-2.6 · #29
-- [ ] `e2-t13` `getStats()` 收集與名牌訊號格 · AC-2.7 · S · ← e2-t10
-- [ ] `e2-t14` 統計面板（自己的連線、每條訂閱）、匯出 JSON 給除錯 · AC-2.7 · S · ← e2-t13
-- [ ] `e2-t15` 頻寬自適應策略：下行降層→停收非講話者→純音訊提示；上行降最高層 · AC-2.7 · M · ← e2-t12, e2-t13
+- [x] `e2-t13` `getStats()` 收集與名牌訊號格（`RoomMedia` 每 2 秒一次 `MediaTransport.getStats()`，`src/media/stats.ts` 依 mid 讀出每條送出與收到的軌、兩次讀數算出位元率／丟包／卡頓／jitter buffer；H3 的 HD 上行檢查也讀同一份；`src/media/quality.ts` 判好／普通／差，三次裡兩次差才算差；自己的名牌用自己的，別人的經協定 v14 `signal`（變了才送、最多每 5 秒，RoomDO 每人每 10 秒最多 3 次）放在 `Member.signal`；訊號格 `SignalBars` 三格＋文字名稱） · AC-2.7 · #31
+- [x] `e2-t14` 統計面板（自己的連線、每條訂閱）、匯出 JSON 給除錯（「更多 › 連線統計」：電腦右側面板、手機全螢幕抽屜，lazy chunk；往返延遲、收送位元率與丟包、直連或 TURN、候選類型與協定、上行估計、自動調整的狀態；送出的每層解析度／幀率／位元率／是否關閉／編碼受限原因；每條訂閱的成員、種類、要求的層、解析度、幀率、位元率、丟包、抖動、卡頓；「匯出 JSON」含名字、不含 token／密碼／SDP） · AC-2.7 · #31
+- [x] `e2-t15` 頻寬自適應策略：下行降層→停收非講話者→純音訊提示；上行降最高層（`src/media/adaptation.ts` 兩個純狀態機，每 2 秒一步：下行連續 2 次「差」就把視訊預算降到要求量的 60%（不低於全部最低層），都最低了還差就退訂釘選／聚光燈／講話者以外的鏡頭（最多留 2 個，講話者換人時保留 15 秒，避免每幾秒退訂又訂閱），再差就出提示條建議 H3 的純音訊模式；連續 5 次「好」往上一段，剛升就又差時等待加倍（最多 60 秒）；「差」一定要有丟包，沒有丟包的隱藏音、jitter buffer、卡頓最多算「普通」（CI 上 CPU 不夠時會這樣）。上行：編碼器因頻寬受限或 SFU 回報丟包 ≥ 10% 連續 10 秒，用 H3 的 `setTopLayer` 關鏡頭的 `f`，再來分享的 `f`、鏡頭的 `h`；CPU 受限只關鏡頭的 `f`；30 秒都正常（有上行估計時要夠）才一層層開回；聲音從不動；toast「網路不穩，已降低畫質」等） · AC-2.7 · #31
 - [ ] `e2-t16` 相容矩陣：Playwright 多瀏覽器、iOS／Android 實機檢查清單、`BROWSER-SUPPORT.md` 完整版 · AC-2.8 · M · ← e2-t10, e11-t04
 - [ ] `e2-t17` `LiveKitTransport` 後備實作（選用，當 Realtime 條件變動時啟動） · AC-2.2 · M · ← e2-t10
 

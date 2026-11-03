@@ -1,6 +1,28 @@
-import { RECONNECT_GRACE_MS, type ClientMessage, type MemberTrack } from '../../shared/protocol.ts'
+import {
+  RECONNECT_GRACE_MS,
+  SIGNAL_REPORT_MS,
+  type ClientMessage,
+  type MemberTrack,
+  type SignalLevel,
+} from '../../shared/protocol.ts'
 import { STATS_INTERVAL_MS, type UsageState } from '../../shared/usage.ts'
-import { chooseLayers, DOWNLINK_BUDGET_BPS, type LayerInput } from '../media/layers.ts'
+import {
+  DownlinkAdaptation,
+  FULL_UPLINK,
+  UplinkAdaptation,
+  type DownlinkStage,
+  type UplinkState,
+} from '../media/adaptation.ts'
+import { SIMULCAST } from '../media/encoding.ts'
+import { chooseLayers, DOWNLINK_BUDGET_BPS, ladder, type LayerInput } from '../media/layers.ts'
+import {
+  connectionVerdict,
+  downlinkVerdict,
+  encoderLimit,
+  SignalMeter,
+  uplinkVerdict,
+} from '../media/quality.ts'
+import { sampleStats, type StatsSample } from '../media/stats.ts'
 import {
   MediaTransportError,
   trackKey,
@@ -11,6 +33,8 @@ import {
   type MediaTransportErrorCode,
   type PublishedTrack,
   type TrackKind,
+  type TransportStats,
+  type UplinkStats,
 } from '../media/MediaTransport.ts'
 import {
   nextUplinkCheck,
@@ -20,6 +44,7 @@ import {
   type UplinkCheck,
 } from '../media/uplink.ts'
 import { Backoff } from './backoff.ts'
+import type { StatsStore } from './statsStore.ts'
 import type { VideoDemandStore } from './videoDemand.ts'
 
 // One member's media in the room (e2-t03, e2-t04, e2-t05, e2-t08), on top of a MediaTransport
@@ -63,10 +88,23 @@ import type { VideoDemandStore } from './videoDemand.ts'
 // the SFU. A camera starts at medium and a screen at high until its tile reports. Without a
 // demand store nothing is recomputed.
 //
+// Statistics and adaptation (H2, e2-t13, e2-t15; ADR-001 「頻寬自適應」): one poller, every
+// STATS_POLL_MS, reads the transport's getStats() and turns two readings into a sample
+// (media/stats.ts). From each sample: the signal level for our own nameplate (media/quality.ts,
+// steadied over three samples) and, when it changes, `signal` to the room (at most every
+// SIGNAL_REPORT_MS) for everyone else's; every STATS_INTERVAL_MS the bytes received to the room
+// (`stats`, the free-tier guard); the latest sample to the StatsStore for the stats panel; and a
+// step of the two adaptation machines (media/adaptation.ts). Downlink: a lower video budget for
+// the layer choice, then no cameras but the ones `setVideoPriority` keeps (they are unsubscribed:
+// Realtime cannot pause; their tiles show initials), then `downlink: 'audioOnly'`, a suggestion
+// the page shows. Uplink: the top layers of our camera and screen turned off
+// (MediaTransport.setTopLayer, combined with HD's) while the encoder is held back, and on again
+// later. Audio is never touched. In 純音訊模式 (below) the adaptation holds where it is.
+//
 // HD (e6-t04): with `hd` on the camera sends all three layers; off, its 720p layer is turned off
 // (MediaTransport.setTopLayer 'medium': at most 360p goes out, the capture stays 720p so turning
 // HD back on is instant). While HD is on and the camera sends, its uplink is sampled every
-// UPLINK_SAMPLE_MS (MediaTransport.getUplink); when it is too short (media/uplink.ts) HD is held
+// UPLINK_SAMPLE_MS (from the latest stats sample: one getStats() path); when it is too short (media/uplink.ts) HD is held
 // back (`hdLimited`) and tried again later, longer each time.
 //
 // 純音訊模式 (e6-t04, `audioOnly`; not the month's audio-only usage state, e11-t13): no camera or
@@ -131,6 +169,16 @@ export interface RoomMediaState {
   rebuilds: number
   /** The simulcast layer asked for per received camera or screen, by trackKey (e2-t12) */
   layers: Readonly<Record<string, Layer>>
+  /** Our own connection's level (e2-t13); null until the first samples */
+  signal: SignalLevel | null
+  /** Where the downlink adaptation stands (e2-t15) */
+  downlink: DownlinkStage
+  /** The video budget the layers are chosen within now */
+  downlinkBudgetBps: number
+  /** The highest layer our camera and screen send now (e2-t15) */
+  uplink: UplinkState
+  /** Other members' cameras not received to save the downlink, or in audio-only, by trackKey */
+  pausedVideos: readonly string[]
   /** 純音訊模式 (e6-t04): no video received, our camera not sent */
   audioOnly: boolean
   /** HD is wanted (e6-t04): the camera sends its 720p layer, uplink allowing */
@@ -169,6 +217,12 @@ export interface RoomMediaOptions {
   demand?: VideoDemandStore
   /** Wait after a layout change before recomputing layers */
   layerDebounceMs?: number
+  /** How often getStats() is read (STATS_POLL_MS; at most statsIntervalMs) */
+  pollIntervalMs?: number
+  /** Where the latest sample goes, for the stats panel (e2-t14) */
+  stats?: StatsStore
+  /** Adapt to the network (e2-t15); on unless a test turns it off */
+  adapt?: boolean
   /** 純音訊模式 from the start (e6-t04; the pre-join screen's choice) */
   audioOnly?: boolean
   /** HD from the start (e6-t04); on without it */
@@ -187,6 +241,12 @@ export const DISCONNECT_GRACE_MS = 4_000
 export const STABLE_AFTER_MS = 20_000
 /** Layout changes come in bursts (a resize, a scroll, the strip's animation): settle first */
 export const LAYER_DEBOUNCE_MS = 400
+/** getStats() is read this often (e2-t13, PRD: 每 2 秒) */
+export const STATS_POLL_MS = 2_000
+/** How many cameras stay when the downlink cuts them: the first ones setVideoPriority lists */
+export const KEEP_WHEN_CUT = 2
+/** A kept camera stays this long after it was last listed (the speaker changes often) */
+export const KEEP_HOLD_MS = 15_000
 /** The layer a received video starts with, before its tile reports (e2-t12) */
 export const INITIAL_LAYER: Record<'cam' | 'screen', Layer> = { cam: 'medium', screen: 'high' }
 
@@ -214,13 +274,19 @@ export const idleRoomMedia: RoomMediaState = {
   usingRelay: false,
   rebuilds: 0,
   layers: {},
+  signal: null,
+  downlink: 'normal',
+  downlinkBudgetBps: DOWNLINK_BUDGET_BPS,
+  uplink: FULL_UPLINK,
+  pausedVideos: [],
   audioOnly: false,
   hd: true,
   hdLimited: false,
 }
 
-/** Whether a track is received in 純音訊模式: only sound */
-const isVideo = (kind: TrackKind): boolean => kind === 'cam' || kind === 'screen'
+const LAYER_ORDER: Record<Layer, number> = { high: 2, medium: 1, low: 0 }
+/** The lower of two layers */
+const lowerLayer = (a: Layer, b: Layer): Layer => (LAYER_ORDER[a] <= LAYER_ORDER[b] ? a : b)
 
 const errorCode = (error: unknown): MediaTransportErrorCode =>
   error instanceof MediaTransportError ? error.code : 'sfu_error'
@@ -285,8 +351,29 @@ export class RoomMedia {
   private readonly layerDebounceMs: number
   private layerTimer: Timer | null = null
   private offDemand: (() => void) | null = null
+  private readonly pollIntervalMs: number
+  private readonly statsStore: StatsStore | null
+  private readonly adapt: boolean
+  /** The previous reading, and the transport it came from (a new session starts afresh) */
+  private lastStats: { transport: MediaTransport; stats: TransportStats } | null = null
+  private polls = 0
+  private polling = false
+  private readonly meter = new SignalMeter()
+  private readonly downlink = new DownlinkAdaptation()
+  private readonly uplink = new UplinkAdaptation()
+  /** The cameras kept when the downlink cuts them, by trackKey (setVideoPriority) */
+  private kept: string[] = []
+  /** When each camera was last among the first KEEP_WHEN_CUT listed */
+  private readonly listedAt = new Map<string, number>()
+  /** The level last sent to the room, and when; a report waiting for SIGNAL_REPORT_MS */
+  private signalSent: { level: SignalLevel; at: number } | null = null
+  private signalTimer: Timer | null = null
   /** The highest layer the published camera sends now (e6-t04); null before it is published */
   private sendingTop: Layer | null = null
+  /** The highest layer the published screen sends now (e2-t15); null before it is published */
+  private sendingScreenTop: Layer | null = null
+  /** The latest stats sample (H3's uplink check reads it: one getStats() path) */
+  private lastSample: StatsSample | null = null
   private readonly uplinkSampleMs: number
   private readonly now: () => number
   private uplinkTimer: ReturnType<typeof setInterval> | null = null
@@ -329,6 +416,9 @@ export class RoomMedia {
       hd: options.hd ?? true,
     }
     this.offDemand = this.demand?.subscribe(() => this.scheduleLayers()) ?? null
+    this.pollIntervalMs = Math.min(options.pollIntervalMs ?? STATS_POLL_MS, this.statsIntervalMs)
+    this.statsStore = options.stats ?? null
+    this.adapt = options.adapt ?? true
     this.attach(first)
   }
 
@@ -349,7 +439,7 @@ export class RoomMedia {
     this.started = true
     this.usage = usage
     this.wanted = local
-    this.statsTimer = setInterval(() => void this.reportStats(), this.statsIntervalMs)
+    this.statsTimer = setInterval(() => void this.poll(), this.pollIntervalMs)
     this.uplinkTimer = setInterval(() => void this.sampleUplink(), this.uplinkSampleMs)
     await this.openSession(this.transport, 'connecting')
   }
@@ -361,6 +451,12 @@ export class RoomMedia {
   setAudioOnly(on: boolean): Promise<void> {
     if (on === this.state.audioOnly) return this.localQueue
     this.update({ audioOnly: on })
+    if (!on) {
+      // Back from audio-only: the downlink adaptation starts over (e2-t15; the network may have
+      // changed meanwhile)
+      this.downlink.reset()
+      this.update({ downlink: 'normal', downlinkBudgetBps: this.downlink.state.budgetBps })
+    }
     this.reconcile()
     if (!this.ready) return this.localQueue
     return this.syncLocal()
@@ -435,17 +531,65 @@ export class RoomMedia {
     this.reconcile()
   }
 
+  /**
+   * The cameras that matter most now (e2-t15): `chosen` ones (a pin, a spotlight) and the
+   * `speakers` (the big tile, whoever speaks), most important first. While the downlink cuts
+   * video, KEEP_WHEN_CUT of them stay: the chosen ones always, a speaker in a free place. The
+   * speaker changes every few seconds, and each change would be an unsubscribe and a subscribe
+   * (a renegotiation each; measured on the PR preview, #31: one every 3 s), so a camera keeps its
+   * place for KEEP_HOLD_MS after it was last listed, unless a chosen one needs it.
+   */
+  setVideoPriority(chosen: readonly string[], speakers: readonly string[] = []): void {
+    const now = Date.now()
+    const listed = [...new Set([...chosen, ...speakers])].slice(0, KEEP_WHEN_CUT)
+    for (const key of listed) this.listedAt.set(key, now)
+    const kept = this.kept.filter((key) => this.desired.has(key))
+    for (const key of listed) {
+      if (kept.includes(key)) continue
+      if (kept.length < KEEP_WHEN_CUT) {
+        kept.push(key)
+        continue
+      }
+      // The kept camera listed longest ago gives its place: once its hold is over, or at once to
+      // a chosen one
+      const out = kept
+        .filter((k) => !listed.includes(k))
+        .sort((a, b) => (this.listedAt.get(a) ?? 0) - (this.listedAt.get(b) ?? 0))[0]
+      if (!out) continue
+      const held = now - (this.listedAt.get(out) ?? 0) < KEEP_HOLD_MS
+      if (held && !chosen.includes(key)) continue
+      kept[kept.indexOf(out)] = key
+    }
+    for (const [key, at] of this.listedAt) {
+      if (!kept.includes(key) && now - at >= KEEP_HOLD_MS) this.listedAt.delete(key)
+    }
+    if (kept.length === this.kept.length && kept.every((key, i) => key === this.kept[i])) return
+    this.kept = kept
+    this.reconcile()
+  }
+
+  /** Whether a desired track is to be received now: 純音訊模式 and the adaptation may say no */
+  private wants(key: string): boolean {
+    const track = this.desired.get(key)
+    if (!track) return false
+    if (track.kind !== 'cam' && track.kind !== 'screen') return true
+    if (this.state.audioOnly) return false
+    if (track.kind === 'screen') return true
+    const cut = this.state.downlink === 'videoCut' || this.state.downlink === 'audioOnly'
+    return !cut || this.kept.includes(key)
+  }
+
   /** Subscribes to what is desired and missing, unsubscribes what is received and not desired */
   reconcile(): void {
+    this.updatePaused()
     if (this.closed || this.state.status !== 'connected') return
     for (const [key, track] of this.desired) {
       if (key in this.state.received || this.pending.has(key) || this.ended.has(key)) continue
-      if (this.retryTimers.has(key) || !this.receivable(track)) continue
+      if (this.retryTimers.has(key) || !this.wants(key)) continue
       void this.subscribeTo(key, track)
     }
     for (const key of Object.keys(this.state.received)) {
-      const wanted = this.desired.get(key)
-      if (wanted && this.receivable(wanted)) continue
+      if (this.wants(key)) continue
       const { sessionId, trackName } = this.state.received[key]
       this.removeReceived(key)
       void this.transport.unsubscribe({ sessionId, trackName }).catch(() => undefined)
@@ -458,6 +602,9 @@ export class RoomMedia {
    */
   rejoined(): void {
     if (this.ready && this.state.published.length > 0) this.reportTracks()
+    // The room keeps our level while we reconnect; one that forgot us gets it again
+    this.signalSent = null
+    this.reportSignal()
   }
 
   /** The browser came online or to the foreground: a rebuild waiting for its delay runs now */
@@ -478,12 +625,25 @@ export class RoomMedia {
     void this.rebuild()
   }
 
+  /** The cameras listed and not received because of the adaptation or audio-only */
+  private updatePaused(): void {
+    const paused = [...this.desired]
+      .filter(([key, track]) => track.kind === 'cam' && !track.muted && !this.wants(key))
+      .map(([key]) => key)
+      .sort()
+    const now = this.state.pausedVideos
+    if (paused.length === now.length && paused.every((key, i) => key === now[i])) return
+    this.update({ pausedVideos: paused })
+  }
+
   /** Stops everything; the published tracks end on the SFU with the session */
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
     this.ready = false
     if (this.statsTimer !== null) clearInterval(this.statsTimer)
+    if (this.signalTimer !== null) clearTimeout(this.signalTimer)
+    this.signalTimer = null
     if (this.uplinkTimer !== null) clearInterval(this.uplinkTimer)
     this.clearHdRetry()
     this.clearSessionTimers()
@@ -611,6 +771,8 @@ export class RoomMedia {
     this.sendingScreen = null
     this.sendingScreenAudio = null
     this.sendingTop = null
+    this.sendingScreenTop = null
+    this.lastSample = null
     this.uplinkCheck = null
     this.update({
       status: 'reconnecting',
@@ -619,8 +781,10 @@ export class RoomMedia {
       received: {},
       layers: {},
       usingRelay: false,
+      signal: null,
       rebuilds: this.state.rebuilds + 1,
     })
+    this.meter.reset()
     const transport = this.createTransport()
     this.transport = transport
     this.attach(transport)
@@ -680,7 +844,7 @@ export class RoomMedia {
         current: this.state.layers[key] ?? null,
       })
     }
-    const chosen = chooseLayers(inputs, DOWNLINK_BUDGET_BPS)
+    const chosen = chooseLayers(inputs, this.state.downlinkBudgetBps)
     const changes = [...chosen].filter(([key, layer]) => this.state.layers[key] !== layer)
     if (changes.length === 0) return
     this.update({ layers: { ...this.state.layers, ...Object.fromEntries(changes) } })
@@ -742,13 +906,19 @@ export class RoomMedia {
     await this.applyTopLayer(transport)
     if (this.closed || !this.ready || transport !== this.transport) return
     await this.applyScreen(transport)
+    if (this.closed || !this.ready || transport !== this.transport) return
+    await this.applyScreenTop(transport)
   }
 
-  /** The camera's highest layer as HD and the uplink want it (e6-t04) */
+  /**
+   * The camera's highest layer as HD (e6-t04) and the uplink adaptation (e2-t15) want it: the
+   * lower of the two
+   */
   private async applyTopLayer(transport: MediaTransport): Promise<void> {
     const own = this.state.published.find((track) => track.kind === 'cam')
     if (!own) return
-    const top: Layer = this.state.hd && !this.state.hdLimited ? 'high' : 'medium'
+    const hdTop: Layer = this.state.hd && !this.state.hdLimited ? 'high' : 'medium'
+    const top = lowerLayer(hdTop, this.state.uplink.cam)
     if (this.sendingTop === top) return
     try {
       await transport.setTopLayer(own.trackName, top)
@@ -761,11 +931,25 @@ export class RoomMedia {
     this.uplinkCheck = top === 'high' ? startUplinkCheck(this.now()) : null
   }
 
+  /** The screen's highest layer as the uplink adaptation wants it (e2-t15) */
+  private async applyScreenTop(transport: MediaTransport): Promise<void> {
+    const own = this.state.published.find((track) => track.kind === 'screen')
+    const top = this.state.uplink.screen
+    if (!own || this.sendingScreenTop === top) return
+    try {
+      await transport.setTopLayer(own.trackName, top)
+    } catch {
+      return
+    }
+    if (this.closed || transport !== this.transport) return
+    this.sendingScreenTop = top
+  }
+
   /**
    * One uplink sample while the camera sends its 720p layer (e6-t04): several short ones in a row
    * hold HD back, and a retry is scheduled
    */
-  private async sampleUplink(): Promise<void> {
+  private sampleUplink(): void {
     if (this.closed || !this.ready || this.state.status !== 'connected') return
     const own = this.state.published.find((track) => track.kind === 'cam')
     if (!own || this.sendingTop !== 'high' || this.state.lowQuality) return
@@ -778,14 +962,19 @@ export class RoomMedia {
       this.uplinkCheck = startUplinkCheck(this.now())
       return
     }
-    const transport = this.transport
-    let sample
-    try {
-      sample = await transport.getUplink(own.trackName)
-    } catch {
-      return
+    const stats = this.lastSample
+    if (!stats) return
+    const sent = stats.outbound.find((track) => track.trackName === own.trackName)
+    const limitation = sent?.qualityLimitationReason ?? null
+    const sample: UplinkStats = {
+      availableOutgoingBitrate: stats.availableOutgoingBitrate,
+      limitation:
+        limitation === 'none' || limitation === 'bandwidth' || limitation === 'cpu'
+          ? limitation
+          : limitation === null
+            ? null
+            : 'other',
     }
-    if (this.closed || transport !== this.transport || this.sendingTop !== 'high') return
     if (!this.uplinkCheck || !this.state.hd || this.state.hdLimited) return
     const { check, holdBack } = nextUplinkCheck(this.uplinkCheck, sample, this.now())
     this.uplinkCheck = check
@@ -805,11 +994,6 @@ export class RoomMedia {
   private clearHdRetry(): void {
     if (this.hdRetryTimer !== null) clearTimeout(this.hdRetryTimer)
     this.hdRetryTimer = null
-  }
-
-  /** Whether a listed track is received now: in 純音訊模式 only sound is */
-  private receivable(track: MemberTrack): boolean {
-    return !(this.state.audioOnly && isVideo(track.kind))
   }
 
   /** Publishes the screen to share, or unpublishes the one that is no longer shared (D1) */
@@ -852,6 +1036,8 @@ export class RoomMedia {
         error: null,
       })
       this.reportTracks()
+      // A new publish sends every layer; applyScreenTop applies the uplink's ceiling (e2-t15)
+      this.sendingScreenTop = 'high'
     } catch (error) {
       if (this.closed || transport !== this.transport) return
       const code = errorCode(error)
@@ -985,9 +1171,8 @@ export class RoomMedia {
       if (transport !== this.transport) return
       this.pending.delete(key)
       if (this.closed) return
-      const listed = this.desired.get(key)
-      if (!listed || !this.receivable(listed)) {
-        // Left the list (or 純音訊模式 started) while we were subscribing
+      if (!this.wants(key)) {
+        // Left the list (or the adaptation cut it) while we were subscribing
         await transport.unsubscribe(track).catch(() => undefined)
         return
       }
@@ -1008,7 +1193,7 @@ export class RoomMedia {
     } catch {
       if (transport !== this.transport) return
       this.pending.delete(key)
-      if (this.closed || !this.desired.has(key)) return
+      if (this.closed || !this.wants(key)) return
       const attempts = (this.attempts.get(key) ?? 0) + 1
       this.attempts.set(key, attempts)
       const timer = setTimeout(() => {
@@ -1064,23 +1249,130 @@ export class RoomMedia {
     })
   }
 
-  private async reportStats(): Promise<void> {
+  /**
+   * One read of the connection's statistics (every pollIntervalMs): the sample, the signal level,
+   * the room's byte count every STATS_INTERVAL_MS, and a step of the adaptation
+   */
+  private async poll(): Promise<void> {
     const transport = this.transport
     const sessionId = transport.sessionId
-    if (this.closed || !this.ready || !sessionId) return
+    if (this.closed || !this.ready || !sessionId || this.polling) return
+    this.polling = true
+    let stats: TransportStats
     try {
-      const { bytesReceived, usingRelay } = await transport.getStats()
-      if (this.closed || transport !== this.transport) return
-      if (usingRelay !== this.state.usingRelay) this.update({ usingRelay })
+      stats = await transport.getStats()
+    } catch {
+      // Not connected yet; the next tick tries again
+      return
+    } finally {
+      this.polling = false
+    }
+    if (this.closed || transport !== this.transport) return
+    const previous = this.lastStats?.transport === transport ? this.lastStats.stats : null
+    this.lastStats = { transport, stats }
+    const sample = sampleStats(previous, stats)
+    this.lastSample = sample
+    if (stats.usingRelay !== this.state.usingRelay) this.update({ usingRelay: stats.usingRelay })
+    this.polls += 1
+    if (this.polls % Math.max(1, Math.round(this.statsIntervalMs / this.pollIntervalMs)) === 0) {
       this.send({
         t: 'stats',
         sessionId,
-        bytesReceived: Math.round(bytesReceived),
-        relay: usingRelay,
+        bytesReceived: Math.round(stats.bytesReceived),
+        relay: stats.usingRelay,
       })
-    } catch {
-      // Not connected yet; the next tick tries again
     }
+    if (sample.intervalMs > 0) {
+      const expected = (key: string) => this.expectedFps(key)
+      const signal = this.meter.push(connectionVerdict(sample, expected))
+      if (signal !== this.state.signal) {
+        this.update({ signal })
+        this.reportSignal()
+      }
+      if (this.adapt && !this.state.audioOnly && this.state.status === 'connected') {
+        this.adaptDownlink(downlinkVerdict(sample, expected))
+        this.adaptUplink(sample)
+      }
+    }
+    this.statsStore?.set({
+      sample,
+      layers: this.state.layers,
+      signal: this.state.signal,
+      downlink: this.downlink.state,
+      uplink: this.uplink.state,
+      paused: this.state.pausedVideos,
+      audioOnly: this.state.audioOnly,
+    })
+  }
+
+  /** The frame rate a received camera's layer is sent at (screens: content decides, not judged) */
+  private expectedFps(key: string): number | null {
+    const received = this.state.received[key]
+    const layer = this.state.layers[key]
+    if (received?.kind !== 'cam' || !layer) return null
+    return SIMULCAST.cam.find((l) => l.layer === layer)?.maxFramerate ?? null
+  }
+
+  /** One step of the downlink's adaptation: a new budget, a cut, or the end of one */
+  private adaptDownlink(verdict: SignalLevel): void {
+    let askedBps = 0
+    let floorBps = 0
+    let videos = 0
+    for (const [key, received] of Object.entries(this.state.received)) {
+      if (received.kind !== 'cam' && received.kind !== 'screen') continue
+      const layers = ladder(received.kind)
+      const asked = layers.find((l) => l.layer === this.state.layers[key]) ?? layers[0]
+      askedBps += asked.maxBitrate
+      floorBps += layers[layers.length - 1].maxBitrate
+      videos += 1
+    }
+    const before = this.downlink.state
+    const after = this.downlink.step({ verdict, askedBps, floorBps, videos })
+    if (after === before) return
+    this.update({ downlink: after.stage, downlinkBudgetBps: after.budgetBps })
+    // A new budget applies now (no layout debounce); a cut, or its end, unsubscribes or subscribes
+    if (after.budgetBps !== before.budgetBps) this.applyLayers()
+    if (after.stage !== before.stage) this.reconcile()
+  }
+
+  /** One step of the uplink's adaptation: the top layers we send off, or on again */
+  private adaptUplink(sample: StatsSample): void {
+    const sends = (kind: TrackKind) => this.state.published.some((t) => t.kind === kind && !t.muted)
+    const limit = encoderLimit(sample)
+    const verdict = uplinkVerdict(sample)
+    const before = this.uplink.state
+    const after = this.uplink.step({
+      pressure: verdict === 'poor' ? 'bandwidth' : limit,
+      clear: limit === null && verdict === 'good',
+      cam: sends('cam'),
+      screen: sends('screen'),
+    })
+    if (after === before) return
+    this.update({ uplink: after })
+    this.applyUplink()
+  }
+
+  /** Our camera and screen send no layer above the uplink's ceiling (e2-t15), with HD's */
+  private applyUplink(): void {
+    void this.syncLocal()
+  }
+
+  /** Tells the room our level, at most every SIGNAL_REPORT_MS (a change in between waits) */
+  private reportSignal(): void {
+    const level = this.state.signal
+    if (this.closed || level === null || this.signalTimer !== null) return
+    if (this.signalSent?.level === level) return
+    const now = Date.now()
+    const wait = this.signalSent ? this.signalSent.at + SIGNAL_REPORT_MS - now : 0
+    if (wait > 0) {
+      this.signalTimer = setTimeout(() => {
+        this.signalTimer = null
+        this.reportSignal()
+      }, wait)
+      return
+    }
+    this.signalSent = { level, at: now }
+    this.send({ t: 'signal', level })
   }
 
   private removeReceived(key: string): void {

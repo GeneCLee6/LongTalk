@@ -63,12 +63,20 @@ export class FakeTransport implements MediaTransport {
   readonly sending = new Map<string, MediaStreamTrack | null>()
   /** The highest layer each published video sends, by trackName (setTopLayer; `high` on publish) */
   readonly topLayers = new Map<string, Layer>()
-  /** What getUplink() reports; tests set it (e6-t04) */
+  /**
+   * The uplink getStats() reports (e6-t04): the estimate, and the limitation of every camera
+   * and screen we send; tests set it. `stats` overrides it
+   */
   uplink: UplinkStats = { availableOutgoingBitrate: 3_000_000, limitation: 'none' }
   /** What getStats() reports as received; tests move it forward */
   bytesReceived = 0
   /** What getStats() reports as the path; tests set it (e2-t07) */
   usingRelay = false
+  /**
+   * The rest of what getStats() reports (e2-t13): tests set the per-track counters (or a function
+   * of the time, for a link that degrades) and move them forward
+   */
+  stats: Partial<TransportStats> | (() => Partial<TransportStats>) = {}
   /** What connect() was given, and the servers setIceServers() handed over since */
   connectOptions: ConnectOptions | null = null
   readonly iceServerUpdates: RTCIceServer[][] = []
@@ -168,21 +176,42 @@ export class FakeTransport implements MediaTransport {
     if (this.topLayers.has(trackName)) this.topLayers.set(trackName, top)
   }
 
-  async getUplink(trackName: string): Promise<UplinkStats> {
-    this.#requireSession()
-    if (!this.#ownTracks.has(trackName)) {
-      throw new MediaTransportError('not_found', `Not published: ${trackName}`)
-    }
-    return { ...this.uplink }
-  }
-
   async getStats(): Promise<TransportStats> {
     this.#requireSession()
+    const extra = typeof this.stats === 'function' ? this.stats() : this.stats
     return {
+      timestamp: Date.now(),
       rttMs: 0,
       usingRelay: this.usingRelay,
+      candidateType: this.usingRelay ? 'relay' : 'host',
+      protocol: 'udp',
       bytesSent: 0,
       bytesReceived: this.bytesReceived,
+      availableOutgoingBitrate: this.uplink.availableOutgoingBitrate,
+      outbound: [...this.topLayers.keys()].map((trackName) => ({
+        trackName,
+        kind: this.publishOptions.get(trackName)?.kind ?? 'cam',
+        codec: 'VP8',
+        bytesSent: 0,
+        packetsSent: 0,
+        packetsLost: 0,
+        fractionLost: null,
+        layers: [
+          {
+            rid: null,
+            active: true,
+            bytesSent: 0,
+            packetsSent: 0,
+            framesEncoded: 0,
+            width: null,
+            height: null,
+            fps: null,
+            qualityLimitationReason: this.uplink.limitation,
+          },
+        ],
+      })),
+      inbound: [],
+      ...extra,
     }
   }
 

@@ -70,7 +70,16 @@ const member = (
   name: string,
   role: Member['role'] = 'participant',
   hand: number | null = null,
-): Member => ({ id, name, role, joinedAt: id.charCodeAt(0), reconnecting: false, tracks: [], hand })
+): Member => ({
+  id,
+  name,
+  role,
+  joinedAt: id.charCodeAt(0),
+  reconnecting: false,
+  tracks: [],
+  hand,
+  signal: null,
+})
 
 function welcome(members: Member[]): Frame {
   return {

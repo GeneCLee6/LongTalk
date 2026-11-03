@@ -50,9 +50,11 @@
 
 **規則**：所有媒體相關的呼叫經過 `src/media/MediaTransport.ts` 介面（`connect`、`publish`、`unpublish`、`subscribe`、`unsubscribe`、`setPreferredLayer`、`getStats`、`on`、`close`）。`CloudflareRealtimeTransport` 是第一個實作；介面的測試用 `FakeTransport` 跑。**A2 定稿：決定、Realtime 實際端點、介面與切換條件見 [`adr-001-media-layer.md`](adr-001-media-layer.md)。**
 
-**Simulcast（H1）**：鏡頭以 1280×720 擷取、發三層（`f`／`h`／`q`），分享兩層，都是 VP8（`src/media/encoding.ts`）。每個接收端自己選層：格子把畫出的大小與是否看得見報給 `VideoDemandStore`（`src/components/useVideoDemand.ts`），`RoomMedia` 用 `src/media/layers.ts` 的純函式（大小、可見、每人 3.4 Mbps 的視訊下行預算、遲滯）決定，經 `MediaTransport.setPreferredLayer` 對 SFU 的 `tracks/update` 送出；SFU 照要的層送（`priorityOrdering: none`），頻寬比預算少時的降層是 H2 的 `e2-t15`。層是接收端與 SFU 之間的事，RoomDO 不參與。細節與實測在 ADR-001「Simulcast」。
+**Simulcast（H1）**：鏡頭以 1280×720 擷取、發三層（`f`／`h`／`q`），分享兩層，都是 VP8（`src/media/encoding.ts`）。每個接收端自己選層：格子把畫出的大小與是否看得見報給 `VideoDemandStore`（`src/components/useVideoDemand.ts`），`RoomMedia` 用 `src/media/layers.ts` 的純函式（大小、可見、每人 3.4 Mbps 的視訊下行預算、遲滯）決定，經 `MediaTransport.setPreferredLayer` 對 SFU 的 `tracks/update` 送出；SFU 照要的層送（`priorityOrdering: none`），頻寬比預算少時降低預算（H2，下一段）。層是接收端與 SFU 之間的事，RoomDO 不參與。細節與實測在 ADR-001「Simulcast」。
 
-**發送端的品質設定（H3）**：麥克風的噪音抑制、回音消除、自動增益是 `getUserMedia` 約束（`src/media/audioProcessing.ts`），通話中先 `applyConstraints`、瀏覽器不肯改就重開麥克風再 `replaceTrack`（不重新協商）。HD 是鏡頭的最高層：`MediaTransport.setTopLayer` 用 `setParameters` 開關 `f` 層（關＝最高 360p），HD 開著時 `RoomMedia` 每 5 秒經 `MediaTransport.getUplink` 讀 `qualityLimitationReason` 與 `availableOutgoingBitrate`，上行不夠就暫停 HD 並稍後再試（`src/media/uplink.ts`）。純音訊模式（`RoomMedia.setAudioOnly`）退訂所有別人的視訊、自己的鏡頭送 null；聲音照常。靜音中講話提醒用麥克風的 `clone()` 在本機分析，什麼都不送。都只在瀏覽器裡，RoomDO 不參與（`muted` 照常回報）。
+**發送端的品質設定（H3）**：麥克風的噪音抑制、回音消除、自動增益是 `getUserMedia` 約束（`src/media/audioProcessing.ts`），通話中先 `applyConstraints`、瀏覽器不肯改就重開麥克風再 `replaceTrack`（不重新協商）。HD 是鏡頭的最高層：`MediaTransport.setTopLayer` 用 `setParameters` 開關 `f` 層（關＝最高 360p），HD 開著時 `RoomMedia` 每 5 秒從最新的統計樣本（H2，下一段）讀 `qualityLimitationReason` 與 `availableOutgoingBitrate`，上行不夠就暫停 HD 並稍後再試（`src/media/uplink.ts`）。純音訊模式（`RoomMedia.setAudioOnly`）退訂所有別人的視訊、自己的鏡頭送 null；聲音照常。靜音中講話提醒用麥克風的 `clone()` 在本機分析，什麼都不送。都只在瀏覽器裡，RoomDO 不參與（`muted` 照常回報）。
+
+**統計、訊號格與頻寬自適應（H2）**：`RoomMedia` 每 2 秒讀一次 `MediaTransport.getStats()`（全部的統計只有這一條路：免費額度回報、HD 上行檢查也用它），`src/media/stats.ts` 算出每條軌的位元率、丟包、卡頓，`src/media/quality.ts` 判好／普通／差。自己的名牌用自己的判斷，別人的由各自的瀏覽器經 `signal`（協定 v14，變了才送、最多每 5 秒，RoomDO 限速）放進 `Member.signal`。「更多 › 連線統計」是 lazy 載入的面板，讀 `StatsStore`（不經 React 狀態，面板關著時沒有重繪）。`src/media/adaptation.ts` 兩個純狀態機：下行有丟包時先降選層預算、再退訂講話者／釘選以外的鏡頭、最後建議 H3 的純音訊；上行受限時用 `setTopLayer` 關最高層；聲音不動。判斷都在瀏覽器，RoomDO 只轉訊號格的等級。細節與實測在 ADR-001「統計與頻寬自適應」。
 
 ## 4. 資料流：一個人進房
 

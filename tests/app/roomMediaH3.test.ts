@@ -145,7 +145,9 @@ describe('RoomMedia: HD (e6-t04)', () => {
     vi.useFakeTimers()
     const sfu = new FakeSfu()
     let now = 0
-    const alice = member(sfu, { now: () => now, uplinkSampleMs: UPLINK_SAMPLE_MS })
+    // The HD check alone: with the bandwidth adaptation on (H2, e2-t15), a camera limited for
+    // bandwidth loses its top layer after 10 s, before the HD check's warm-up is over
+    const alice = member(sfu, { now: () => now, uplinkSampleMs: UPLINK_SAMPLE_MS, adapt: false })
     await alice.media.start({ mic: null, cam: fakeTrack('video') })
     const name = camName(alice)
     alice.transport.uplink = { availableOutgoingBitrate: 600_000, limitation: 'bandwidth' }
@@ -168,23 +170,24 @@ describe('RoomMedia: HD (e6-t04)', () => {
     await alice.media.close()
   })
 
-  it('keeps HD with a good uplink, and does not sample with HD off', async () => {
+  it('keeps HD with a good uplink, and does not judge it with HD off', async () => {
     vi.useFakeTimers()
     const sfu = new FakeSfu()
     let now = 0
     const alice = member(sfu, { now: () => now, uplinkSampleMs: UPLINK_SAMPLE_MS })
     await alice.media.start({ mic: null, cam: fakeTrack('video') })
-    const uplink = vi.spyOn(alice.transport, 'getUplink')
     for (let i = 0; i < 10; i++) {
       now += UPLINK_SAMPLE_MS
       await vi.advanceTimersByTimeAsync(UPLINK_SAMPLE_MS)
     }
     expect(alice.media.getState().hdLimited).toBe(false)
-    expect(uplink).toHaveBeenCalled()
     await alice.media.setHd(false)
-    uplink.mockClear()
-    for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(UPLINK_SAMPLE_MS)
-    expect(uplink).not.toHaveBeenCalled()
+    alice.transport.uplink = { availableOutgoingBitrate: 500_000, limitation: 'none' }
+    for (let i = 0; i < 10; i++) {
+      now += UPLINK_SAMPLE_MS
+      await vi.advanceTimersByTimeAsync(UPLINK_SAMPLE_MS)
+    }
+    expect(alice.media.getState().hdLimited).toBe(false)
     await alice.media.close()
   })
 

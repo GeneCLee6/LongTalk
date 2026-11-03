@@ -107,6 +107,13 @@ test('the room, its panels, menus and dialogs have no axe violations', async ({
   await page.keyboard.press('Escape')
   await expect(settings).toHaveCount(0)
 
+  // 更多 › 連線統計 (H2): no Realtime SFU here, so it says it is collecting
+  await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
+  await page.getByRole('menuitem', { name: strings.stats.menu }).click()
+  await expect(page.getByRole('complementary', { name: strings.stats.title })).toBeVisible()
+  await expectNoViolations(page, 'stats panel')
+  await page.getByRole('button', { name: strings.stats.close }).click()
+
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Shift+?')
   await expect(page.getByRole('dialog', { name: strings.shortcuts.title })).toBeVisible()
@@ -133,6 +140,11 @@ test('the phone room and its drawers have no axe violations', async ({ browser }
   await page.getByRole('menuitem', { name: strings.settings.menu }).click()
   await expect(page.getByRole('dialog', { name: strings.settings.title })).toBeVisible()
   await expectNoViolations(page, 'phone settings drawer')
+  await page.keyboard.press('Escape')
+  await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
+  await page.getByRole('menuitem', { name: strings.stats.menu }).click()
+  await expect(page.getByRole('dialog', { name: strings.stats.title })).toBeVisible()
+  await expectNoViolations(page, 'phone stats drawer')
   await page.keyboard.press('Escape')
   await toolbar.getByRole('button', { name: /^聊天/ }).click()
   await expect(page.getByRole('dialog')).toBeVisible()

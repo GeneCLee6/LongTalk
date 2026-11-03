@@ -9,6 +9,7 @@ import {
   type LocalTracks,
   type RoomMediaState,
 } from './RoomMedia.ts'
+import { StatsStore } from './statsStore.ts'
 import { VideoDemandStore } from './videoDemand.ts'
 
 export interface UseRoomMediaOptions {
@@ -50,6 +51,14 @@ export interface RoomMediaHandle extends RoomMediaState {
    * (VideoDemandContext), RoomMedia picks layers from it
    */
   demand: VideoDemandStore
+  /** The latest connection statistics, for the stats panel (e2-t14) */
+  stats: StatsStore
+  /**
+   * The cameras to keep, by trackKey, most important first, should the downlink have to stop
+   * receiving cameras (e2-t15): the ones chosen (a pin, a spotlight), then the speakers (the big
+   * tile, whoever speaks)
+   */
+  setVideoPriority: (chosen: readonly string[], speakers: readonly string[]) => void
   /**
    * 純音訊模式 on or off (e6-t04): no video received, our camera not sent. Kept across sessions;
    * `audioOnly` follows it at once. For the settings panel and anything else that decides it
@@ -58,6 +67,7 @@ export interface RoomMediaHandle extends RoomMediaState {
   setAudioOnly: (on: boolean) => void
 }
 
+const NO_KEYS: readonly string[] = []
 const noSubscribe = () => () => {}
 const idle = () => idleRoomMedia
 
@@ -80,6 +90,7 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
   })
   // One store for the page's lifetime: tiles keep reporting into it across sessions
   const [demand] = useState(() => new VideoDemandStore())
+  const [stats] = useState(() => new StatsStore())
   // Read when a run starts, without restarting it when they change
   const latest = useRef(options)
   useEffect(() => {
@@ -97,6 +108,7 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
       iceConfig: () => latest.current.iceConfig?.() ?? Promise.resolve(null),
       send: (message) => latest.current.send(message),
       demand,
+      stats,
       audioOnly: mode.current.audioOnly,
       hd: mode.current.hd,
     })
@@ -107,8 +119,9 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
       unwatch()
       void run.close()
       setMedia((current) => (current === run ? null : current))
+      stats.set(null)
     }
-  }, [enabled, ready, you, demand])
+  }, [enabled, ready, you, demand, stats])
 
   // A tab in the background shows nothing: every received video drops to its lowest layer
   useEffect(() => {
@@ -149,6 +162,23 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
     media?.setDesired(desired)
   }, [media, desired])
 
+  // The cameras to keep through a cut (e2-t15): the page knows them only after the tiles are
+  // placed, so it hands them over, and a new run gets the latest
+  const priority = useRef<{ chosen: readonly string[]; speakers: readonly string[] }>({
+    chosen: NO_KEYS,
+    speakers: NO_KEYS,
+  })
+  const setVideoPriority = useCallback(
+    (chosen: readonly string[], speakers: readonly string[]) => {
+      priority.current = { chosen, speakers }
+      media?.setVideoPriority(chosen, speakers)
+    },
+    [media],
+  )
+  useEffect(() => {
+    media?.setVideoPriority(priority.current.chosen, priority.current.speakers)
+  }, [media])
+
   const usage = view?.usage ?? 'normal'
   useEffect(() => {
     media?.setUsage(usage)
@@ -163,7 +193,7 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
   const retry = useCallback(() => media?.retry(), [media])
   // The wish shows at once, before (or without) a running session
   return useMemo(
-    () => ({ ...state, audioOnly, hd, retry, demand, setAudioOnly }),
-    [state, audioOnly, hd, retry, demand],
+    () => ({ ...state, audioOnly, hd, retry, demand, stats, setAudioOnly, setVideoPriority }),
+    [state, audioOnly, hd, retry, demand, stats, setVideoPriority],
   )
 }

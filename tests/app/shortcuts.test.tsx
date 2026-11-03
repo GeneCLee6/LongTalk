@@ -202,6 +202,7 @@ class RoomSocket {
           reconnecting: false,
           tracks: [],
           hand: null,
+          signal: null,
         },
         a: {
           id: 'a',
@@ -211,6 +212,7 @@ class RoomSocket {
           reconnecting: false,
           tracks: [],
           hand: null,
+          signal: null,
         },
       },
       waiting: {},

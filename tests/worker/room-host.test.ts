@@ -173,6 +173,7 @@ const member = (
   reconnecting,
   tracks: [],
   hand: null,
+  signal: null,
 })
 
 describe('RoomHost', () => {

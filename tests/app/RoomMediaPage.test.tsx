@@ -24,6 +24,8 @@ const SLOW = { timeout: 5000 }
 
 let sfu: FakeSfu
 let weiTracks: MemberTrack[]
+/** Wei's connection as Wei's browser reported it (H2) */
+let weiSignal: 'good' | 'fair' | 'poor' | null
 let usage: UsageState
 /** Who shares when we join (D1) */
 let roomShare: { memberId: string; since: number } | null
@@ -52,7 +54,14 @@ class RoomSocket {
     const state = {
       room: { id: ROOM_ID, createdAt: 1, share: roomShare },
       members: {
-        w: { id: 'w', name: 'Wei', joinedAt: 1, reconnecting: false, tracks: weiTracks },
+        w: {
+          id: 'w',
+          name: 'Wei',
+          joinedAt: 1,
+          reconnecting: false,
+          tracks: weiTracks,
+          signal: weiSignal,
+        },
         a: { id: 'a', name: 'Gene', joinedAt: 2, reconnecting: false, tracks: [] },
       },
       usage,
@@ -117,6 +126,7 @@ function visitRoom(mediaDevices: MediaDevicesLike | null = null) {
 beforeEach(() => {
   sfu = new FakeSfu()
   weiTracks = []
+  weiSignal = null
   usage = 'normal'
   roomShare = null
   sockets.length = 0
@@ -406,6 +416,30 @@ describe('room page screen sharing (D1)', () => {
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: '接手分享' }),
     )
     await waitFor(() => expect(sockets.at(-1)!.sent).toContainEqual({ t: 'share', takeOver: true }))
+  })
+})
+
+describe('room page: signal and connection stats (H2, e2-t13, e2-t14)', () => {
+  it('shows the level another member reports on their nameplate', async () => {
+    await publishWei(['mic'])
+    weiSignal = 'poor'
+    visitRoom()
+    const grid = await screen.findByRole('region', { name: '會議室畫面' }, SLOW)
+    const tile = within(grid).getByRole('figure', { name: 'Wei' })
+    expect(within(tile).getByRole('img', { name: '訊號差' })).toBeInTheDocument()
+  })
+
+  it('opens 連線統計 from 更多 beside the stage, and closes it', async () => {
+    await publishWei(['mic'])
+    visitRoom()
+    await screen.findByRole('region', { name: '會議室畫面' }, SLOW)
+    fireEvent.click(screen.getByRole('button', { name: '更多' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '連線統計' }))
+    const panel = await screen.findByRole('complementary', { name: '連線統計' })
+    // The panel is its own chunk; then it shows the first sample, or that it is collecting
+    await waitFor(() => expect(panel).toHaveTextContent(/正在收集連線資料|你的連線/), SLOW)
+    fireEvent.click(within(panel).getByRole('button', { name: '關閉連線統計' }))
+    expect(screen.queryByRole('complementary', { name: '連線統計' })).toBeNull()
   })
 })
 

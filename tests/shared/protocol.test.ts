@@ -36,6 +36,7 @@ const state = {
       reconnecting: false,
       tracks: [],
       hand: null,
+      signal: null,
     },
   },
   waiting: {},

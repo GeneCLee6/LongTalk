@@ -15,7 +15,6 @@ import {
   withStartBitrate,
   withTopLayer,
 } from './encoding.ts'
-import { readUplink } from './uplink.ts'
 import {
   MediaTransportError,
   trackKey,
@@ -30,12 +29,12 @@ import {
   type PublishedTrack,
   type RemoteTrack,
   type SubscribeOptions,
-  type TrackRef,
   type TrackKind,
+  type TrackRef,
   type TransportStats,
   type Unsubscribe,
-  type UplinkStats,
 } from './MediaTransport.ts'
+import { readStatsReport } from './stats.ts'
 
 // MediaTransport over Cloudflare Realtime SFU (docs/adr-001-media-layer.md). One SFU session and
 // one RTCPeerConnection per participant: publishing pushes local tracks into the session,
@@ -47,7 +46,9 @@ import {
 // credentials from the Worker (e2-t07, ConnectOptions) and refreshed ones (setIceServers);
 // `disconnected` is reported as `reconnecting` and `failed` as `failed`, and RoomMedia rebuilds
 // the session (e2-t08). H1: cameras and screens go out in simulcast layers (e2-t11, encoding.ts)
-// and each subscription asks for the layer its tile needs (e2-t12, setPreferredLayer).
+// and each subscription asks for the layer its tile needs (e2-t12, setPreferredLayer). H2: the
+// connection's statistics per track (e2-t13, getStats → media/stats.ts) and turning off the top
+// layers we send when the uplink cannot carry them (e2-t15, setTopLayer from H3).
 //
 // Negotiation rules, learned in rooms of three or more (docs/adr-001-media-layer.md):
 // - one SDP exchange at a time per session (the queue); an exchange is over only once the SFU's
@@ -351,48 +352,22 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     await sender.setParameters({ ...params, encodings: withTopLayer(params.encodings, kind, top) })
   }
 
-  async getUplink(trackName: string): Promise<UplinkStats> {
-    const { pc } = this.#require()
-    const transceiver = this.#published.get(trackName)
-    if (!transceiver) throw new MediaTransportError('not_found', `Not published: ${trackName}`)
-    const entries = (report: RTCStatsReport) => {
-      const list: Record<string, unknown>[] = []
-      report.forEach((entry: Record<string, unknown>) => list.push(entry))
-      return list
-    }
-    const own = entries(await transceiver.sender.getStats())
-    const uplink = readUplink(own)
-    if (uplink.availableOutgoingBitrate !== null) return uplink
-    return readUplink(own, entries(await pc.getStats()))
-  }
-
   async getStats(): Promise<TransportStats> {
     const { pc } = this.#require()
     const report = await pc.getStats()
-    const stats: TransportStats = {
-      rttMs: null,
-      usingRelay: false,
-      bytesSent: 0,
-      bytesReceived: 0,
+    // Which track each mid carries: the report only knows mids (media/stats.ts)
+    const published = new Map<string, { trackName: string; kind: TrackKind }>()
+    for (const [trackName, transceiver] of this.#published) {
+      const kind = this.#publishedKinds.get(trackName)
+      if (transceiver.mid && kind) published.set(transceiver.mid, { trackName, kind })
     }
-    const byId = new Map<string, Record<string, unknown>>()
-    report.forEach((entry: Record<string, unknown>) => byId.set(String(entry.id), entry))
-    for (const entry of byId.values()) {
-      if (
-        entry.type !== 'candidate-pair' ||
-        entry.nominated !== true ||
-        entry.state !== 'succeeded'
-      ) {
-        continue
-      }
-      if (typeof entry.currentRoundTripTime === 'number')
-        stats.rttMs = entry.currentRoundTripTime * 1000
-      stats.bytesSent = Number(entry.bytesSent ?? 0)
-      stats.bytesReceived = Number(entry.bytesReceived ?? 0)
-      const local = byId.get(String(entry.localCandidateId))
-      stats.usingRelay = local?.candidateType === 'relay'
+    const subscribed = new Map<string, TrackRef>()
+    for (const { mid, sessionId, trackName } of this.#subscriptions.values()) {
+      subscribed.set(mid, { sessionId, trackName })
     }
-    return stats
+    const entries: Record<string, unknown>[] = []
+    report.forEach((entry: Record<string, unknown>) => entries.push(entry))
+    return readStatsReport(entries, { published, subscribed })
   }
 
   setIceServers(iceServers: RTCIceServer[]): void {

@@ -1,7 +1,7 @@
 // The uplink check for HD (e6-t04, AC-6.4: 「上行不足不允許」). With HD on a camera sends its
 // 720p layer too (encoding.ts SIMULCAST: about 1.7 Mbps for the three layers); on a thin uplink
 // that only starves the other layers and the microphone. RoomMedia samples the camera's uplink
-// (MediaTransport.getUplink) every UPLINK_SAMPLE_MS while HD is on and sent, and turns the 720p
+// (from RoomMedia's stats sample, H2: one getStats() path) every UPLINK_SAMPLE_MS while HD is on and sent, and turns the 720p
 // layer off when several samples in a row say the uplink is short:
 //
 // - the browser limits the camera for bandwidth (`qualityLimitationReason`), or
@@ -12,7 +12,7 @@
 // estimate cannot show a better uplink (the browser only probes up to what it is asked to send),
 // so RoomMedia tries HD again after UPLINK_RETRY_MS, longer each time it is held back again.
 // Pure functions: no timers, no React.
-import type { QualityLimitation, UplinkStats } from './MediaTransport.ts'
+import type { UplinkStats } from './MediaTransport.ts'
 
 /**
  * Below this estimate the camera's 720p layer is not worth sending: the three layers' caps add
@@ -60,49 +60,3 @@ export function nextUplinkCheck(
 /** The wait before trying HD again after it was held back `times` times in a row */
 export const uplinkRetryWait = (times: number): number =>
   Math.min(UPLINK_RETRY_MS * 2 ** Math.max(0, times - 1), UPLINK_RETRY_MAX_MS)
-
-const LIMITATION_ORDER: readonly QualityLimitation[] = ['none', 'other', 'cpu', 'bandwidth']
-
-const asLimitation = (value: unknown): QualityLimitation | null =>
-  value === 'none' || value === 'bandwidth' || value === 'cpu'
-    ? value
-    : typeof value === 'string'
-      ? 'other'
-      : null
-
-/**
- * Reads a sender's stats report (RTCRtpSender.getStats, which also carries the transport's
- * candidate pair) and, where the sender's report has no pair, the PeerConnection's: the worst
- * limitation across the outbound streams that are sending, and the selected pair's estimate
- */
-export function readUplink(
-  senderReport: Iterable<Record<string, unknown>>,
-  pcReport: Iterable<Record<string, unknown>> = [],
-): UplinkStats {
-  let limitation: QualityLimitation | null = null
-  let available: number | null = null
-  const pairBitrate = (entry: Record<string, unknown>) =>
-    entry.type === 'candidate-pair' &&
-    entry.nominated === true &&
-    entry.state === 'succeeded' &&
-    typeof entry.availableOutgoingBitrate === 'number'
-      ? entry.availableOutgoingBitrate
-      : null
-  for (const entry of senderReport) {
-    if (entry.type === 'outbound-rtp' && entry.kind === 'video' && entry.active !== false) {
-      const reason = asLimitation(entry.qualityLimitationReason)
-      if (
-        reason !== null &&
-        (limitation === null ||
-          LIMITATION_ORDER.indexOf(reason) > LIMITATION_ORDER.indexOf(limitation))
-      ) {
-        limitation = reason
-      }
-    }
-    available ??= pairBitrate(entry)
-  }
-  if (available === null) {
-    for (const entry of pcReport) available ??= pairBitrate(entry)
-  }
-  return { availableOutgoingBitrate: available, limitation }
-}

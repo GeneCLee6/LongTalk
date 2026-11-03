@@ -19,7 +19,6 @@ import {
 import {
   HD_MIN_UPLINK_BPS,
   nextUplinkCheck,
-  readUplink,
   startUplinkCheck,
   UPLINK_LOW_SAMPLES,
   UPLINK_RETRY_MAX_MS,
@@ -227,34 +226,5 @@ describe('the uplink check (e6-t04)', () => {
     expect(uplinkRetryWait(1)).toBe(UPLINK_RETRY_MS)
     expect(uplinkRetryWait(2)).toBe(UPLINK_RETRY_MS * 2)
     expect(uplinkRetryWait(20)).toBe(UPLINK_RETRY_MAX_MS)
-  })
-
-  it('reads the worst limitation and the selected pair’s estimate from a stats report', () => {
-    const sender = [
-      {
-        type: 'outbound-rtp',
-        kind: 'video',
-        rid: 'f',
-        active: false,
-        qualityLimitationReason: 'bandwidth',
-      },
-      { type: 'outbound-rtp', kind: 'video', rid: 'h', qualityLimitationReason: 'cpu' },
-      { type: 'outbound-rtp', kind: 'video', rid: 'q', qualityLimitationReason: 'none' },
-    ]
-    const pc = [
-      { type: 'candidate-pair', nominated: false, state: 'succeeded', availableOutgoingBitrate: 1 },
-      {
-        type: 'candidate-pair',
-        nominated: true,
-        state: 'succeeded',
-        availableOutgoingBitrate: 2_400_000,
-      },
-    ]
-    // The inactive layer's limitation does not count
-    expect(readUplink(sender, pc)).toEqual({
-      availableOutgoingBitrate: 2_400_000,
-      limitation: 'cpu',
-    })
-    expect(readUplink([])).toEqual({ availableOutgoingBitrate: null, limitation: null })
   })
 })

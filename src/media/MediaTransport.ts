@@ -66,14 +66,84 @@ export interface ConnectOptions {
   iceTransportPolicy?: RTCIceTransportPolicy
 }
 
-/** A snapshot of the connection's health; e2-t13 grows it into per-track stats */
+/**
+ * A snapshot of the connection's health (e2-t13): cumulative counters as getStats() reads them,
+ * per sent and received track. Rates and loss over an interval come from two snapshots
+ * (media/stats.ts sampleStats). Plain data: no RTCStats objects, no SDP, nothing secret.
+ */
 export interface TransportStats {
+  /** When it was read, ms (performance-style clock of the report, or Date.now()) */
+  timestamp: number
   /** Round-trip time to the SFU on the selected candidate pair */
   rttMs: number | null
   /** True when the selected candidate pair goes through TURN (AC-2.4) */
   usingRelay: boolean
+  /** The selected local candidate's type: host, srflx, prflx or relay; null before one is chosen */
+  candidateType: string | null
+  /** How the relay is reached (udp, tcp, tls) when usingRelay; otherwise the pair's protocol */
+  protocol: string | null
   bytesSent: number
   bytesReceived: number
+  /** The browser's estimate of the uplink, bits per second (Chrome); null when not reported */
+  availableOutgoingBitrate: number | null
+  /** One entry per published track */
+  outbound: OutboundTrackStats[]
+  /** One entry per subscription */
+  inbound: InboundTrackStats[]
+}
+
+/** One simulcast layer (or the only encoding) of a published video, or a published audio */
+export interface OutboundLayerStats {
+  /** The layer's rid (`f`／`h`／`q`); null for a single encoding */
+  rid: string | null
+  /** False once the sender stopped this layer (setTopLayer: HD off, or e2-t15) */
+  active: boolean
+  bytesSent: number
+  packetsSent: number
+  framesEncoded: number
+  width: number | null
+  height: number | null
+  fps: number | null
+  /** Why the encoder sends less than it would: none, bandwidth, cpu, other */
+  qualityLimitationReason: string | null
+}
+
+export interface OutboundTrackStats {
+  trackName: string
+  kind: TrackKind
+  codec: string | null
+  /** Summed over the layers */
+  bytesSent: number
+  packetsSent: number
+  /** What the SFU reports back (remote-inbound-rtp), summed over the layers */
+  packetsLost: number
+  /** The SFU's latest loss fraction for the track (0–1), the worst layer; null when unknown */
+  fractionLost: number | null
+  layers: OutboundLayerStats[]
+}
+
+export interface InboundTrackStats extends TrackRef {
+  media: 'audio' | 'video'
+  codec: string | null
+  bytesReceived: number
+  packetsReceived: number
+  packetsLost: number
+  /** Seconds, as the browser reports it */
+  jitter: number | null
+  width: number | null
+  height: number | null
+  fps: number | null
+  framesDecoded: number
+  framesDropped: number
+  freezeCount: number
+  /** Seconds */
+  totalFreezesDuration: number
+  /** Seconds summed over every emitted frame or sample (divide by jitterBufferEmittedCount) */
+  jitterBufferDelay: number
+  jitterBufferEmittedCount: number
+  /** Audio: samples the decoder made up for lost packets, and all samples */
+  concealedSamples: number
+  totalSamplesReceived: number
 }
 
 /**
@@ -82,7 +152,10 @@ export interface TransportStats {
  */
 export type QualityLimitation = 'none' | 'bandwidth' | 'cpu' | 'other'
 
-/** How a published video's uplink is doing (e6-t04: may it send HD) */
+/**
+ * How a published video's uplink is doing (e6-t04: may it send HD), read from the connection's
+ * statistics (media/stats.ts uplinkOf; one getStats() path for everything, H2)
+ */
 export interface UplinkStats {
   /** The browser's estimate of what it can send now, bits per second; null when not reported */
   availableOutgoingBitrate: number | null
@@ -164,9 +237,10 @@ export interface MediaTransport {
    */
   setTopLayer(trackName: string, top: Layer): Promise<void>
 
-  /** How a published video's uplink is doing (e6-t04); rejects with `not_found` like above */
-  getUplink(trackName: string): Promise<UplinkStats>
-
+  /**
+   * Reads the connection's statistics (e2-t13): one call to the PeerConnection's getStats(),
+   * summarised per track. RoomMedia polls it (STATS_POLL_MS); nothing else should.
+   */
   getStats(): Promise<TransportStats>
 
   /**

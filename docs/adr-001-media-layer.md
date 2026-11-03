@@ -174,7 +174,55 @@ interface MediaTransport {
 
 - 兩台不同的真實裝置（AC-2.6 要求；`DEPLOY.md` §5 第 20 步）。真鏡頭的畫面比假鏡頭難壓，同一層的位元率會比上面高，接近各層上限。
 - Safari 與 Firefox 的 simulcast 發布（rid 順序、層數）；Safari 拒絕時的退回一層只有單元測試。
-- 真正頻寬不足時的情況：`priorityOrdering: 'none'` 下 SFU 照送要的層，接收端會丟包；`asciibetical` 時看到的降層來自同一台機器的 CPU 負載，不是網路。H2 依統計降低預算後要再量一次。
+- 真正頻寬不足時的情況：`priorityOrdering: 'none'` 下 SFU 照送要的層，接收端會丟包；`asciibetical` 時看到的降層來自同一台機器的 CPU 負載，不是網路。H2 依丟包降低預算（下面「統計與頻寬自適應」），真的網路還沒量。
+
+## 統計與頻寬自適應（H2，2026-11-03，`e2-t13`、`e2-t14`、`e2-t15`，#31）
+
+### 一條統計路徑
+
+- `MediaTransport.getStats()` 讀一次 PeerConnection 的 `getStats()`，`src/media/stats.ts` `readStatsReport` 依 transceiver 的 mid 認出每條送出的軌（每個 rid 一層：解析度、幀率、`active`、`qualityLimitationReason`，加上 SFU 回報的 `remote-inbound-rtp` 丟包）與每條訂閱（位元率、丟包、jitter、解析度、幀率、`framesDropped`、`freezeCount`、jitter buffer、音訊隱藏樣本），選定的 candidate pair 給 RTT、直連或 TURN、候選類型與協定、`availableOutgoingBitrate`。不帶 SDP、token。`sampleStats` 用兩次讀數算這 2 秒的量（計數器倒退＝新的訂閱，當第一次）。
+- `RoomMedia` **每 2 秒讀一次**（`STATS_POLL_MS`），這是唯一的讀取：免費額度的 `stats`（每 10 秒）、名牌訊號格、統計面板（`StatsStore`，只有開著的面板訂閱，不讓整個會議室頁每 2 秒重繪）、自適應、H3 的 HD 上行檢查（原本的 `getUplink` 併進來，讀最新一份樣本）都用它。PR 預覽實測一次 `getStats()` 中位數 0.9 ms、p95 3 ms（4 人，Alice 收 3 鏡頭＋3 麥克風）。
+- **訊號格**：`src/media/quality.ts` 每份樣本判好／普通／差（下行、上行、RTT 取最差），名牌用最近三份裡第二差的（一次尖峰不會閃「差」）。別人看到的是對方自己判的：協定 v14 `signal`，變了才送、最多每 5 秒，RoomDO 存在 `Member.signal`（每人每 10 秒最多 3 次，多的直接丟；重新連線期間保留）。
+
+### 判斷
+
+- **下行「差」一定要有丟包**：影片或聲音這 2 秒丟包 ≥ 5 %（至少 50 個封包才算）就是差；隱藏音 ≥ 8 %、jitter buffer ≥ 400 ms、凍結 ≥ 600 ms 也要同時有 ≥ 1 % 丟包才算差，沒有就最多「普通」。理由：第一版在 CI（兩核心的 runner 上三個瀏覽器）把所有人的視訊停掉了：CPU 不夠時隱藏音、jitter buffer、凍結都會出現，卻一個封包都沒丟；降低接收對那種情況沒有幫助。凍結與幀率太低（< 層的一半）也可能是發布端的問題，同樣要有丟包才算。RTT 只影響訊號格，不觸發自適應。
+- **上行**：編碼器 `qualityLimitationReason` 是 `bandwidth`，或 SFU 回報丟包（影片 ≥ 10 %、聲音 ≥ 5 %）＝壓力；`cpu` 也是壓力，但**只會關鏡頭的 `f`**（720p 的編碼才貴；CI 上 CPU 受限好幾分鐘，再往下會把所有人壓到 180p）。
+
+### 下行：降層 → 停收 → 建議純音訊（`src/media/adaptation.ts` `DownlinkAdaptation`）
+
+1. 連續 2 次差：視訊預算（原本 3.4 Mbps，H1 的選層在預算內選）降到目前要求量的 60 %，不低於全部最低層的總和。小格先降（`chooseLayers`）。
+2. 全部已經最低層還差：**停收**釘選／聚光燈以外、大格與講話者以外的鏡頭（最多留 2 個），格子顯示首字、名牌說「視訊已暫停（網路不佳）」；分享畫面與所有聲音照收。Realtime 沒有暫停，所以是退訂，之後再訂閱。講話者每幾秒就換，第一版實測**每 3 秒退訂又訂閱一次**（兩邊各一次重新協商）：現在被留下的鏡頭在最後一次被列入後保留 15 秒，只有釘選／聚光燈能立刻搶位置。
+3. 還是差：提示條「網路不佳…切換成純音訊」，按了是 H3 的純音訊模式（`RoomMedia.setAudioOnly`；離開純音訊時自適應從頭開始）。不會自動切。
+- 每一步之後等 2 次（統計落後於變化）；連續 5 次好就往上一段（預算 ×1.6＋200 kbps），「普通」原地不動；升上去 20 秒內又差，下一次要等兩倍（最多 60 秒），在正常狀態 60 秒沒事就恢復 10 秒。
+
+### 上行：關最高層（`UplinkAdaptation`）
+
+- 壓力連續 5 次（10 秒）：鏡頭的 `f` 關掉（H3 的 `MediaTransport.setTopLayer`，和 HD 取兩者較低的），再 10 秒：分享的 `f`，再 10 秒：鏡頭的 `h`。連續 15 次（30 秒）都正常就一層層開回；開回 20 秒內又有壓力，下一次等兩倍（最多 2 分鐘）。**開回不看 `availableOutgoingBitrate`**：層關掉之後瀏覽器只探測到它在送的量，估計永遠不會顯示「夠」（實測 `f` 從此不回來；H3 對 HD 也發現同一件事）。
+
+### 實測（PR 預覽 #31，同一台電腦一個 headless Chrome 裡 4 人，假鏡頭 1280×720）
+
+**WebRTC 的流量在這裡沒辦法真的限速**：CDP 的 `Network.emulateNetworkConditions` 只管 HTTP，不管 WebRTC；Chrome 沒有可用的 WebRTC 限速 field trial；Windows 沒有 `tc`（clumsy／WinDivert 要系統管理員）。所以**改的是 app 讀到的數字**：init script 包住 `RTCPeerConnection.prototype.getStats`，在 Alice 的 `inbound-rtp` 加上 8 % 的 `packetsLost`、在 Bot1 的 `outbound-rtp` 填 `qualityLimitationReason: 'bandwidth'`；app 因此做的事（`tracks/update`、退訂、重新訂閱、`setParameters`）都打到真的 SFU 與真的 sender，再用沒包過的 `getStats()` 量實際的流量。量到的是控制路徑與時間，不是門檻對真實壅塞準不準。
+
+| 事件（Alice，3 人的鏡頭都在格狀） | 時間 |
+| --- | --- |
+| 丟包開始 → 「已降低畫質」（預算 720 kbps） | 4 秒 |
+| → 預算 384 kbps（全部 `q`，下行 1.14 → 0.56 Mbps） | 8 秒 |
+| → 停收 1 人的鏡頭（下行 ≈ 0.40 Mbps；留下 2 個） | 16 秒 |
+| → 建議純音訊的提示條 | 20 秒 |
+| 丟包期間的訂閱變動 | 停收 1 次；講話者換人 15 秒後換 1 次（第一版是每 3 秒一次） |
+| 丟包停止 → 回到停收 → 恢復收全部鏡頭 → 正常（3.4 Mbps） | 10 秒 → 22 秒 → 62 秒 |
+| Bot1 上行受限 → 鏡頭 `f` 關（`active: false`，0 kbps） | 10 秒（再 10 秒關 `h`，只剩 `q`） |
+| 受限結束 → `h` 開回 | 28 秒（`f` 再 30 秒；修正前因為等估計，從此不回來） |
+
+- 全程聲音不斷，沒有重建 session；CI 的三人 e2e（含 Carol 釘選後大格比條帶高）在 CPU 吃緊的 runner 上照常通過。
+- 原始數字：本機 scratchpad `multi/results/h2-*.json`（不進 repo）。
+
+### 沒有驗證的
+
+- **真的網路變差**（AC-2.7 要求兩台不同裝置）：門檻（5 % 丟包、10 秒、30 秒…）是依常見值訂的，`DEPLOY.md` §5 第 22 步用 Network Link Conditioner／clumsy 實測後再調。
+- Safari、Firefox 的統計欄位（`qualityLimitationReason`、`freezeCount`、`mid`、`active` 有的沒有）：沒有就當不知道，不會誤判成差，但也少了訊號。
+- 頻寬一直很低（例如 300 kbps）時下行會停在「建議純音訊」；音訊本身的頻寬（約 32–64 kbps × 人數）不在自適應裡。
 
 ## 後果
 
