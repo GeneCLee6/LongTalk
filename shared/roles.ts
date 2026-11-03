@@ -74,6 +74,11 @@ export const PERMISSIONS = {
   lockRoom: { who: STAFF, on: 'room', since: 'F2' },
   waitingRoom: { who: STAFF, on: 'room', since: 'F2' },
   admit: { who: STAFF, on: 'room', since: 'F2' },
+  /**
+   * Put one member in everyone's main area, or end it (G2, e4-t11). A room action, not a member
+   * one: any member may be spotlighted, the actor and the host included (no rank check)
+   */
+  spotlight: { who: STAFF, on: 'room', since: 'G2' },
   /** The room's password (F3, e1-t15) */
   setPassword: { who: ['host'], on: 'room', since: 'F3' },
   /** Who may annotate (J, E7 AC-7.3) and clearing everyone's drawings */

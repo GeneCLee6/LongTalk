@@ -20,6 +20,8 @@ export interface MenuItem {
   tone?: 'neutral' | 'danger'
   /** A choice among several (device menus): a radio item, checked when it is the current one */
   checked?: boolean
+  /** With `checked`: `radio` (the default, one of several) or `checkbox` (a switch on its own) */
+  kind?: 'radio' | 'checkbox'
   /** A heading shown before the first item of each section (e.g. 麥克風, 喇叭) */
   section?: string
 }
@@ -142,7 +144,13 @@ export function Menu({
             itemRefs.current[index] = el
           }}
           type="button"
-          role={item.checked === undefined ? 'menuitem' : 'menuitemradio'}
+          role={
+            item.checked === undefined
+              ? 'menuitem'
+              : item.kind === 'checkbox'
+                ? 'menuitemcheckbox'
+                : 'menuitemradio'
+          }
           aria-checked={item.checked}
           tabIndex={index === focusIndex ? 0 : -1}
           disabled={item.disabled && !item.hint}

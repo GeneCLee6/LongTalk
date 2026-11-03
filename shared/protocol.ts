@@ -79,6 +79,12 @@
 //    history and is a participant from then on; a denied one is closed with CloseCode.denied
 //    and its browser cannot ask again for DENY_COOLDOWN_MS. Turning the waiting room off admits
 //    everyone in it. Someone waiting WAIT_TIMEOUT_MS is closed with CloseCode.waitExpired.
+// 14. Spotlight (G2, e4-t11): `spotlight` with a member's id puts that member in everyone's main
+//    area (`RoomInfo.spotlight`); with null it ends the spotlight (worker/roles.ts `spotlight`:
+//    host or co-host; refused with `forbidden`, also for an id that is not a member in the room).
+//    One at a time: a new spotlight replaces the old. It ends when the member leaves or is
+//    removed, not while they reconnect. Each browser decides how to show it: a member's own pin
+//    (local, never sent) wins over the spotlight, and a share keeps the main area (shared/layout.ts).
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -93,6 +99,7 @@
 // v9 → v10 (F2): `RoomInfo.locked` / `waitingRoom`, `RoomView.waiting`, `lobby`, `host` actions
 //   `lock`, `waitingRoom`, `admit`, `admitAll`, `deny`, close codes `locked`, `denied`,
 //   `waitExpired`.
+// v10 → v11 (G2): `RoomInfo.spotlight`, `spotlight`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -103,7 +110,7 @@ import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 10
+export const PROTOCOL_VERSION = 11
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -192,6 +199,8 @@ export type RoomInfo = RoomInit & {
   locked: boolean
   /** Someone new waits until a host or co-host admits them (F2, e1-t10) */
   waitingRoom: boolean
+  /** The member a host or co-host put in everyone's main area (G2, e4-t11); null for nobody */
+  spotlight: string | null
 }
 
 /** The room's one screen share (D1, e3-t02) */
@@ -389,6 +398,9 @@ export type ShareMessage = { t: 'share'; takeOver: boolean }
 /** Stop sharing (the member's own share) */
 export type UnshareMessage = { t: 'unshare' }
 
+/** Spotlight a member for everyone, or (null) end the spotlight (G2, e4-t11; host or co-host) */
+export type SpotlightMessage = { t: 'spotlight'; memberId: string | null }
+
 /** A chat message to everyone in the room (D3); `text` is normalizeChatText's */
 export type ChatClientMessage = { t: 'chat'; text: string }
 
@@ -430,6 +442,7 @@ export type ClientMessage =
   | RenameRoomMessage
   | ShareMessage
   | UnshareMessage
+  | SpotlightMessage
 
 // ── POST /api/rooms ──────────────────────────────────────────────────────────────────────────
 
@@ -529,6 +542,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return typeof value.takeOver === 'boolean' ? { t: 'share', takeOver: value.takeOver } : null
     case 'unshare':
       return { t: 'unshare' }
+    case 'spotlight':
+      return value.memberId === null || isMemberId(value.memberId)
+        ? { t: 'spotlight', memberId: value.memberId }
+        : null
     case 'chat': {
       const text = normalizeChatText(value.text)
       return text === null ? null : { t: 'chat', text }

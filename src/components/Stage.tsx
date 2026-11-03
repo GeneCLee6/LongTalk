@@ -19,6 +19,7 @@ import {
   speakerLayout,
   tileAspect,
   type PagesInView,
+  type StripSide,
 } from '../../shared/layout.ts'
 import { strings } from '../strings.ts'
 import { color, media, motion, radius, space } from '../styles/tokens.ts'
@@ -27,7 +28,8 @@ import { TileVisibleContext, useReducedMotion } from './layoutContext.ts'
 
 /**
  * grid: the gallery (desktop); paged: four tiles a page, swiped sideways (a phone held upright);
- * speaker: the speaker big and the others in a strip (a phone held sideways)
+ * speaker: the speaker (or the pinned or spotlighted member) big and the others in a strip (a
+ * phone held sideways; the desktop's 演講者 from G2)
  */
 export type StageMode = 'grid' | 'paged' | 'speaker'
 
@@ -35,8 +37,10 @@ export interface StageProps {
   /** One tile per member, keyed */
   children: ReactNode
   mode?: StageMode
-  /** The speaker layout's big tile: an index into the children (pickSpeaker) */
+  /** The speaker layout's big tile: an index into the children (shared/layout.ts stageFocus) */
   speaker?: number
+  /** Where the speaker layout's strip goes: `bottom` on a desktop (G2), `auto` on phones */
+  stripSide?: StripSide
   /**
    * Someone shares the screen (e3-t05, e4-t08): the share tile takes the main area and every
    * child goes in the strip beside it, whatever the mode
@@ -81,12 +85,20 @@ const keyOf = (cell: Cells[number], i: number) => (cell as { key?: string | null
  * for the space the stage has, re-laid out on every resize. JS only picks sizes; CSS places the
  * cells and animates the change.
  */
-export function Stage({ children, mode = 'grid', speaker = 0, share }: StageProps) {
+export function Stage({
+  children,
+  mode = 'grid',
+  speaker = 0,
+  stripSide = 'auto',
+  share,
+}: StageProps) {
   const cells = Children.toArray(children)
   if (share) return <ShareStage share={share} cells={cells} />
   if (mode === 'paged') return <PagedStage cells={cells} />
   if (mode === 'speaker' && cells.length > 1) {
-    return <SpeakerStage cells={cells} speaker={clampPage(speaker, cells.length)} />
+    return (
+      <SpeakerStage cells={cells} speaker={clampPage(speaker, cells.length)} side={stripSide} />
+    )
   }
   return <GridStage cells={cells} />
 }
@@ -285,11 +297,20 @@ function PagedStage({ cells }: { cells: Cells }) {
 
 /**
  * A phone held sideways (e4-t07, PRD e4 「橫式自動切成演講者」): the speaker's tile as big as
- * fits, everyone else in a strip on the right that scrolls when they do not all fit
+ * fits, everyone else in a strip on the right that scrolls when they do not all fit. On a desktop
+ * (G2, e4-t10) the strip is a row under the speaker (`side` bottom).
  */
-function SpeakerStage({ cells, speaker }: { cells: Cells; speaker: number }) {
+function SpeakerStage({
+  cells,
+  speaker,
+  side,
+}: {
+  cells: Cells
+  speaker: number
+  side: StripSide
+}) {
   const { ref, size } = useContentSize<HTMLDivElement>()
-  const layout = speakerLayout({ count: cells.length, ...size })
+  const layout = speakerLayout({ count: cells.length, ...size, side })
   const measured = layout.main.width > 0
   const { strip } = layout
   const bottom = strip?.side === 'bottom'

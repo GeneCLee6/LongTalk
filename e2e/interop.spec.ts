@@ -17,7 +17,9 @@ import { strings } from '../src/strings.ts'
 // reaches POST /api/events). Before that, the waiting room and the lock (F2): the host turns the
 // waiting room on, a fourth browser joins and waits (the host is told, with a badge), the host
 // admits it and it sees and hears the room; then the host locks the room, everyone sees the
-// padlock, and a fifth browser is shown the locked screen at once. Runs against a
+// padlock, and a fifth browser is shown the locked screen at once. After the share, the stage
+// (G2): the host spotlights a member and everyone sees them big, another pins someone else for
+// herself only, and she hides her own tile and shows it again. Runs against a
 // deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
 // `e2e`).
 //
@@ -214,6 +216,9 @@ async function framesPerSecond(viewer: Member, other: Member): Promise<number> {
 
 /** The stage: data-mode is `share` while someone else's share is in the main area */
 const stage = (member: Member) => member.page.getByRole('region', { name: strings.room.grid })
+
+/** The speaker layout's big tile (G2: the spotlighted or pinned member) */
+const mainTile = (member: Member) => stage(member).locator('[data-speaker]')
 
 /** `sharer`'s screen as `viewer` sees it in the main area */
 const shareVideo = (viewer: Member, sharer: Member) =>
@@ -506,6 +511,63 @@ interop(
       await expect(
         alice.page.getByRole('figure', { name: strings.screenShare.region(carol.name) }),
       ).toHaveCount(0)
+    })
+
+    await interop.step(
+      'Alice (the host) spotlights Bob: everyone sees him big; Carol pins Alice for herself (G2)',
+      async () => {
+        await tile(alice, bob).hover()
+        await alice.page.getByRole('button', { name: strings.view.spotlight(bob.name) }).click()
+        for (const viewer of members) {
+          await expect(stage(viewer), `${viewer.name} has the speaker layout`).toHaveAttribute(
+            'data-mode',
+            'speaker',
+          )
+        }
+        await expect(
+          mainTile(carol).getByRole('figure', { name: bob.name, exact: true }),
+        ).toBeVisible()
+        await expect(mainTile(carol)).toContainText(strings.view.spotlightBadge)
+        await expect(bob.page.getByText(strings.view.spotlightOnYou)).toBeVisible()
+        // Carol's own pin wins on her screen only
+        await tile(carol, alice).hover()
+        await carol.page.getByRole('button', { name: strings.view.pin(alice.name) }).click()
+        await expect(
+          mainTile(carol).getByRole('figure', { name: alice.name, exact: true }),
+        ).toBeVisible()
+        await expect(
+          mainTile(alice).getByRole('figure', { name: bob.name, exact: true }),
+        ).toBeVisible()
+        await expect
+          .poll(() => framesPerSecond(carol, alice), {
+            message: "Carol decodes frames of Alice's camera in the main area",
+          })
+          .toBeGreaterThanOrEqual(VIDEO_FRAMES_PER_SECOND)
+        await carol.page.getByRole('button', { name: strings.view.unpin(alice.name) }).click()
+        await expect(
+          mainTile(carol).getByRole('figure', { name: bob.name, exact: true }),
+        ).toBeVisible()
+        // Alice ends it: everyone is back in the gallery
+        await tile(alice, bob).hover()
+        await alice.page.getByRole('button', { name: strings.view.unspotlight(bob.name) }).click()
+        for (const viewer of members)
+          await expect(stage(viewer)).toHaveAttribute('data-mode', 'grid')
+      },
+    )
+
+    await interop.step('Carol hides her own tile from 更多, then shows it again (G2)', async () => {
+      const ownTile = carol.page.getByRole('figure', {
+        name: `${carol.name}（${strings.common.you}）`,
+      })
+      await expect(ownTile).toBeVisible()
+      await toolbarButton(carol, strings.toolbar.more).click()
+      await carol.page.getByRole('menuitemcheckbox', { name: strings.view.hideSelf }).click()
+      await expect(ownTile).toHaveCount(0)
+      // Only on her screen
+      await expect(tile(bob, carol)).toBeVisible()
+      await toolbarButton(carol, strings.toolbar.more).click()
+      await carol.page.getByRole('menuitemcheckbox', { name: strings.view.hideSelf }).click()
+      await expect(ownTile).toBeVisible()
     })
 
     await interop.step(

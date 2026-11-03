@@ -1,3 +1,4 @@
+import { isLayoutChoice, type LayoutChoice } from '../../shared/layout.ts'
 import { isClientId, isSessionToken, normalizeName } from '../../shared/protocol.ts'
 
 // What the browser remembers between visits (AC-1.2, AC-4.2):
@@ -8,12 +9,16 @@ import { isClientId, isSessionToken, normalizeName } from '../../shared/protocol
 //   tab (or the next visit) joins as someone new instead of taking the first tab's place;
 // - this browser's own random id (F1), in localStorage: every `join` carries it, and a member the
 //   host removes is banned by it for 10 minutes. Without accounts nothing better identifies a
-//   browser; a private window, another browser or clearing the site's data gets a new one.
+//   browser; a private window, another browser or clearing the site's data gets a new one;
+// - how the stage looks (G2): the layout chosen on a desktop and 隱藏自己, in localStorage. Pins
+//   and 隱藏沒有視訊的人 are not remembered: they are for this meeting (someone hidden by the
+//   latter would otherwise be missing from the next meeting with no sign why).
 // Storage can be missing or throw (private mode, blocked cookies): then nothing is remembered.
 
 const NAME_KEY = 'longtalk.name'
 const DEVICES_KEY = 'longtalk.devices'
 const CLIENT_KEY = 'longtalk.client'
+const VIEW_KEY = 'longtalk.view'
 const tokenKey = (roomId: string) => `longtalk.session.${roomId}`
 
 function storage(kind: 'localStorage' | 'sessionStorage'): Storage | null {
@@ -109,4 +114,30 @@ export function loadDevices(): DeviceChoices {
 /** Remembers one choice, keeping the others */
 export function saveDevice(kind: keyof DeviceChoices, deviceId: string): void {
   write('localStorage', DEVICES_KEY, JSON.stringify({ ...loadDevices(), [kind]: deviceId }))
+}
+
+/** How the stage looks, remembered between meetings (G2, e4-t10, e4-t11) */
+export interface ViewPrefs {
+  layout: LayoutChoice
+  hideSelf: boolean
+}
+
+export const DEFAULT_VIEW: ViewPrefs = { layout: 'grid', hideSelf: false }
+
+export function loadView(): ViewPrefs {
+  try {
+    const saved: unknown = JSON.parse(read('localStorage', VIEW_KEY) ?? 'null')
+    if (typeof saved !== 'object' || saved === null) return DEFAULT_VIEW
+    const { layout, hideSelf } = saved as Record<string, unknown>
+    return {
+      layout: isLayoutChoice(layout) ? layout : DEFAULT_VIEW.layout,
+      hideSelf: typeof hideSelf === 'boolean' ? hideSelf : DEFAULT_VIEW.hideSelf,
+    }
+  } catch {
+    return DEFAULT_VIEW
+  }
+}
+
+export function saveView(view: ViewPrefs): void {
+  write('localStorage', VIEW_KEY, JSON.stringify(view))
 }
