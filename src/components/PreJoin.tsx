@@ -10,6 +10,7 @@ import { SelectField, TextField } from './Field.tsx'
 import { IconButton } from './IconButton.tsx'
 import { CamIcon, CamOffIcon, HourglassIcon, MicIcon, MicOffIcon, SoundIcon } from './icons.tsx'
 import { LanguageSelect } from './LanguageSelect.tsx'
+import { ThemeSelect } from './ThemeSelect.tsx'
 import { LevelMeter } from './LevelMeter.tsx'
 import { PermissionGuide, type PermissionGuideProps } from './PermissionGuide.tsx'
 import { VideoPreview } from './VideoPreview.tsx'
@@ -279,11 +280,20 @@ export function PreJoin(props: PreJoinProps) {
               : strings.prejoin.join}
         </Button>
         <Muted>{strings.prejoin.joinState(mic, cam)}</Muted>
-        <LanguageSelect />
+        <Preferences>
+          <LanguageSelect />
+          <ThemeSelect />
+        </Preferences>
       </Form>
     </Layout>
   )
 }
+
+const Preferences = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: ${space(2)} ${space(4)};
+`
 
 const Layout = styled.div`
   display: grid;

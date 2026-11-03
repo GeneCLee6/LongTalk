@@ -615,7 +615,7 @@ describe('lock and waiting room (F2, e1-t09 – e1-t11)', () => {
         .getAllByRole('listitem')
         .map((item) => item.getAttribute('aria-label')),
     ).toEqual(['阿明', '阿華'])
-    fireEvent.click(within(panel).getByRole('button', { name: '讓 阿明 進入會議室' }))
+    fireEvent.click(within(panel).getByRole('button', { name: '放行 阿明 進入會議室' }))
     expect(socket.sent.at(-1)).toBe('{"t":"host","action":"admit","memberId":"x"}')
     fireEvent.click(within(panel).getByRole('button', { name: '拒絕 阿華 進入' }))
     expect(socket.sent.at(-1)).toBe('{"t":"host","action":"deny","memberId":"y"}')

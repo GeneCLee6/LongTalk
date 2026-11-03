@@ -118,6 +118,7 @@ import { useKnownPassword } from '../room/useKnownPassword.ts'
 import { useSpeaking } from '../room/useSpeaking.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
 import { telemetry } from '../telemetry.ts'
+import { useAnnouncer } from '../components/LiveAnnouncer.tsx'
 import { LOCALES, getLocale, setLocale, strings } from '../strings.ts'
 import { color, font, fontSize, layer, radius, media, space } from '../styles/tokens.ts'
 
@@ -1063,9 +1064,10 @@ function Room({
     // opening it
     if (!local.cam.on && usage === 'audioOnly') {
       show(strings.usage.videoRefused, 'warn')
-      return
+      return false
     }
     void devices?.setOn('cam', !local.cam.on)
+    return true
   }
 
   const members = Object.values(state.view?.members ?? {})
@@ -1096,6 +1098,10 @@ function Room({
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
   const micBusy = !local.ready || local.mic.opening
+  // What a screen reader is told when nothing it is on changed (G5, e4-t14): a shortcut's result,
+  // push-to-talk, the media coming back
+  const announcer = useAnnouncer()
+  const { announce } = announcer
   const talking = useRoomShortcuts({
     enabled: inRoom,
     micOn: local.mic.on,
@@ -1106,10 +1112,12 @@ function Room({
         case 'mic':
           if (micBusy) return false
           void devices?.setOn('mic', !local.mic.on)
+          announce(strings.shortcuts.announceMic(!local.mic.on))
           return
         case 'cam':
           if (!local.ready || local.cam.opening) return false
-          toggleCam()
+          // Refused in an audio-only month: the toast says so instead
+          if (toggleCam()) announce(strings.shortcuts.announceCam(!local.cam.on))
           return
         case 'share':
           if (!screenShareSupported) return false
@@ -1138,6 +1146,17 @@ function Room({
       }
     },
   })
+
+  const talkingBefore = useRef(talking)
+  useEffect(() => {
+    if (talking === talkingBefore.current) return
+    talkingBefore.current = talking
+    announce(talking ? strings.shortcuts.talking : strings.shortcuts.talkingEnd)
+  }, [talking, announce])
+  const mediaReconnecting = inRoom && state.status === 'open' && media.status === 'reconnecting'
+  useEffect(() => {
+    if (mediaReconnecting) announce(strings.room.mediaReconnecting)
+  }, [mediaReconnecting, announce])
 
   if (gone || outcome) {
     return (
@@ -1295,6 +1314,7 @@ function Room({
                       key={member.id}
                       name={member.name}
                       you={you}
+                      role={member.role}
                       reconnecting={you ? selfReconnecting : member.reconnecting}
                       relayed={you && media.usingRelay}
                       video={videoOf(member)}
@@ -1339,13 +1359,12 @@ function Room({
                   {strings.common.retry}
                 </Button>
               )}
-              {talking && <Note role="status">{strings.shortcuts.talking}</Note>}
+              {/* Said by the announcer: a region added with its text is often not read */}
+              {talking && <Note>{strings.shortcuts.talking}</Note>}
               {inRoom && media.status === 'connecting' && (
                 <Note>{strings.room.mediaConnecting}</Note>
               )}
-              {inRoom && state.status === 'open' && media.status === 'reconnecting' && (
-                <Note role="status">{strings.room.mediaReconnecting}</Note>
-              )}
+              {mediaReconnecting && <Note>{strings.room.mediaReconnecting}</Note>}
               {mediaLost && (
                 <Alert role="alert">
                   <span>{strings.room.mediaLost}</span>
@@ -1530,6 +1549,7 @@ function Room({
         )}
       </div>
       <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
+      {announcer.region}
     </PhoneLayoutContext.Provider>
   )
 }

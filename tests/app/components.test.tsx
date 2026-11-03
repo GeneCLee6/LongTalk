@@ -54,7 +54,7 @@ describe('IconButton', () => {
       />,
     )
     const button = screen.getByRole('button', { name: '參與者（3 人）' })
-    expect(button).toHaveTextContent('3參與者')
+    expect(button.querySelector('[data-count]')).toHaveAttribute('data-count', '3')
   })
 })
 

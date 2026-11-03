@@ -1,6 +1,7 @@
 import styled, { keyframes } from 'styled-components'
 import { strings } from '../strings.ts'
 import { color, fontSize, layer, media, motion, radius, space } from '../styles/tokens.ts'
+import { AlertIcon, InfoIcon } from './icons.tsx'
 import type { ToastMessage, ToastTone } from './useToasts.ts'
 
 export interface ToastViewportProps {
@@ -15,6 +16,10 @@ export function ToastViewport({ toasts, onDismiss }: ToastViewportProps) {
       <Stack role="status" aria-live="polite">
         {toasts.map((toast) => (
           <Card key={toast.id} $tone={toast.tone}>
+            {/* The tone is the icon's shape too, not only the colour (G5, e4-t14) */}
+            <ToneIcon $tone={toast.tone}>
+              {toast.tone === 'neutral' ? <InfoIcon /> : <AlertIcon />}
+            </ToneIcon>
             <span>{toast.text}</span>
             <Close
               type="button"
@@ -77,6 +82,19 @@ const Card = styled.div<{ $tone: ToastTone }>`
   box-shadow: 0 8px 24px ${color.shadow};
   font-size: ${fontSize.small};
   animation: ${enter} ${motion.base} ease-out;
+`
+
+const ToneIcon = styled.span<{ $tone: ToastTone }>`
+  display: inline-flex;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: ${({ $tone }) => toneColor[$tone]};
+
+  svg {
+    width: 100%;
+    height: 100%;
+  }
 `
 
 const Close = styled.button`

@@ -13,7 +13,7 @@ export function LanguageSelect() {
   const locale = useLocale()
   const id = useId()
   return (
-    <Wrap>
+    <Preference>
       <GlobeIcon />
       <label htmlFor={id}>{strings.language.label}</label>
       <Select
@@ -29,11 +29,12 @@ export function LanguageSelect() {
           </option>
         ))}
       </Select>
-    </Wrap>
+    </Preference>
   )
 }
 
-const Wrap = styled.div`
+/** An icon, a label and a small select in a row: the language and the appearance switches */
+export const Preference = styled.div`
   display: flex;
   align-items: center;
   gap: ${space(2)};

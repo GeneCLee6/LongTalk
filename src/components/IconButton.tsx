@@ -58,7 +58,9 @@ export function IconButton({
     >
       <Icon aria-hidden="true">
         {icon}
-        {badge !== undefined && <Badge $warn={badgeTone === 'warn'}>{badge}</Badge>}
+        {/* The count is drawn by CSS, not text: the name already says it (「參與者（3 人）」), and
+            a visible 3 outside the name would fail WCAG 2.5.3's label-in-name check (G5) */}
+        {badge !== undefined && <Badge data-count={badge} $warn={badgeTone === 'warn'} />}
       </Icon>
       {showLabel && <Caption aria-hidden="true">{caption}</Caption>}
     </Wrapper>
@@ -139,10 +141,14 @@ const Badge = styled.span<{ $warn: boolean }>`
   padding: 0 ${space(1)};
   border-radius: ${radius.pill};
   background: ${({ $warn }) => ($warn ? color.warn : color.primary)};
-  color: ${({ $warn }) => ($warn ? color.bg : color.onPrimary)};
+  color: ${({ $warn }) => ($warn ? color.onWarn : color.onPrimary)};
   font-size: ${fontSize.badge};
   font-weight: 800;
   line-height: 18px;
   text-align: center;
   font-variant-numeric: tabular-nums;
+
+  &::after {
+    content: attr(data-count);
+  }
 `

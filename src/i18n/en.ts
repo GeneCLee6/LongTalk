@@ -1,4 +1,4 @@
-import type { Strings } from './types.ts'
+import type { Strings, TileState } from './types.ts'
 
 // The English dictionary (G1, e4-t15): the same keys as zh-TW.ts, which the `Strings` type
 // enforces. British/Australian spelling (colour, cancelled), curly apostrophes and quotes.
@@ -152,6 +152,10 @@ export const en: Strings = {
     section: 'Language',
     names: { 'zh-TW': '繁體中文', en: 'English' },
   },
+  theme: {
+    label: 'Appearance',
+    names: { system: 'Match system', light: 'Light', dark: 'Dark' },
+  },
   room: {
     title: (roomId: string) => `Room ${roomId}`,
     defaultName: (creator: string) => `${creator}’s room`,
@@ -177,6 +181,20 @@ export const en: Strings = {
     relayed: 'Through a relay server',
     micMuted: 'Microphone off',
     speaking: 'Speaking',
+    tileYou: (name: string) => `${name} (you)`,
+    tileState: (state: TileState) =>
+      [
+        state.host && 'host',
+        state.cohost && 'co-host',
+        state.micMuted ? 'microphone off' : 'microphone on',
+        state.camOff ? 'camera off' : 'camera on',
+        state.hand !== null && `hand raised, number ${state.hand}`,
+        state.pinned && 'pinned',
+        state.spotlighted && 'spotlight',
+        state.reconnecting && 'reconnecting',
+      ]
+        .filter(Boolean)
+        .join(', '),
   },
   stage: {
     pager: 'Pages',
@@ -354,7 +372,7 @@ export const en: Strings = {
     admit: 'Admit',
     deny: 'Deny',
     admitAll: 'Admit all',
-    admitLabel: (name: string) => `Let ${name} into the room`,
+    admitLabel: (name: string) => `Admit ${name} into the room`,
     denyLabel: (name: string) => `Deny ${name} entry`,
     waitingArrived: (name: string) => `${name} is in the waiting room`,
     waitingArrivedMany: (count: number) => `${count} people are in the waiting room`,
@@ -514,6 +532,11 @@ export const en: Strings = {
     layers: { socket: 'Room connection', media: 'Media connection' },
     none: '—',
     percent: (value: number) => `${Math.round(value * 100)}%`,
+    // 「92%（23／25）」: a share with its counts
+    ratio: (part: number, whole: number) =>
+      `${Math.round((part / whole) * 100)}% (${part}/${whole})`,
+    // Between the items of a list on the dashboard
+    listSeparator: ', ',
     daysTitle: 'Daily',
     day: 'Date (UTC)',
     recentErrors: 'Recent errors',
@@ -595,6 +618,9 @@ export const en: Strings = {
       close: 'Close the chat or participants',
     },
     talking: 'Talking while you hold…',
+    talkingEnd: 'Muted again',
+    announceMic: (on: boolean) => (on ? 'Microphone on' : 'Microphone off'),
+    announceCam: (on: boolean) => (on ? 'Camera on' : 'Camera off'),
     leaveTitle: 'Leave the meeting?',
     leaveBody: 'You can join again from the same link.',
     leave: 'Leave',

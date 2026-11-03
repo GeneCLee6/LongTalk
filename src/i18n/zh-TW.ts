@@ -1,6 +1,8 @@
 // The Traditional Chinese (Taiwan) dictionary: the default locale and the shape every other
 // dictionary must match (src/strings.ts derives the `Strings` type from this object, so a key
 // missing from en.ts is a type error). The product name is English only.
+import type { TileState } from './types.ts'
+
 export const zhTW = {
   appName: 'LongTalk',
   tagline: '開著就不會斷的會議室',
@@ -127,6 +129,11 @@ export const zhTW = {
     section: '語言',
     names: { 'zh-TW': '繁體中文', en: 'English' },
   },
+  // Light or dark (G5, AC-4.8): pages follow the choice, the room stays dark
+  theme: {
+    label: '外觀',
+    names: { system: '跟隨系統', light: '淺色', dark: '深色' },
+  },
   room: {
     title: (roomId: string) => `會議室 ${roomId}`,
     // The name a room has until the host renames it (e1-t05)
@@ -152,6 +159,21 @@ export const zhTW = {
     relayed: '經由轉送伺服器',
     micMuted: '麥克風已關',
     speaking: '正在說話',
+    // A tile's accessible name and description (G5, e4-t14): 「Ada（你）」, then its state
+    tileYou: (name: string) => `${name}（你）`,
+    tileState: (state: TileState) =>
+      [
+        state.host && '主持人',
+        state.cohost && '共同主持人',
+        state.micMuted ? '麥克風已關' : '麥克風開著',
+        state.camOff ? '鏡頭沒開' : '鏡頭開著',
+        state.hand !== null && `舉手，第 ${state.hand} 位`,
+        state.pinned && '已釘選',
+        state.spotlighted && '聚光燈',
+        state.reconnecting && '重新連線中',
+      ]
+        .filter(Boolean)
+        .join('，'),
   },
   // The stage on phones (e4-t07): pages of four tiles, the speaker layout
   stage: {
@@ -342,7 +364,8 @@ export const zhTW = {
     admit: '放行',
     deny: '拒絕',
     admitAll: '全部放行',
-    admitLabel: (name: string) => `讓 ${name} 進入會議室`,
+    // Starts with the button's own text (WCAG 2.5.3, G5)
+    admitLabel: (name: string) => `放行 ${name} 進入會議室`,
     denyLabel: (name: string) => `拒絕 ${name} 進入`,
     waitingArrived: (name: string) => `${name} 在等候室，等你放行`,
     waitingArrivedMany: (count: number) => `${count} 人在等候室，等你放行`,
@@ -510,6 +533,11 @@ export const zhTW = {
     layers: { socket: '房間連線', media: '媒體連線' },
     none: '—',
     percent: (value: number) => `${Math.round(value * 100)}%`,
+    // 「92%（23／25）」: a share with its counts
+    ratio: (part: number, whole: number) =>
+      `${Math.round((part / whole) * 100)}%（${part}／${whole}）`,
+    // Between the items of a list on the dashboard
+    listSeparator: '、',
     daysTitle: '每日統計',
     day: '日期（UTC）',
     recentErrors: '最近的錯誤',
@@ -596,6 +624,10 @@ export const zhTW = {
       close: '關閉聊天或參與者',
     },
     talking: '按住說話中…',
+    talkingEnd: '已恢復靜音',
+    // Said to a screen reader after M or V (G5): the button nobody is on changed
+    announceMic: (on: boolean) => (on ? '麥克風已開啟' : '麥克風已關閉'),
+    announceCam: (on: boolean) => (on ? '鏡頭已開啟' : '鏡頭已關閉'),
     leaveTitle: '要離開會議室嗎？',
     leaveBody: '離開後可以從同一個連結再加入。',
     leave: '離開',
