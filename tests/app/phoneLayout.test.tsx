@@ -168,7 +168,7 @@ describe('the phone toolbar and top bar', () => {
     canShareScreen: true,
     onToggleShare: vi.fn(),
     onToggleChat: vi.fn(),
-    onComingSoon: vi.fn(),
+    onToggleParticipants: vi.fn(),
     moreItems: [{ id: 'rename-self', label: strings.rename.self, onSelect: vi.fn() }],
     onLeave: vi.fn(),
     ...overrides,

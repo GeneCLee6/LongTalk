@@ -22,8 +22,10 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
   chatUnread?: number
   /** 聊天 pressed: open or close the chat */
   onToggleChat: () => void
-  /** A button whose feature is not there yet was pressed: say it is coming */
-  onComingSoon: (feature: string) => void
+  /** The participants list is open (desktop side panel or phone drawer, F1) */
+  participantsOpen?: boolean
+  /** 參與者 pressed: open or close the participants list */
+  onToggleParticipants: () => void
   /** What 更多 offers (rename the room, change my name, share the link); share comes first */
   moreItems: MenuItem[]
   /** Leave the room (on phones the top bar has the button instead) */
@@ -34,8 +36,8 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
  * The room's bottom toolbar (e4-t06, DESIGN.md §4.3): microphone and camera (MediaControls),
  * share, chat, participants, more, leave. Share works from D1 (e3-t03: while sharing it is
  * 停止分享, in red); chat from D3 (e5-t02: opens the side panel or drawer, with the unread count
- * as its badge); participants lands in F1: until then it is shown dimmed (aria-disabled) and a
- * press says it is coming.
+ * as its badge); participants from F1 (e1-t08: the same panel or drawer, with the member count
+ * as its badge).
  *
  * On a phone (e4-t07) it is one row of icons within a thumb's reach: microphone, camera, chat,
  * participants, more (DESIGN.md §4.3's fifth key, reactions, comes with E5; participants holds
@@ -55,7 +57,8 @@ export function Toolbar({
   chatOpen = false,
   chatUnread = 0,
   onToggleChat,
-  onComingSoon,
+  participantsOpen = false,
+  onToggleParticipants,
   moreItems,
   onLeave,
   ...media
@@ -79,11 +82,6 @@ export function Toolbar({
         }
       : null
   const more = shareItem ? [shareItem, ...moreItems] : moreItems
-  const soon = (feature: string) => ({
-    'aria-disabled': true,
-    title: strings.toolbar.comingSoon(feature),
-    onClick: () => onComingSoon(feature),
-  })
   return (
     <MediaControls {...media}>
       {canShareScreen && !phone && (
@@ -110,7 +108,8 @@ export function Toolbar({
         icon={<PeopleIcon />}
         badge={memberCount}
         showLabel
-        {...soon(strings.toolbar.participants)}
+        aria-expanded={participantsOpen}
+        onClick={onToggleParticipants}
       />
       {more.length > 0 && (
         <Menu

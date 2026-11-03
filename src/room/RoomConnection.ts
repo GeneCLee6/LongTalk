@@ -17,6 +17,7 @@ import {
   viewAsJson,
   type ClientMessage,
   type ErrorCode,
+  type NoticeMessage,
   type RoomView,
 } from '../../shared/protocol.ts'
 import { Backoff } from './backoff.ts'
@@ -28,9 +29,20 @@ import { Backoff } from './backoff.ts'
  *   one known)
  * - `lost`: gave up after RECONNECT_GRACE_MS; `retry()` tries again
  * - `notFound`, `full`, `outdated`, `replaced`: the server closed with that reason; final
+ * - `removed`: the host removed this member, or this browser is still banned (F1); final
+ * - `ended`: the host ended the meeting (F1); final
  */
 export type RoomStatus =
-  'connecting' | 'open' | 'reconnecting' | 'lost' | 'notFound' | 'full' | 'outdated' | 'replaced'
+  | 'connecting'
+  | 'open'
+  | 'reconnecting'
+  | 'lost'
+  | 'notFound'
+  | 'full'
+  | 'outdated'
+  | 'replaced'
+  | 'removed'
+  | 'ended'
 
 export interface RoomConnectionState {
   status: RoomStatus
@@ -57,10 +69,14 @@ export interface SocketLike {
   onclose: ((event: CloseEvent) => void) | null
 }
 
-/** Who joins: the name from the pre-join screen and the token from last time, if any */
+/**
+ * Who joins: the name from the pre-join screen, the token from last time, if any, and this
+ * browser's own id (session.ts loadClientId; what a removal bans, F1)
+ */
 export interface JoinAs {
   name: string
   token: string | null
+  client: string | null
 }
 
 export interface RoomConnectionOptions {
@@ -100,6 +116,10 @@ function finalStatus(code: number): RoomStatus | null {
       return 'outdated'
     case CloseCode.replaced:
       return 'replaced'
+    case CloseCode.removed:
+      return 'removed'
+    case CloseCode.ended:
+      return 'ended'
     default:
       return null
   }
@@ -125,6 +145,7 @@ export class RoomConnection {
   private readonly backoff: Backoff
   private name: string
   private token: string | null
+  private readonly client: string | null
   private socket: SocketLike | null = null
   private heartbeat: ReturnType<typeof setInterval> | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
@@ -147,6 +168,7 @@ export class RoomConnection {
   private readonly chatRate = new ChatRateLimit()
   private readonly listeners = new Set<() => void>()
   private readonly errorListeners = new Set<(code: ErrorCode) => void>()
+  private readonly noticeListeners = new Set<(notice: NoticeMessage) => void>()
 
   constructor(roomId: string, join: JoinAs, options: RoomConnectionOptions = {}) {
     const origin =
@@ -157,6 +179,7 @@ export class RoomConnection {
     this.backoff = options.backoff ?? new Backoff({ giveUpAfterMs: RECONNECT_GRACE_MS })
     this.name = join.name
     this.token = join.token
+    this.client = join.client
   }
 
   getState = (): RoomConnectionState => this.state
@@ -168,6 +191,15 @@ export class RoomConnection {
   onError = (listener: (code: ErrorCode) => void): (() => void) => {
     this.errorListeners.add(listener)
     return () => this.errorListeners.delete(listener)
+  }
+
+  /**
+   * A host did something to this member (`notice`: muted, camera off, share stopped, F1); returns
+   * a function that removes the listener
+   */
+  onNotice = (listener: (notice: NoticeMessage) => void): (() => void) => {
+    this.noticeListeners.add(listener)
+    return () => this.noticeListeners.delete(listener)
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -241,7 +273,7 @@ export class RoomConnection {
     const socket = this.createSocket(this.url)
     this.socket = socket
     socket.onopen = () => {
-      this.send({ t: 'join', name: this.name, token: this.token })
+      this.send({ t: 'join', name: this.name, token: this.token, client: this.client })
       this.heartbeat = setInterval(() => this.beat(socket), HEARTBEAT_INTERVAL_MS)
     }
     socket.onmessage = (event) => {
@@ -353,6 +385,10 @@ export class RoomConnection {
       }
       case 'error':
         for (const listener of this.errorListeners) listener(message.code)
+        return
+      case 'notice':
+        if (this.rev < 0) return
+        for (const listener of this.noticeListeners) listener(message)
         return
       case 'chat': {
         // Only after this socket's welcome (the history follows it)

@@ -10,8 +10,11 @@ import { strings } from '../src/strings.ts'
 // the sharer turns the sound off from the bar and the others hear silence; another takes over
 // after the question; the share stops from the bar and everyone is back in the gallery. Before
 // the media checks, chat (D3): one member sends a message with a link, the others see the unread
-// badge, open the chat and find it there. At the end (D4) one member leaves, sees the
-// after-leave screen and rates the call (the rating reaches POST /api/events). Runs against a
+// badge, open the chat and find it there. Then the host controls (F1): the host mutes a member
+// from the participants panel (the member is told, and its own browser turns the microphone
+// off), then removes it (the removed screen, and the same browser cannot join again at once). At
+// the end (D4) one member leaves, sees the after-leave screen and rates the call (the rating
+// reaches POST /api/events). Runs against a
 // deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
 // `e2e`).
 //
@@ -486,29 +489,77 @@ interop(
     })
 
     await interop.step(
-      'Carol leaves: the after-leave screen, a rating sent as telemetry, the others see her go (D4)',
+      'Alice (the host) mutes Carol from the participants panel: Carol is told and muted (F1)',
       async () => {
-        const rated = carol.page.waitForRequest(
+        await toolbarButton(alice, strings.toolbar.participantsCount(3)).click()
+        const panel = alice.page.getByRole('complementary', { name: strings.participants.title })
+        await panel.getByRole('button', { name: strings.participants.actions(carol.name) }).click()
+        await alice.page.getByRole('menuitem', { name: strings.participants.mute }).click()
+        await expect(
+          carol.page.getByText(
+            strings.hostNotice.muted(strings.hostNotice.actor(strings.participants.host, 'Alice')),
+          ),
+          'Carol sees who muted her',
+        ).toBeVisible()
+        // Her own browser turned the microphone off: the button now offers to unmute
+        await expect(toolbarButton(carol, strings.toolbar.micOff)).toBeVisible()
+        await expect(
+          tile(bob, carol).getByRole('img', { name: strings.room.micMuted }),
+        ).toBeVisible()
+        await expect.poll(() => audioPeak(bob, carol)).toBeLessThan(AUDIBLE)
+      },
+    )
+
+    await interop.step(
+      'Alice removes Carol: Carol sees the removed screen and cannot join again at once (F1)',
+      async () => {
+        const panel = alice.page.getByRole('complementary', { name: strings.participants.title })
+        await panel.getByRole('button', { name: strings.participants.actions(carol.name) }).click()
+        await alice.page.getByRole('menuitem', { name: strings.participants.remove }).click()
+        await alice.page
+          .getByRole('alertdialog', { name: strings.participants.removeTitle(carol.name) })
+          .getByRole('button', { name: strings.participants.removeConfirm })
+          .click()
+        await expect(
+          carol.page.getByRole('heading', { name: strings.left.removedTitle }),
+        ).toBeVisible()
+        await expect(carol.page.getByRole('button', { name: strings.left.rejoin })).toHaveCount(0)
+        for (const other of [alice, bob]) {
+          await expect(tile(other, carol), `${other.name} sees Carol go`).toHaveCount(0)
+        }
+        // The same browser, straight back through the pre-join screen: refused
+        await carol.page.goto(room.url)
+        await carol.page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill(carol.name)
+        await carol.page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
+        await expect(
+          carol.page.getByRole('heading', { name: strings.left.removedTitle }),
+        ).toBeVisible()
+        await expect(tile(alice, carol)).toHaveCount(0)
+      },
+    )
+
+    await interop.step(
+      'Bob leaves: the after-leave screen, a rating sent as telemetry, Alice sees him go (D4)',
+      async () => {
+        const rated = bob.page.waitForRequest(
           (request) =>
             request.method() === 'POST' &&
             new URL(request.url()).pathname === '/api/events' &&
             (request.postData() ?? '').includes('"rating"'),
         )
-        await toolbarButton(carol, strings.toolbar.leave).click()
-        await expect(carol.page.getByRole('heading', { name: strings.left.title })).toBeVisible()
-        await expect(carol.page.getByRole('button', { name: strings.left.rejoin })).toBeVisible()
-        await carol.page
+        await toolbarButton(bob, strings.toolbar.leave).click()
+        await expect(bob.page.getByRole('heading', { name: strings.left.title })).toBeVisible()
+        await expect(bob.page.getByRole('button', { name: strings.left.rejoin })).toBeVisible()
+        await bob.page
           .getByRole('button', { name: strings.left.scoreLabel(5, strings.left.scores[5]) })
           .click()
-        await expect(carol.page.getByRole('status')).toHaveText(strings.left.thanks)
+        await expect(bob.page.getByRole('status')).toHaveText(strings.left.thanks)
         const request = await rated
         expect(JSON.parse(request.postData() ?? '{}')).toEqual({
           events: expect.arrayContaining([{ type: 'rating', score: 5 }]),
         })
         expect((await request.response())?.status()).toBe(202)
-        for (const other of [alice, bob]) {
-          await expect(tile(other, carol), `${other.name} sees Carol leave`).toHaveCount(0)
-        }
+        await expect(tile(alice, bob), 'Alice sees Bob leave').toHaveCount(0)
       },
     )
   },

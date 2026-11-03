@@ -40,6 +40,7 @@ const quietDeps = (overrides: Partial<RoomHostDeps> = {}): RoomHostDeps => ({
     saveSchedule() {},
     saveChat() {},
     dropChat() {},
+    saveBans() {},
     clear() {},
   },
   now: () => 1000,

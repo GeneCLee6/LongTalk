@@ -80,3 +80,74 @@ const Close = styled.button`
     background: ${color.hover};
   }
 `
+
+export interface PanelTab {
+  id: string
+  label: string
+}
+
+export interface PanelTabsProps {
+  /** The switch's accessible name */
+  label: string
+  tabs: readonly PanelTab[]
+  selected: string
+  onSelect: (id: string) => void
+}
+
+/**
+ * The switch at the top of the side panel and the phone drawer between what they show (F1: chat
+ * and participants, the mockup's segmented control). Arrow keys move between the tabs.
+ */
+export function PanelTabs({ label, tabs, selected, onSelect }: PanelTabsProps) {
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const at = tabs.findIndex((tab) => tab.id === selected)
+    const next = tabs[(at + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]
+    onSelect(next.id)
+  }
+  return (
+    <Tabs role="tablist" aria-label={label} onKeyDown={onKeyDown}>
+      {tabs.map((tab) => (
+        <Tab
+          key={tab.id}
+          type="button"
+          role="tab"
+          aria-selected={tab.id === selected}
+          tabIndex={tab.id === selected ? 0 : -1}
+          $on={tab.id === selected}
+          onClick={() => onSelect(tab.id)}
+        >
+          {tab.label}
+        </Tab>
+      ))}
+    </Tabs>
+  )
+}
+
+const Tabs = styled.div`
+  display: flex;
+  gap: ${space(1)};
+  padding: ${space(2)} ${space(3)};
+  border-bottom: 1px solid ${color.line};
+`
+
+const Tab = styled.button<{ $on: boolean }>`
+  flex: 1;
+  padding: ${space(1.5)};
+  border: none;
+  border-radius: ${space(2)};
+  background: ${({ $on }) => ($on ? color.surface2 : 'transparent')};
+  color: ${({ $on }) => ($on ? color.fg : color.muted)};
+  font-size: ${fontSize.small};
+  font-weight: ${({ $on }) => ($on ? 700 : 400)};
+  cursor: pointer;
+
+  &:hover {
+    background: ${color.hover};
+  }
+  &:focus-visible {
+    outline: 2px solid ${color.focus};
+    outline-offset: -2px;
+  }
+`

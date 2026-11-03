@@ -86,10 +86,14 @@ function visit(path: string) {
   render(<App />)
 }
 
+const CLIENT = 'browser-id-0123456789'
+
 beforeEach(() => {
   vi.stubGlobal('WebSocket', RoomSocket)
   localStorage.clear()
   sessionStorage.clear()
+  // This browser's own id (F1), sent with every join
+  localStorage.setItem('longtalk.client', CLIENT)
 })
 
 afterEach(() => {
@@ -162,7 +166,7 @@ describe('joining a room', () => {
     expect(await screen.findByRole('heading', { name: `會議室 ${ROOM_ID}` })).toBeInTheDocument()
     const socket = RoomSocket.instances.at(-1)!
     expect(socket.url).toMatch(new RegExp(`/api/rooms/${ROOM_ID}/ws\\?v=${PROTOCOL_VERSION}$`))
-    expect(socket.sent[0]).toBe('{"t":"join","name":"小潔","token":null}')
+    expect(socket.sent[0]).toBe(`{"t":"join","name":"小潔","token":null,"client":"${CLIENT}"}`)
     expect(await screen.findByText('目前 2 人在線')).toBeInTheDocument()
     const grid = screen.getByRole('region', { name: '會議室畫面' })
     expect(within(grid).getByRole('figure', { name: '小潔（你）' })).toBeInTheDocument()
@@ -188,7 +192,7 @@ describe('joining a room', () => {
     expect(await screen.findByText('目前 2 人在線')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: '準備加入' })).toBeNull()
     expect(RoomSocket.instances.at(-1)!.sent[0]).toBe(
-      JSON.stringify({ t: 'join', name: 'Gene', token: TOKEN }),
+      JSON.stringify({ t: 'join', name: 'Gene', token: TOKEN, client: CLIENT }),
     )
   })
 
@@ -247,7 +251,9 @@ describe('joining a room', () => {
     fireEvent.click(screen.getByRole('button', { name: '加入' }))
     expect(await screen.findByText('目前 2 人在線')).toBeInTheDocument()
     // The session was forgotten on leaving: no token, so a new member
-    expect(RoomSocket.instances.at(-1)!.sent[0]).toBe('{"t":"join","name":"Gene","token":null}')
+    expect(RoomSocket.instances.at(-1)!.sent[0]).toBe(
+      `{"t":"join","name":"Gene","token":null,"client":"${CLIENT}"}`,
+    )
   })
 
   it('says the room closed (no rejoin) when it is gone after we were in it', async () => {
@@ -350,5 +356,90 @@ describe('chat in the room (D3, e5-t01, e5-t02)', () => {
     // The room refusing a message as too fast is said
     await push(socket, { t: 'error', code: 'rate_limited' })
     expect(screen.getByText('你傳得太快了，請等幾秒再傳。')).toBeInTheDocument()
+  })
+})
+
+describe('host controls in the room (F1, e1-t07, e1-t08)', () => {
+  const push = (socket: RoomSocket, frame: unknown) =>
+    act(() => socket.onmessage?.({ data: JSON.stringify(frame) }))
+  async function enter() {
+    stubApi()
+    localStorage.setItem('longtalk.name', 'Gene')
+    sessionStorage.setItem(`longtalk.session.${ROOM_ID}`, TOKEN)
+    visit(`/r/${ROOM_ID}`)
+    await screen.findByText('目前 2 人在線')
+    return RoomSocket.instances.at(-1)!
+  }
+
+  it('opens the participants in the side panel, switches to chat and back', async () => {
+    await enter()
+    fireEvent.click(screen.getByRole('button', { name: '參與者（2 人）' }))
+    const panel = screen.getByRole('complementary', { name: '參與者' })
+    const list = within(panel).getByRole('list', { name: '參與者名單' })
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((item) => item.getAttribute('aria-label')),
+    ).toEqual(['Gene', 'Wei'])
+    expect(within(panel).getByRole('tab', { name: '參與者 2' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    fireEvent.click(within(panel).getByRole('tab', { name: '聊天' }))
+    expect(screen.getByRole('complementary', { name: '聊天' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '參與者（2 人）' }))
+    expect(screen.getByRole('complementary', { name: '參與者' })).toBeInTheDocument()
+  })
+
+  it('sends the host controls: mute all, remove after asking, end after asking', async () => {
+    const socket = await enter()
+    fireEvent.click(screen.getByRole('button', { name: '參與者（2 人）' }))
+    const panel = screen.getByRole('complementary', { name: '參與者' })
+    fireEvent.click(within(panel).getByRole('button', { name: '全員靜音' }))
+    expect(socket.sent.at(-1)).toBe('{"t":"host","action":"muteAll"}')
+    expect(screen.getByText('已將所有人靜音')).toBeInTheDocument()
+    // Wei publishes nothing: only removing applies
+    fireEvent.click(within(panel).getByRole('button', { name: '對 Wei 的動作' }))
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['移出會議室'])
+    fireEvent.click(screen.getByRole('menuitem', { name: '移出會議室' }))
+    const ask = screen.getByRole('alertdialog', { name: '把 Wei 移出會議室？' })
+    fireEvent.click(within(ask).getByRole('button', { name: '移出' }))
+    expect(socket.sent.at(-1)).toBe('{"t":"host","action":"remove","memberId":"w"}')
+    fireEvent.click(within(panel).getByRole('button', { name: '結束會議' }))
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: '結束會議？' })).getByRole('button', {
+        name: '結束會議',
+      }),
+    )
+    expect(socket.sent.at(-1)).toBe('{"t":"host","action":"endMeeting"}')
+  })
+
+  it('says who muted us, and that only we can turn it back on', async () => {
+    const socket = await enter()
+    await push(socket, { t: 'notice', notice: 'muted', by: 'w' })
+    expect(
+      screen.getByText('主持人 Wei 將你靜音了。要說話時，請自己打開麥克風。'),
+    ).toBeInTheDocument()
+    await push(socket, { t: 'notice', notice: 'camOff', by: 'w' })
+    expect(
+      screen.getByText('主持人 Wei 關閉了你的鏡頭。要開鏡頭時，請自己再打開。'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the removed screen (no rejoin) when the host removes us', async () => {
+    const socket = await enter()
+    await act(async () => socket.onclose?.({ code: 4403 }))
+    expect(await screen.findByRole('heading', { name: '你已被移出會議室' })).toBeInTheDocument()
+    expect(screen.getByText(/10 分鐘內不能用這個瀏覽器再加入/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重新加入' })).toBeNull()
+    expect(sessionStorage.getItem(`longtalk.session.${ROOM_ID}`)).toBeNull()
+  })
+
+  it('shows the ended screen when the host ends the meeting', async () => {
+    const socket = await enter()
+    await act(async () => socket.onclose?.({ code: 4411 }))
+    expect(await screen.findByRole('heading', { name: '主持人已結束會議' })).toBeInTheDocument()
+    expect(screen.getByText(`「會議室 ${ROOM_ID}」已經結束，會議室也關閉了。`)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重新加入' })).toBeNull()
   })
 })
