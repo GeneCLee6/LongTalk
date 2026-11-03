@@ -569,6 +569,75 @@ describe('CloudflareRealtimeTransport', () => {
     expect(pc.signalingState).toBe('stable')
   })
 
+  it('turns the camera’s top layer off and on with setParameters, no SFU call (e6-t04)', async () => {
+    const { transport, pc, calls } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: 'answer' },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    await transport.connect()
+    const { trackName } = await transport.publish({ kind: 'video' } as MediaStreamTrack, {
+      kind: 'cam',
+      simulcast: true,
+    })
+    const sender = pc.transceivers[0].sender!
+    sender.getParameters = () => ({
+      transactionId: 't2',
+      encodings: [{ rid: 'f' }, { rid: 'h' }, { rid: 'q' }],
+    })
+    sender.setParameters.mockClear()
+    const before = calls.length
+    await transport.setTopLayer(trackName, 'medium')
+    expect(sender.setParameters).toHaveBeenCalledWith({
+      transactionId: 't2',
+      encodings: [
+        { rid: 'f', active: false },
+        { rid: 'h', active: true },
+        { rid: 'q', active: true },
+      ],
+    })
+    expect(calls.length).toBe(before)
+    await expect(transport.setTopLayer('nope', 'high')).rejects.toMatchObject({ code: 'not_found' })
+  })
+
+  it('reads a published camera’s uplink from its sender’s stats (e6-t04)', async () => {
+    const { transport, pc } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: 'answer' },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    await transport.connect()
+    const { trackName } = await transport.publish({ kind: 'video' } as MediaStreamTrack, {
+      kind: 'cam',
+    })
+    const sender = pc.transceivers[0].sender! as unknown as Record<string, unknown>
+    sender.getStats = async () =>
+      new Map([
+        [
+          'o',
+          { id: 'o', type: 'outbound-rtp', kind: 'video', qualityLimitationReason: 'bandwidth' },
+        ],
+        [
+          'p',
+          {
+            id: 'p',
+            type: 'candidate-pair',
+            nominated: true,
+            state: 'succeeded',
+            availableOutgoingBitrate: 900_000,
+          },
+        ],
+      ])
+    expect(await transport.getUplink(trackName)).toEqual({
+      availableOutgoingBitrate: 900_000,
+      limitation: 'bandwidth',
+    })
+  })
+
   it('summarises the selected candidate pair, including TURN use', async () => {
     const { transport } = setup({ 'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' } })
     await transport.connect()

@@ -408,3 +408,40 @@ describe('room page screen sharing (D1)', () => {
     await waitFor(() => expect(sockets.at(-1)!.sent).toContainEqual({ t: 'share', takeOver: true }))
   })
 })
+
+describe('room page: 純音訊模式 and 設定 (H3, e6-t04)', () => {
+  it('更多 › 純音訊模式 stops receiving the others’ video and restores it', async () => {
+    const wei = await publishWei(['mic', 'cam'])
+    visitRoom()
+    const grid = await screen.findByRole('region', { name: '會議室畫面' }, SLOW)
+    const tile = within(grid).getByRole('figure', { name: 'Wei' })
+    await waitFor(() => expect(within(tile).getByLabelText('Wei 的畫面')).toBeInTheDocument(), SLOW)
+    const ours = () => [...sfu.transports].filter((t) => t !== wei).at(-1)!
+    fireEvent.click(screen.getByRole('button', { name: '更多' }))
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: '純音訊模式' }))
+    // Their tile shows the initial; their sound still plays
+    await waitFor(() => expect(within(tile).queryByLabelText('Wei 的畫面')).toBeNull(), SLOW)
+    expect(tile).toHaveTextContent('W')
+    expect([...ours().subscriptions.keys()].every((key) => key.includes('/mic-'))).toBe(true)
+    expect(document.querySelector('audio[data-member="Wei"]')).not.toBeNull()
+    expect(screen.getByText('純音訊模式：不接收也不送出視訊')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '恢復視訊' }))
+    await waitFor(() => expect(within(tile).getByLabelText('Wei 的畫面')).toBeInTheDocument(), SLOW)
+    expect(ours().subscriptions.size).toBe(2)
+  })
+
+  it('更多 › 設定 opens the settings panel', async () => {
+    visitRoom()
+    await screen.findByRole('region', { name: '會議室畫面' }, SLOW)
+    fireEvent.click(screen.getByRole('button', { name: '更多' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: '設定…' }))
+    const dialog = await screen.findByRole('dialog', { name: '設定' })
+    expect(
+      within(dialog)
+        .getAllByRole('tab')
+        .map((t) => t.textContent),
+    ).toEqual(['音訊', '視訊', '效能'])
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '設定' })).toBeNull()
+  })
+})

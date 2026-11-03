@@ -22,6 +22,14 @@ export class FakeTrack {
     this.stopped = true
     this.readyState = 'ended'
   }
+  /** Clones made of this track (the muted-speech analysis, H3) */
+  readonly clones: FakeTrack[] = []
+  clone(): FakeTrack {
+    const copy = new FakeTrack(this.kind, this.deviceId, this.label)
+    copy.enabled = this.enabled
+    this.clones.push(copy)
+    return copy
+  }
   getSettings() {
     return { deviceId: this.deviceId }
   }

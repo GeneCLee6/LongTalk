@@ -2,20 +2,29 @@ import type { FormEvent } from 'react'
 import styled from 'styled-components'
 import { MAX_PASSWORD_CHARS, normalizePassword } from '../../shared/password.ts'
 import { normalizeName, MAX_NAME_CHARS } from '../../shared/protocol.ts'
-import type { DeviceLists, DeviceOption, MediaProblem } from '../media/devices.ts'
+import type { DeviceLists, MediaProblem } from '../media/devices.ts'
 import { strings } from '../strings.ts'
 import { breakpoint, color, fontSize, layer, radius, space } from '../styles/tokens.ts'
 import { Button } from './Button.tsx'
-import { SelectField, TextField } from './Field.tsx'
+import { DeviceSelect, type DeviceChoice } from './DeviceSelect.tsx'
+import { TextField } from './Field.tsx'
 import { IconButton } from './IconButton.tsx'
-import { CamIcon, CamOffIcon, HourglassIcon, MicIcon, MicOffIcon, SoundIcon } from './icons.tsx'
+import {
+  CamIcon,
+  CamOffIcon,
+  HourglassIcon,
+  MicIcon,
+  MicOffIcon,
+  SettingsIcon,
+  SoundIcon,
+} from './icons.tsx'
 import { LanguageSelect } from './LanguageSelect.tsx'
 import { ThemeSelect } from './ThemeSelect.tsx'
 import { LevelMeter } from './LevelMeter.tsx'
 import { PermissionGuide, type PermissionGuideProps } from './PermissionGuide.tsx'
 import { VideoPreview } from './VideoPreview.tsx'
 
-export type DeviceChoice = 'mic' | 'cam' | 'speaker'
+export type { DeviceChoice }
 
 /** The room's password field (F3, e1-t15), shown when the room has one */
 export interface PasswordFieldProps {
@@ -65,6 +74,10 @@ export interface PreJoinProps {
   micSilent?: boolean
   /** The browser blocked the devices: the permission tutorial instead of the short notice (G1) */
   permissionGuide?: PermissionGuideProps | null
+  /** Opens the settings panel (H3): sound processing, HD, audio-only */
+  onSettings?: () => void
+  /** 純音訊模式 is chosen for joining (H3): a line under the join state says so */
+  audioOnly?: boolean
 }
 
 /** The message for what went wrong opening the devices, most actionable first */
@@ -80,45 +93,6 @@ function problemMessage(mic: MediaProblem | null, cam: MediaProblem | null): str
   if (cam === 'notFound') return problems.camNotFound
   if (either('unknown') || either('lost')) return problems.unknown
   return null
-}
-
-// A function, not a constant: the text follows the language chosen now (strings.ts)
-const kindName = (choice: DeviceChoice): string =>
-  choice === 'mic'
-    ? strings.prejoin.micLabel
-    : choice === 'cam'
-      ? strings.prejoin.camLabel
-      : strings.prejoin.speakerLabel
-
-function DeviceSelect({
-  choice,
-  options,
-  value,
-  onSelect,
-}: {
-  choice: DeviceChoice
-  options: DeviceOption[]
-  value: string | null
-  onSelect: (choice: DeviceChoice, deviceId: string) => void
-}) {
-  return (
-    <SelectField
-      label={kindName(choice)}
-      value={options.length === 0 ? '' : (value ?? options[0].deviceId)}
-      disabled={options.length === 0}
-      onChange={(event) => onSelect(choice, event.target.value)}
-    >
-      {options.length === 0 ? (
-        <option value="">{strings.prejoin.noDevices}</option>
-      ) : (
-        options.map((option, i) => (
-          <option key={option.deviceId} value={option.deviceId}>
-            {option.label || strings.prejoin.deviceFallback(kindName(choice), i + 1)}
-          </option>
-        ))
-      )}
-    </SelectField>
-  )
 }
 
 /** The pre-join screen (DESIGN.md §4.2): preview and devices on the left, name and join on the right */
@@ -280,14 +254,32 @@ export function PreJoin(props: PreJoinProps) {
               : strings.prejoin.join}
         </Button>
         <Muted>{strings.prejoin.joinState(mic, cam)}</Muted>
+        {props.audioOnly && <Muted role="status">{strings.settings.audioOnlyJoin}</Muted>}
         <Preferences>
           <LanguageSelect />
           <ThemeSelect />
         </Preferences>
+        {props.onSettings && (
+          <SettingsRow>
+            <Button variant="secondary" onClick={props.onSettings}>
+              <SettingsIcon />
+              {strings.settings.open}
+            </Button>
+          </SettingsRow>
+        )}
       </Form>
     </Layout>
   )
 }
+
+const SettingsRow = styled.div`
+  display: flex;
+
+  svg {
+    width: 18px;
+    height: 18px;
+  }
+`
 
 const Preferences = styled.div`
   display: flex;

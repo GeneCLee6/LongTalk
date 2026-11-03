@@ -36,6 +36,10 @@ export interface UseRoomMediaOptions {
   view: RoomView | null
   /** How many times the room welcomed us: a new welcome re-reports what we publish */
   welcomes?: number
+  /** HD (e6-t04): the camera sends its 720p layer, uplink allowing; on without it */
+  hd?: boolean
+  /** 純音訊模式 to start with (the pre-join screen's choice); setAudioOnly changes it */
+  initialAudioOnly?: boolean
 }
 
 export interface RoomMediaHandle extends RoomMediaState {
@@ -46,6 +50,12 @@ export interface RoomMediaHandle extends RoomMediaState {
    * (VideoDemandContext), RoomMedia picks layers from it
    */
   demand: VideoDemandStore
+  /**
+   * 純音訊模式 on or off (e6-t04): no video received, our camera not sent. Kept across sessions;
+   * `audioOnly` follows it at once. For the settings panel and anything else that decides it
+   * (H2's bandwidth adaptation).
+   */
+  setAudioOnly: (on: boolean) => void
 }
 
 const noSubscribe = () => () => {}
@@ -60,7 +70,14 @@ const idle = () => idleRoomMedia
  */
 export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
   const { enabled, local, you, view, welcomes = 0, screen = null, screenAudio = null } = options
+  const hd = options.hd ?? true
   const [media, setMedia] = useState<RoomMedia | null>(null)
+  // 純音訊模式 outlives a session (rebuilds, a new member id): kept here, handed to each run
+  const [audioOnly, setAudioOnly] = useState(options.initialAudioOnly ?? false)
+  const mode = useRef({ audioOnly, hd })
+  useEffect(() => {
+    mode.current = { audioOnly, hd }
+  })
   // One store for the page's lifetime: tiles keep reporting into it across sessions
   const [demand] = useState(() => new VideoDemandStore())
   // Read when a run starts, without restarting it when they change
@@ -80,6 +97,8 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
       iceConfig: () => latest.current.iceConfig?.() ?? Promise.resolve(null),
       send: (message) => latest.current.send(message),
       demand,
+      audioOnly: mode.current.audioOnly,
+      hd: mode.current.hd,
     })
     setMedia(run)
     void run.start(startLocal ?? { mic: null, cam: null }, startView?.usage ?? 'normal')
@@ -110,6 +129,14 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
     void media?.setScreen(screen, screenAudio)
   }, [media, screen, screenAudio])
 
+  useEffect(() => {
+    void media?.setAudioOnly(audioOnly)
+  }, [media, audioOnly])
+
+  useEffect(() => {
+    void media?.setHd(hd)
+  }, [media, hd])
+
   const members = view?.members
   const desired = useMemo<MemberTrack[]>(
     () =>
@@ -134,5 +161,9 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
 
   const state = useSyncExternalStore(media?.subscribe ?? noSubscribe, media?.getState ?? idle)
   const retry = useCallback(() => media?.retry(), [media])
-  return useMemo(() => ({ ...state, retry, demand }), [state, retry, demand])
+  // The wish shows at once, before (or without) a running session
+  return useMemo(
+    () => ({ ...state, audioOnly, hd, retry, demand, setAudioOnly }),
+    [state, audioOnly, hd, retry, demand],
+  )
 }

@@ -1,5 +1,10 @@
 import { isLayoutChoice, type LayoutChoice } from '../../shared/layout.ts'
 import { isClientId, isSessionToken, normalizeName } from '../../shared/protocol.ts'
+import {
+  DEFAULT_PROCESSING,
+  PROCESSING_KEYS,
+  type AudioProcessing,
+} from '../media/audioProcessing.ts'
 
 // What the browser remembers between visits (AC-1.2, AC-4.2):
 // - the display name, in localStorage: every room, every tab;
@@ -16,6 +21,7 @@ import { isClientId, isSessionToken, normalizeName } from '../../shared/protocol
 //   and 隱藏沒有視訊的人 are not remembered: they are for this meeting (someone hidden by the
 //   latter would otherwise be missing from the next meeting with no sign why).
 // - 更多's switches (G3): 音效 and 隱藏表情反應, in localStorage.
+// - the settings panel's media choices (H3): the microphone's processing and HD, in localStorage.
 // Storage can be missing or throw (private mode, blocked cookies): then nothing is remembered.
 
 const NAME_KEY = 'longtalk.name'
@@ -24,6 +30,7 @@ const DEVICE_LABELS_KEY = 'longtalk.deviceLabels'
 const CLIENT_KEY = 'longtalk.client'
 const VIEW_KEY = 'longtalk.view'
 const PREFS_KEY = 'longtalk.prefs'
+const MEDIA_KEY = 'longtalk.media'
 const tokenKey = (roomId: string) => `longtalk.session.${roomId}`
 
 function storage(kind: 'localStorage' | 'sessionStorage'): Storage | null {
@@ -213,4 +220,48 @@ export function loadPrefs(): RoomPrefs {
 
 export function savePrefs(prefs: RoomPrefs): void {
   write('localStorage', PREFS_KEY, JSON.stringify(prefs))
+}
+
+/**
+ * The settings panel's media choices, remembered between meetings (H3: e6-t01, e6-t04): the
+ * microphone's processing switches, and HD (null: never chosen, so the device's default, see
+ * defaultHd). 純音訊模式 is not remembered: it is for this meeting (the next one would otherwise
+ * show nobody's video with no sign why).
+ */
+export interface MediaPrefs {
+  processing: AudioProcessing
+  hd: boolean | null
+}
+
+export const DEFAULT_MEDIA: MediaPrefs = { processing: DEFAULT_PROCESSING, hd: null }
+
+export function loadMediaPrefs(): MediaPrefs {
+  try {
+    const saved: unknown = JSON.parse(read('localStorage', MEDIA_KEY) ?? 'null')
+    if (typeof saved !== 'object' || saved === null) return DEFAULT_MEDIA
+    const { processing, hd } = saved as Record<string, unknown>
+    const switches = (
+      typeof processing === 'object' && processing !== null ? processing : {}
+    ) as Record<string, unknown>
+    const loaded = { ...DEFAULT_PROCESSING }
+    for (const key of PROCESSING_KEYS) {
+      if (typeof switches[key] === 'boolean') loaded[key] = switches[key]
+    }
+    return { processing: loaded, hd: typeof hd === 'boolean' ? hd : null }
+  } catch {
+    return DEFAULT_MEDIA
+  }
+}
+
+export function saveMediaPrefs(prefs: MediaPrefs): void {
+  write('localStorage', MEDIA_KEY, JSON.stringify(prefs))
+}
+
+/**
+ * HD when it was never chosen (e6-t04): on for a computer, off for a phone or tablet (a
+ * touch-first screen): a phone's 720p layer costs uplink (often mobile data) and battery for a
+ * picture most receivers show small. The uplink check still holds HD back on a thin uplink.
+ */
+export function defaultHd(touchPrimary: boolean): boolean {
+  return !touchPrimary
 }

@@ -81,6 +81,8 @@ interface MediaTransport {
   subscribe(ref: TrackRef): Promise<RemoteTrack>
   unsubscribe(ref: TrackRef): Promise<void>
   setPreferredLayer(ref: TrackRef, layer: 'high' | 'medium' | 'low'): Promise<void>
+  setTopLayer(trackName: string, top: 'high' | 'medium' | 'low'): Promise<void> // H3: HD
+  getUplink(trackName: string): Promise<UplinkStats> // H3: availableOutgoingBitrate, limitation
   getStats(): Promise<TransportStats> // rttMs, usingRelay, bytesSent, bytesReceived
   on(event: 'state' | 'track' | 'trackEnded', handler): () => void
   close(): Promise<void>
@@ -93,6 +95,7 @@ interface MediaTransport {
 - `TrackKind` B1 起定義在 `shared/protocol.ts`（RoomDO 的軌清單也用它），`MediaTransport.ts` 轉出。`CloudflareRealtimeTransport` 的建構參數必填 `apiBase`（`/api/sfu/<roomId>`）與 `token`（取 session token 的函式）。
 - 和 ARCHITECTURE §3 原本的清單相比：加了 `unsubscribe`、`on()`（回傳取消函式）與 `trackEnded` 事件；`stats` 事件拿掉，改由呼叫端每 2 秒 `getStats()`（`e2-t13` 決定節奏）。
 - **B2 加上 `replaceTrack`**：換掉已發布的軌實際送出的內容（換裝置），或送 null（靜音、關鏡頭）；`RTCRtpSender.replaceTrack`，不需要 SDP 交換，所以不經過協商佇列，訂閱者的訂閱不受影響。
+- **H3 加上 `setTopLayer` 與 `getUplink`**（`e6-t04`）：`setTopLayer` 用 `RTCRtpSender.setParameters` 開關已發布視訊的 simulcast 層（`medium`＝`f` 層 `active: false`，最低層一定留著；單層 sender 改成縮一半），不需要 SDP 交換，`replaceTrack` 之後照樣有效、重新發布時回到全開，由 `RoomMedia` 再套一次。`getUplink` 讀那條軌 sender 的 `outbound-rtp` `qualityLimitationReason`（送出中的層裡最差的）與選定 candidate-pair 的 `availableOutgoingBitrate`，給 HD 的上行檢查（`src/media/uplink.ts`）。H2 的 `getStats` 擴充若也帶這兩個值，可以合併成一個。
 - `FakeTransport`（`src/media/FakeTransport.ts`）：同一個 `FakeSfu` 建出來的 transport 互相 publish／subscribe，`useRoomMedia`（`e2-t04`）的測試用它跑。
 
 ## 編碼參數（2026-11-03 實測後，`src/media/encoding.ts`）

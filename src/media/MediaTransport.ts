@@ -76,6 +76,20 @@ export interface TransportStats {
   bytesReceived: number
 }
 
+/**
+ * Why the browser sends a video below what it was asked for (RTCOutboundRtpStreamStats
+ * `qualityLimitationReason`): `bandwidth` is the uplink
+ */
+export type QualityLimitation = 'none' | 'bandwidth' | 'cpu' | 'other'
+
+/** How a published video's uplink is doing (e6-t04: may it send HD) */
+export interface UplinkStats {
+  /** The browser's estimate of what it can send now, bits per second; null when not reported */
+  availableOutgoingBitrate: number | null
+  /** The worst limitation across the track's layers that are sending; null when not reported */
+  limitation: QualityLimitation | null
+}
+
 export interface MediaTransportEvents {
   state: ConnectionState
   /** A subscribed track started arriving (also returned by subscribe()) */
@@ -140,6 +154,18 @@ export interface MediaTransport {
    * the layer already asked for does nothing. Rejects with `not_found` when not subscribed.
    */
   setPreferredLayer(ref: TrackRef, layer: Layer): Promise<void>
+
+  /**
+   * The highest simulcast layer a published video sends (e6-t04, HD): `high` sends every layer,
+   * `medium` leaves the top one out (a camera then sends at most 360p; a receiver asking for
+   * `high` gets the next one down from the SFU). A single-layer sender is scaled down instead.
+   * Kept across replaceTrack; a new publish starts with every layer. Rejects with `not_found`
+   * for a track this transport did not publish.
+   */
+  setTopLayer(trackName: string, top: Layer): Promise<void>
+
+  /** How a published video's uplink is doing (e6-t04); rejects with `not_found` like above */
+  getUplink(trackName: string): Promise<UplinkStats>
 
   getStats(): Promise<TransportStats>
 

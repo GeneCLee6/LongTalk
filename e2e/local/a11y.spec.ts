@@ -48,6 +48,11 @@ for (const scheme of ['light', 'dark'] as const) {
       const path = await newRoom(page)
       await openPreJoin(page, path)
       await expectNoViolations(page, 'pre-join')
+      // The pre-join screen's 設定 (H3)
+      await page.getByRole('button', { name: strings.settings.open, exact: true }).click()
+      await expect(page.getByRole('dialog', { name: strings.settings.title })).toBeVisible()
+      await expectNoViolations(page, 'pre-join settings')
+      await page.keyboard.press('Escape')
 
       await page.goto('/admin')
       await expect(page.getByRole('heading', { name: strings.admin.lockedTitle })).toBeVisible()
@@ -86,7 +91,21 @@ test('the room, its panels, menus and dialogs have no axe violations', async ({
   await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
   await expect(page.getByRole('menu')).toBeVisible()
   await expectNoViolations(page, 'more menu')
+  // 更多 › 設定 (H3): each of its three tabs
+  await page.getByRole('menuitem', { name: strings.settings.menu }).click()
+  const settings = page.getByRole('dialog', { name: strings.settings.title })
+  await expect(settings).toBeVisible()
+  for (const tab of [
+    strings.settings.audio,
+    strings.settings.video,
+    strings.settings.performance,
+  ]) {
+    await settings.getByRole('tab', { name: tab }).click()
+    await expect(settings.getByRole('tabpanel', { name: tab })).toBeVisible()
+    await expectNoViolations(page, `settings: ${tab}`)
+  }
   await page.keyboard.press('Escape')
+  await expect(settings).toHaveCount(0)
 
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Shift+?')
@@ -110,6 +129,10 @@ test('the phone room and its drawers have no axe violations', async ({ browser }
   await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await expectNoViolations(page, 'phone more drawer')
+  // 設定 on a phone is a full-screen drawer (H3)
+  await page.getByRole('menuitem', { name: strings.settings.menu }).click()
+  await expect(page.getByRole('dialog', { name: strings.settings.title })).toBeVisible()
+  await expectNoViolations(page, 'phone settings drawer')
   await page.keyboard.press('Escape')
   await toolbar.getByRole('button', { name: /^聊天/ }).click()
   await expect(page.getByRole('dialog')).toBeVisible()

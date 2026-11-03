@@ -7,6 +7,8 @@
 // Detection says an API exists, not that it works well: how each browser really behaves is in the
 // doc, from tests on real devices.
 
+import { PROCESSING_KEYS, type ProcessingKey } from './audioProcessing.ts'
+
 export interface Capabilities {
   /** RTCPeerConnection: being in a call at all; without it the room says "use another browser" */
   webrtc: boolean
@@ -28,6 +30,12 @@ export interface Capabilities {
   senderParameters: boolean
   /** AudioContext: the microphone level meter; without it the meter stays empty */
   audioContext: boolean
+  /**
+   * The microphone processing switches (e6-t01): getSupportedConstraints knows
+   * `noiseSuppression`, `echoCancellation` or `autoGainControl`; a switch the browser does not
+   * know is not shown
+   */
+  audioProcessing: boolean
   /** The `devicechange` event: noticing a device plugged in or out (B2) */
   deviceChange: boolean
   /** navigator.clipboard.writeText: the top bar's copy link (only on HTTPS or localhost) */
@@ -65,6 +73,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'replaceTrack',
   'senderParameters',
   'audioContext',
+  'audioProcessing',
   'deviceChange',
   'clipboard',
   'webShare',
@@ -124,6 +133,22 @@ export function canShareAudio(env: CapabilityEnv = browser()): boolean {
   }
 }
 
+/**
+ * Which microphone processing switches this browser knows (e6-t01), from
+ * getSupportedConstraints; none where it cannot say
+ */
+export function audioProcessingSupport(env: CapabilityEnv = browser()): ProcessingKey[] {
+  const devices = env.navigator?.mediaDevices as
+    { getSupportedConstraints?: () => Record<string, boolean | undefined> } | null | undefined
+  if (typeof devices?.getSupportedConstraints !== 'function') return []
+  try {
+    const supported = devices.getSupportedConstraints()
+    return PROCESSING_KEYS.filter((key) => supported[key] === true)
+  } catch {
+    return []
+  }
+}
+
 /** Whether the microphone level can be measured (AudioContext) */
 export function canMeasureLevel(env: CapabilityEnv = browser()): boolean {
   return typeof env.AudioContext === 'function'
@@ -175,6 +200,7 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     replaceTrack: has(sender, 'replaceTrack'),
     senderParameters: has(sender, 'setParameters'),
     audioContext: canMeasureLevel(env),
+    audioProcessing: audioProcessingSupport(env).length > 0,
     deviceChange: has(devices, 'ondevicechange'),
     clipboard: canCopy(env),
     webShare: canWebShare(env),

@@ -651,6 +651,30 @@ interop(
     })
 
     await interop.step(
+      'Bob turns 純音訊模式 on from 更多: no video either way, sound stays; then back (H3)',
+      async () => {
+        await toolbarButton(bob, strings.toolbar.more).click()
+        await bob.page.getByRole('menuitemcheckbox', { name: strings.settings.audioOnly }).click()
+        await expect(bob.page.getByText(strings.settings.audioOnlyNote)).toBeVisible()
+        for (const other of [alice, carol]) {
+          await expect(
+            remoteVideo(bob, other),
+            `Bob receives no video of ${other.name}`,
+          ).toHaveCount(0)
+          await expect(remoteVideo(other, bob), `${other.name} gets no video of Bob`).toHaveCount(0)
+        }
+        await expect
+          .poll(() => audioPeak(bob, alice), { message: 'Bob still hears Alice' })
+          .toBeGreaterThan(AUDIBLE)
+        await bob.page.getByRole('button', { name: strings.settings.audioOnlyExit }).click()
+        for (const other of [alice, carol]) {
+          await expectReceiving(bob, other)
+          await expect(remoteVideo(other, bob), `${other.name} sees Bob again`).toBeVisible()
+        }
+      },
+    )
+
+    await interop.step(
       'Alice (the host) mutes Carol from the participants panel: Carol is told and muted (F1)',
       async () => {
         await toolbarButton(alice, strings.toolbar.participantsCount(3)).click()

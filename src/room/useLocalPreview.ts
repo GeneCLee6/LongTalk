@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMediaDevices } from './devicesContext.ts'
 import { resolveDevice } from './session.ts'
+import { applyProcessing } from '../media/audioProcessing.ts'
 import {
   emptyDeviceLists,
   listDevices,
@@ -35,6 +36,10 @@ export interface PreviewRequest extends LocalMediaRequest {
   micLabel?: string | null
   camLabel?: string | null
 }
+
+// The microphone's processing switches (H3, e6-t01) are not part of what reopens the preview:
+// a change is applied to the open microphone, and only where the browser cannot change them live
+// is the preview opened again with them.
 
 export interface LocalPreviewDeps {
   mediaDevices?: MediaDevicesLike | null
@@ -85,18 +90,37 @@ export function useLocalPreview(
   const micId = resolved.mic ?? request.micId
   const camId = resolved.cam ?? request.camId
   const key = JSON.stringify([mic, cam, micId, camId, attempt])
+  const { processing } = request
+  const latestProcessing = useRef(processing)
+  useEffect(() => {
+    latestProcessing.current = processing
+  })
+  useEffect(() => {
+    const track = shown.current?.getAudioTracks()[0]
+    if (!processing || !track) return
+    let cancelled = false
+    void applyProcessing(track, processing).then((applied) => {
+      if (!applied && !cancelled) setAttempt((n) => n + 1)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [processing])
   useEffect(() => {
     let cancelled = false
     let stream: MediaStream | null = null
-    void openLocalMedia(mediaDevices, { mic, cam, micId, camId }, createStream).then((media) => {
-      if (cancelled) {
-        stopStream(media.stream)
-        return
-      }
-      stream = media.stream
-      setOpened({ key, media })
-      void refreshDevices()
-    })
+    const processing = latestProcessing.current
+    void openLocalMedia(mediaDevices, { mic, cam, micId, camId, processing }, createStream).then(
+      (media) => {
+        if (cancelled) {
+          stopStream(media.stream)
+          return
+        }
+        stream = media.stream
+        setOpened({ key, media })
+        void refreshDevices()
+      },
+    )
     return () => {
       cancelled = true
       stopStream(stream)

@@ -1,7 +1,7 @@
 ---
 title: E6 — 音訊視訊品質
 date: 2026-10-28
-status: planned
+status: in progress
 epic: E6
 owner: GeneCLee6
 milestones: [M1, M2]
@@ -51,10 +51,10 @@ E2 讓媒體送到；E6 讓它好聽好看。Zoom 的「背景雜音抑制」「
 
 ### M1
 
-- [ ] `e6-t01` 音訊三項約束開關與設定面板骨架（音訊／視訊／效能） · AC-6.1 · S · ← e2-t06
+- [x] `e6-t01` 音訊三項約束開關與設定面板骨架（音訊／視訊／效能） · AC-6.1 · #32
 - [ ] `e6-t02` 進階噪音抑制：AudioWorklet ＋ wasm、能力偵測、CPU 門檻自動關 · AC-6.2 · M · ← e6-t01
-- [ ] `e6-t03` 靜音中講話提醒 · AC-6.3 · S · ← e4-t05
-- [ ] `e6-t04` HD 開關（上行檢查）與純音訊模式 · AC-6.4 · S · ← e2-t11, e6-t01
+- [x] `e6-t03` 靜音中講話提醒 · AC-6.3 · #32
+- [x] `e6-t04` HD 開關（上行檢查）與純音訊模式 · AC-6.4 · #32
 - [ ] `e6-t05` 省電模式（低幀率最低層、關動畫、不送 HD） · AC-6.4 · S · ← e6-t04, e2-t12
 
 ### M2
@@ -62,6 +62,15 @@ E2 讓媒體送到；E6 讓它好聽好看。Zoom 的「背景雜音抑制」「
 - [ ] `e6-t06` 背景模糊：segmentation 模型 lazy、管線、自動關閉 · M
 - [ ] `e6-t07` 鏡像設定與可拖曳自拍格 · S
 - [ ] `e6-t08` 音量條與每人接收音量 · S
+
+## H3 的做法與決定（#32）
+
+- **設定面板**（`src/components/SettingsDialog.tsx`）：「更多 › 設定…」與預先加入頁的「設定」；電腦是對話框、手機是全螢幕抽屜；三個分頁「音訊」（麥克風、喇叭、聲音處理）、「視訊」（鏡頭、HD）、「效能」（純音訊模式；H4 加省電模式與進階噪音抑制）。改了立刻生效，沒有「儲存」鈕。裝置選單和預先加入頁共用 `DeviceSelect`。
+- **聲音處理**（`src/media/audioProcessing.ts`）：三個開關預設全開（瀏覽器本來的預設），只把關掉的那幾個放進 `getUserMedia`。通話中切換先對開著的麥克風 `applyConstraints`，再讀 `getSettings` 確認瀏覽器真的改了；沒改（Chrome 常見）就用新的設定重開同一支麥克風（靜音的話保持靜音），送出的軌經 `MediaTransport.replaceTrack` 換掉，**不重新協商**。`getSupportedConstraints` 不認得的開關不顯示（`capabilities.ts` 的 `audioProcessing`）。設定記在 localStorage（`longtalk.media`），預先加入頁與會議室共用。
+- **靜音中講話提醒**（`src/media/mutedSpeech.ts`、`src/room/useMutedSpeechHint.ts`）：門檻和講話外框一樣（`SPEAKING_THRESHOLD`），持續 2 秒（字與字之間 ≤ 0.4 秒的停頓照算）就出現「你目前是靜音」＋「取消靜音」，8 秒沒按就收起；出現後 30 秒內不再出現；按住說話時與放開後 1.5 秒內不出現。**隱私**：靜音時麥克風的軌 `enabled = false`、sender 送 null（什麼都不送）；為了在本機聽得到，提醒用這支麥克風的 `clone()` 接到一個不連到任何輸出的 analyser，clone 從不交給 RoomMedia 或 transport，取消靜音或離開就停掉。
+- **HD**：PRD 原本寫「720p 預設、HD 開 1080p」；H1 已經把鏡頭擷取改成 720p、上行約 1.7 Mbps，所以 H3 改成**開 HD＝送 720p 那層、關＝最高 360p**（`MediaTransport.setTopLayer`：simulcast 的 `f` 層 `active: false`；單層時縮一半）。擷取保持 720p，開回來不用重開鏡頭。**預設**：電腦開、觸控為主的裝置（手機、平板）關（上行常是行動網路、也省電）；使用者選過就照選的，記在 localStorage。1080p 不做（多數人的鏡頭與上行都不夠，需要時再加 task）。
+- **上行檢查**（`src/media/uplink.ts`）：HD 開著且鏡頭在送時每 5 秒讀一次 `MediaTransport.getUplink`（sender 的 `qualityLimitationReason` 與 candidate-pair 的 `availableOutgoingBitrate`）；前 15 秒不判斷（估計值還在爬），之後連續 3 次「頻寬受限」或估計值 < 1.5 Mbps 就暫停 HD（`hdLimited`，提示一次），1 分鐘後再試，每次又被擋就加倍（最多 8 分鐘）；自己重新打開 HD 會立刻再試。
+- **純音訊模式**（`RoomMedia.setAudioOnly`、`useRoomMedia` 的 `audioOnly`／`setAudioOnly`）：別人的鏡頭與分享畫面全部退訂（SFU 不再送），聲音（含分享音訊）照常；自己的鏡頭 sender 送 null、回報 muted，會議室頁同時關掉鏡頭（燈熄）、結束時再打開（原本開著的話）。自己的螢幕分享照常。不記憶（下一場會議不該莫名其妙沒有畫面），但預先加入頁的設定可以選「進房就是純音訊」。H2 的頻寬自適應要建議純音訊時，呼叫同一個 `setAudioOnly`。和本月流量的 `usage: audioOnly`（e11-t13）是兩件事。
 
 ## 風險與對策
 

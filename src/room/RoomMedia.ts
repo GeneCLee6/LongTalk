@@ -12,6 +12,13 @@ import {
   type PublishedTrack,
   type TrackKind,
 } from '../media/MediaTransport.ts'
+import {
+  nextUplinkCheck,
+  startUplinkCheck,
+  UPLINK_SAMPLE_MS,
+  uplinkRetryWait,
+  type UplinkCheck,
+} from '../media/uplink.ts'
 import { Backoff } from './backoff.ts'
 import type { VideoDemandStore } from './videoDemand.ts'
 
@@ -55,6 +62,19 @@ import type { VideoDemandStore } from './videoDemand.ts'
 // (media/layers.ts: size, visibility, budget, hysteresis), and only the ones that changed go to
 // the SFU. A camera starts at medium and a screen at high until its tile reports. Without a
 // demand store nothing is recomputed.
+//
+// HD (e6-t04): with `hd` on the camera sends all three layers; off, its 720p layer is turned off
+// (MediaTransport.setTopLayer 'medium': at most 360p goes out, the capture stays 720p so turning
+// HD back on is instant). While HD is on and the camera sends, its uplink is sampled every
+// UPLINK_SAMPLE_MS (MediaTransport.getUplink); when it is too short (media/uplink.ts) HD is held
+// back (`hdLimited`) and tried again later, longer each time.
+//
+// 純音訊模式 (e6-t04, `audioOnly`; not the month's audio-only usage state, e11-t13): no camera or
+// screen of anyone else is received (unsubscribed: the SFU stops sending them), and our camera
+// sends nothing (replaceTrack null, reported muted); microphones, the screen's sound and our own
+// screen share go on. Turning it off subscribes again and sends the camera again. Anything may
+// call setAudioOnly (the settings panel, H2's bandwidth adaptation); the room page turns the
+// camera device off and back on with it.
 //
 // Rebuilding (e2-t08): when the transport fails, or stays `reconnecting` (ICE disconnected) for
 // DISCONNECT_GRACE_MS, the session is thrown away and a new one built from the factory: new ICE
@@ -111,6 +131,12 @@ export interface RoomMediaState {
   rebuilds: number
   /** The simulcast layer asked for per received camera or screen, by trackKey (e2-t12) */
   layers: Readonly<Record<string, Layer>>
+  /** 純音訊模式 (e6-t04): no video received, our camera not sent */
+  audioOnly: boolean
+  /** HD is wanted (e6-t04): the camera sends its 720p layer, uplink allowing */
+  hd: boolean
+  /** HD is wanted but held back: the uplink is too short (media/uplink.ts) */
+  hdLimited: boolean
 }
 
 /** ICE settings for the next session, and when to ask for fresh ones (TURN credentials expire) */
@@ -143,6 +169,14 @@ export interface RoomMediaOptions {
   demand?: VideoDemandStore
   /** Wait after a layout change before recomputing layers */
   layerDebounceMs?: number
+  /** 純音訊模式 from the start (e6-t04; the pre-join screen's choice) */
+  audioOnly?: boolean
+  /** HD from the start (e6-t04); on without it */
+  hd?: boolean
+  /** How often the camera's uplink is sampled while HD is on (UPLINK_SAMPLE_MS) */
+  uplinkSampleMs?: number
+  /** The clock for the uplink check, for tests */
+  now?: () => number
 }
 
 const RETRY_DELAY_MS = 2_000
@@ -180,7 +214,13 @@ export const idleRoomMedia: RoomMediaState = {
   usingRelay: false,
   rebuilds: 0,
   layers: {},
+  audioOnly: false,
+  hd: true,
+  hdLimited: false,
 }
+
+/** Whether a track is received in 純音訊模式: only sound */
+const isVideo = (kind: TrackKind): boolean => kind === 'cam' || kind === 'screen'
 
 const errorCode = (error: unknown): MediaTransportErrorCode =>
   error instanceof MediaTransportError ? error.code : 'sfu_error'
@@ -245,6 +285,17 @@ export class RoomMedia {
   private readonly layerDebounceMs: number
   private layerTimer: Timer | null = null
   private offDemand: (() => void) | null = null
+  /** The highest layer the published camera sends now (e6-t04); null before it is published */
+  private sendingTop: Layer | null = null
+  private readonly uplinkSampleMs: number
+  private readonly now: () => number
+  private uplinkTimer: ReturnType<typeof setInterval> | null = null
+  /** The uplink check while the camera sends its 720p layer; null otherwise */
+  private uplinkCheck: UplinkCheck | null = null
+  /** Trying HD again after it was held back */
+  private hdRetryTimer: Timer | null = null
+  /** Times HD was held back since it was last turned on: how long the next retry waits */
+  private holdBacks = 0
 
   /** Every other member's tracks, by trackKey (from RoomDO) */
   private desired = new Map<string, MemberTrack>()
@@ -270,6 +321,13 @@ export class RoomMedia {
     this.backoff = options.backoff ?? new Backoff({ giveUpAfterMs: RECONNECT_GRACE_MS })
     this.demand = options.demand ?? null
     this.layerDebounceMs = options.layerDebounceMs ?? LAYER_DEBOUNCE_MS
+    this.uplinkSampleMs = options.uplinkSampleMs ?? UPLINK_SAMPLE_MS
+    this.now = options.now ?? (() => Date.now())
+    this.state = {
+      ...this.state,
+      audioOnly: options.audioOnly ?? false,
+      hd: options.hd ?? true,
+    }
     this.offDemand = this.demand?.subscribe(() => this.scheduleLayers()) ?? null
     this.attach(first)
   }
@@ -292,7 +350,30 @@ export class RoomMedia {
     this.usage = usage
     this.wanted = local
     this.statsTimer = setInterval(() => void this.reportStats(), this.statsIntervalMs)
+    this.uplinkTimer = setInterval(() => void this.sampleUplink(), this.uplinkSampleMs)
     await this.openSession(this.transport, 'connecting')
+  }
+
+  /**
+   * 純音訊模式 on or off (e6-t04): stops or starts receiving everyone's video and sending our
+   * camera. Resolves once what we send is applied.
+   */
+  setAudioOnly(on: boolean): Promise<void> {
+    if (on === this.state.audioOnly) return this.localQueue
+    this.update({ audioOnly: on })
+    this.reconcile()
+    if (!this.ready) return this.localQueue
+    return this.syncLocal()
+  }
+
+  /** HD on or off (e6-t04). Turning it on tries at once, even after the uplink held it back. */
+  setHd(on: boolean): Promise<void> {
+    if (on === this.state.hd) return this.localQueue
+    this.clearHdRetry()
+    this.holdBacks = 0
+    this.update({ hd: on, hdLimited: false })
+    if (!this.ready) return this.localQueue
+    return this.syncLocal()
   }
 
   /**
@@ -359,11 +440,12 @@ export class RoomMedia {
     if (this.closed || this.state.status !== 'connected') return
     for (const [key, track] of this.desired) {
       if (key in this.state.received || this.pending.has(key) || this.ended.has(key)) continue
-      if (this.retryTimers.has(key)) continue
+      if (this.retryTimers.has(key) || !this.receivable(track)) continue
       void this.subscribeTo(key, track)
     }
     for (const key of Object.keys(this.state.received)) {
-      if (this.desired.has(key)) continue
+      const wanted = this.desired.get(key)
+      if (wanted && this.receivable(wanted)) continue
       const { sessionId, trackName } = this.state.received[key]
       this.removeReceived(key)
       void this.transport.unsubscribe({ sessionId, trackName }).catch(() => undefined)
@@ -402,6 +484,8 @@ export class RoomMedia {
     this.closed = true
     this.ready = false
     if (this.statsTimer !== null) clearInterval(this.statsTimer)
+    if (this.uplinkTimer !== null) clearInterval(this.uplinkTimer)
+    this.clearHdRetry()
     this.clearSessionTimers()
     this.clearRetries()
     this.detach()
@@ -526,6 +610,8 @@ export class RoomMedia {
     this.sending = { mic: null, cam: null }
     this.sendingScreen = null
     this.sendingScreenAudio = null
+    this.sendingTop = null
+    this.uplinkCheck = null
     this.update({
       status: 'reconnecting',
       error: null,
@@ -624,7 +710,8 @@ export class RoomMedia {
     const transport = this.transport
     for (const kind of ['mic', 'cam'] as const) {
       if (this.closed || !this.ready || transport !== this.transport) return
-      const want = this.wanted[kind]
+      // 純音訊模式 sends no camera, whatever the device does
+      const want = kind === 'cam' && this.state.audioOnly ? null : this.wanted[kind]
       const own = this.state.published.find((track) => track.kind === kind)
       if (!own) {
         if (want) await this.publishLocal(transport, want, kind)
@@ -652,7 +739,77 @@ export class RoomMedia {
       this.reportTracks()
     }
     if (this.closed || !this.ready || transport !== this.transport) return
+    await this.applyTopLayer(transport)
+    if (this.closed || !this.ready || transport !== this.transport) return
     await this.applyScreen(transport)
+  }
+
+  /** The camera's highest layer as HD and the uplink want it (e6-t04) */
+  private async applyTopLayer(transport: MediaTransport): Promise<void> {
+    const own = this.state.published.find((track) => track.kind === 'cam')
+    if (!own) return
+    const top: Layer = this.state.hd && !this.state.hdLimited ? 'high' : 'medium'
+    if (this.sendingTop === top) return
+    try {
+      await transport.setTopLayer(own.trackName, top)
+    } catch {
+      // Not applied (the session is going): a rebuild publishes again and applies it then
+      return
+    }
+    if (this.closed || transport !== this.transport) return
+    this.sendingTop = top
+    this.uplinkCheck = top === 'high' ? startUplinkCheck(this.now()) : null
+  }
+
+  /**
+   * One uplink sample while the camera sends its 720p layer (e6-t04): several short ones in a row
+   * hold HD back, and a retry is scheduled
+   */
+  private async sampleUplink(): Promise<void> {
+    if (this.closed || !this.ready || this.state.status !== 'connected') return
+    const own = this.state.published.find((track) => track.kind === 'cam')
+    if (!own || this.sendingTop !== 'high' || this.state.lowQuality) return
+    if (!this.sending.cam) {
+      // Nothing goes out: judge again from the start once the camera is back
+      this.uplinkCheck = null
+      return
+    }
+    if (!this.uplinkCheck) {
+      this.uplinkCheck = startUplinkCheck(this.now())
+      return
+    }
+    const transport = this.transport
+    let sample
+    try {
+      sample = await transport.getUplink(own.trackName)
+    } catch {
+      return
+    }
+    if (this.closed || transport !== this.transport || this.sendingTop !== 'high') return
+    if (!this.uplinkCheck || !this.state.hd || this.state.hdLimited) return
+    const { check, holdBack } = nextUplinkCheck(this.uplinkCheck, sample, this.now())
+    this.uplinkCheck = check
+    if (!holdBack) return
+    this.holdBacks += 1
+    this.update({ hdLimited: true })
+    this.clearHdRetry()
+    this.hdRetryTimer = setTimeout(() => {
+      this.hdRetryTimer = null
+      if (this.closed || !this.state.hd) return
+      this.update({ hdLimited: false })
+      void this.syncLocal()
+    }, uplinkRetryWait(this.holdBacks))
+    void this.syncLocal()
+  }
+
+  private clearHdRetry(): void {
+    if (this.hdRetryTimer !== null) clearTimeout(this.hdRetryTimer)
+    this.hdRetryTimer = null
+  }
+
+  /** Whether a listed track is received now: in 純音訊模式 only sound is */
+  private receivable(track: MemberTrack): boolean {
+    return !(this.state.audioOnly && isVideo(track.kind))
   }
 
   /** Publishes the screen to share, or unpublishes the one that is no longer shared (D1) */
@@ -798,6 +955,8 @@ export class RoomMedia {
       const published = await transport.publish(track, { kind, simulcast: kind === 'cam' })
       if (this.closed || transport !== this.transport) return
       this.sending[kind] = track
+      // A new publish sends every layer; applyTopLayer turns the top one off for HD off
+      if (kind === 'cam') this.sendingTop = 'high'
       this.publishFailures = 0
       this.update({
         published: [...this.state.published, { ...published, muted: false }],
@@ -826,8 +985,9 @@ export class RoomMedia {
       if (transport !== this.transport) return
       this.pending.delete(key)
       if (this.closed) return
-      if (!this.desired.has(key)) {
-        // Left the list while we were subscribing
+      const listed = this.desired.get(key)
+      if (!listed || !this.receivable(listed)) {
+        // Left the list (or 純音訊模式 started) while we were subscribing
         await transport.unsubscribe(track).catch(() => undefined)
         return
       }

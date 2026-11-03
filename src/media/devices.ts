@@ -2,6 +2,7 @@
 // microphone through getUserMedia, the device lists through enumerateDevices, the speaker
 // through setSinkId. No RTCPeerConnection here: sending media is MediaTransport's job (B1). No
 // React and no interface text either: hooks wrap this, components show it with strings.ts.
+import { processingConstraints, type AudioProcessing } from './audioProcessing.ts'
 
 export type DeviceKind = 'audioinput' | 'videoinput' | 'audiooutput'
 
@@ -79,6 +80,8 @@ export interface LocalMediaRequest {
   /** null: the browser's default */
   micId: string | null
   camId: string | null
+  /** The microphone's processing switches (e6-t01); without it the browser's defaults (all on) */
+  processing?: AudioProcessing
 }
 
 export interface LocalMedia {
@@ -111,6 +114,18 @@ const cameraConstraint = (deviceId: string | null, strict = false): MediaTrackCo
   return device === true ? { ...CAMERA_CAPTURE } : { ...device, ...CAMERA_CAPTURE }
 }
 
+/** The microphone's device plus the processing switches turned off (audioProcessing.ts) */
+const micConstraint = (
+  deviceId: string | null,
+  strict = false,
+  processing?: AudioProcessing,
+): MediaTrackConstraints | true => {
+  const device = constraint(deviceId, strict)
+  const extra = processing ? processingConstraints(processing) : {}
+  if (Object.keys(extra).length === 0) return device
+  return device === true ? extra : { ...device, ...extra }
+}
+
 /** Makes one stream of several tracks; `new MediaStream` in the browser */
 export type CreateStream = (tracks: MediaStreamTrack[]) => MediaStream
 
@@ -135,7 +150,7 @@ export async function openLocalMedia(
       camProblem: request.cam ? 'unsupported' : null,
     }
   }
-  const audio = request.mic ? constraint(request.micId) : false
+  const audio = request.mic ? micConstraint(request.micId, false, request.processing) : false
   const video = request.cam ? cameraConstraint(request.camId) : false
   try {
     return { ...none, stream: await devices.getUserMedia({ audio, video }) }
@@ -193,13 +208,14 @@ export async function openDevice(
   kind: 'audio' | 'video',
   deviceId: string | null,
   strict = false,
+  processing?: AudioProcessing,
 ): Promise<MediaStreamTrack> {
   if (!devices) throw new MediaOpenError('unsupported')
   let stream: MediaStream
   try {
     stream = await devices.getUserMedia(
       kind === 'audio'
-        ? { audio: constraint(deviceId, strict), video: false }
+        ? { audio: micConstraint(deviceId, strict, processing), video: false }
         : { audio: false, video: cameraConstraint(deviceId, strict) },
     )
   } catch (error) {
