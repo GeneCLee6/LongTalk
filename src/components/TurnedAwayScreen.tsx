@@ -5,8 +5,6 @@ import { Button } from './Button.tsx'
 import { LockIcon, HourglassIcon } from './icons.tsx'
 import { LogoMark } from './Logo.tsx'
 
-const text = strings.turnedAway
-
 /**
  * - `locked`: the room is locked (F2, e1-t09)
  * - `denied`: the host turned us away from the waiting room, or we asked again too soon
@@ -30,16 +28,16 @@ export interface TurnedAwayScreenProps {
  */
 export function TurnedAwayScreen({ reason, roomName, onRetry, onHome }: TurnedAwayScreenProps) {
   const heading = {
-    locked: text.lockedTitle,
-    denied: text.deniedTitle,
-    waitExpired: text.expiredTitle,
-    leftWaiting: text.leftTitle,
+    locked: strings.turnedAway.lockedTitle,
+    denied: strings.turnedAway.deniedTitle,
+    waitExpired: strings.turnedAway.expiredTitle,
+    leftWaiting: strings.turnedAway.leftTitle,
   }[reason]
   const body = {
-    locked: text.lockedBody,
-    denied: text.deniedBody,
-    waitExpired: text.expiredBody,
-    leftWaiting: text.leftBody(roomName),
+    locked: strings.turnedAway.lockedBody,
+    denied: strings.turnedAway.deniedBody,
+    waitExpired: strings.turnedAway.expiredBody,
+    leftWaiting: strings.turnedAway.leftBody(roomName),
   }[reason]
   return (
     <Card aria-labelledby="turned-away-title">
@@ -57,9 +55,9 @@ export function TurnedAwayScreen({ reason, roomName, onRetry, onHome }: TurnedAw
       <h1 id="turned-away-title">{heading}</h1>
       <Body role={reason === 'leftWaiting' ? undefined : 'alert'}>{body}</Body>
       <Actions>
-        <Button onClick={onRetry}>{text.retry}</Button>
+        <Button onClick={onRetry}>{strings.turnedAway.retry}</Button>
         <Button variant="secondary" onClick={onHome}>
-          {text.home}
+          {strings.turnedAway.home}
         </Button>
       </Actions>
     </Card>

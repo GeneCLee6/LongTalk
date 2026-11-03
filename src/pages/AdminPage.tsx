@@ -13,13 +13,11 @@ import { GB } from '../../shared/usage.ts'
 import { fetchAdminSummary } from '../api/admin.ts'
 import { Button } from '../components/Button.tsx'
 import { TextField } from '../components/Field.tsx'
-import { strings } from '../strings.ts'
+import { formatDateTime, formatDay, strings } from '../strings.ts'
 import { color, font, fontSize, radius, space } from '../styles/tokens.ts'
 
 type Phase = 'locked' | 'loading' | 'open'
 type Problem = 'unauthorized' | 'notConfigured' | 'failed' | null
-
-const text = strings.admin
 
 /**
  * /admin (e11-t03): the owner's dashboard skeleton, lazy-loaded (never in the home or room JS).
@@ -36,7 +34,7 @@ export default function AdminPage() {
   const [summary, setSummary] = useState<AdminSummary | null>(null)
 
   useEffect(() => {
-    document.title = text.title
+    document.title = strings.admin.title
     return () => {
       document.title = strings.appName
     }
@@ -74,10 +72,10 @@ export default function AdminPage() {
     return (
       <Page>
         <Locked onSubmit={onUnlock}>
-          <h1>{text.lockedTitle}</h1>
-          <p>{text.lockedBody}</p>
+          <h1>{strings.admin.lockedTitle}</h1>
+          <p>{strings.admin.lockedBody}</p>
           <TextField
-            label={text.tokenLabel}
+            label={strings.admin.tokenLabel}
             type="password"
             autoComplete="current-password"
             value={draft}
@@ -88,9 +86,9 @@ export default function AdminPage() {
           />
           {problem && <ProblemText role="alert">{problemText(problem)}</ProblemText>}
           <Button type="submit" block disabled={phase === 'loading' || draft.trim() === ''}>
-            {phase === 'loading' ? text.unlocking : text.unlock}
+            {phase === 'loading' ? strings.admin.unlocking : strings.admin.unlock}
           </Button>
-          <Small>{text.privacy}</Small>
+          <Small>{strings.admin.privacy}</Small>
         </Locked>
       </Page>
     )
@@ -101,11 +99,11 @@ export default function AdminPage() {
     <Page>
       <Dashboard>
         <Header>
-          <h1>{text.title}</h1>
-          <span>{text.updatedAt(new Date(telemetry.now).toLocaleString('zh-TW'))}</span>
+          <h1>{strings.admin.title}</h1>
+          <span>{strings.admin.updatedAt(formatDateTime(telemetry.now))}</span>
           <Actions>
             <Button variant="secondary" onClick={() => token && void load(token)}>
-              {text.refresh}
+              {strings.admin.refresh}
             </Button>
             <Button
               variant="ghost"
@@ -115,33 +113,33 @@ export default function AdminPage() {
                 setPhase('locked')
               }}
             >
-              {text.lock}
+              {strings.admin.lock}
             </Button>
           </Actions>
         </Header>
         {problem && <ProblemText role="alert">{problemText(problem)}</ProblemText>}
 
         <Section aria-labelledby="alerts">
-          <h2 id="alerts">{text.alertsTitle}</h2>
+          <h2 id="alerts">{strings.admin.alertsTitle}</h2>
           {telemetry.alerts.length === 0 ? (
-            <p>{text.noAlerts}</p>
+            <p>{strings.admin.noAlerts}</p>
           ) : (
             <AlertList role="alert">
               {telemetry.alerts.map((code) => (
-                <li key={code}>{text.alerts[code]}</li>
+                <li key={code}>{strings.admin.alerts[code]}</li>
               ))}
             </AlertList>
           )}
         </Section>
 
         <Section aria-labelledby="totals">
-          <h2 id="totals">{text.totalsTitle}</h2>
+          <h2 id="totals">{strings.admin.totalsTitle}</h2>
           <Table>
             <thead>
               <tr>
                 <th scope="col" />
-                <th scope="col">{text.periods.last24h}</th>
-                <th scope="col">{text.periods.last7d}</th>
+                <th scope="col">{strings.admin.periods.last24h}</th>
+                <th scope="col">{strings.admin.periods.last7d}</th>
               </tr>
             </thead>
             <tbody>
@@ -157,15 +155,15 @@ export default function AdminPage() {
         </Section>
 
         <Section aria-labelledby="days">
-          <h2 id="days">{text.daysTitle}</h2>
+          <h2 id="days">{strings.admin.daysTitle}</h2>
           {telemetry.days.length === 0 ? (
-            <p>{text.none}</p>
+            <p>{strings.admin.none}</p>
           ) : (
             <Scroll>
               <Table>
                 <thead>
                   <tr>
-                    <th scope="col">{text.day}</th>
+                    <th scope="col">{strings.admin.day}</th>
                     {dayColumns.map(({ label }) => (
                       <th key={label} scope="col">
                         {label}
@@ -176,7 +174,9 @@ export default function AdminPage() {
                 <tbody>
                   {telemetry.days.map((day) => (
                     <tr key={day.day}>
-                      <th scope="row">{day.day}</th>
+                      <th scope="row">
+                        <time dateTime={day.day}>{formatDay(day.day)}</time>
+                      </th>
                       {dayColumns.map(({ label, value }) => (
                         <td key={label}>{value(day)}</td>
                       ))}
@@ -189,9 +189,9 @@ export default function AdminPage() {
         </Section>
 
         <Section aria-labelledby="errors">
-          <h2 id="errors">{text.recentErrors}</h2>
+          <h2 id="errors">{strings.admin.recentErrors}</h2>
           {telemetry.recentErrors.length === 0 ? (
-            <p>{text.noErrors}</p>
+            <p>{strings.admin.noErrors}</p>
           ) : (
             <ErrorList>
               {telemetry.recentErrors.map((error) => (
@@ -200,8 +200,8 @@ export default function AdminPage() {
                     {error.name}: {error.message}
                   </code>
                   <Small>
-                    {new Date(error.at).toLocaleString('zh-TW')} · {error.source || text.none} ·{' '}
-                    {text.errorCount(error.count)}
+                    {formatDateTime(error.at)} · {error.source || strings.admin.none} ·{' '}
+                    {strings.admin.errorCount(error.count)}
                   </Small>
                 </li>
               ))}
@@ -210,18 +210,18 @@ export default function AdminPage() {
         </Section>
 
         <Section aria-labelledby="usage">
-          <h2 id="usage">{text.usageTitle}</h2>
+          <h2 id="usage">{strings.admin.usageTitle}</h2>
           <p>
             {usage
-              ? text.usage(
+              ? strings.admin.usage(
                   usage.month,
                   (usage.bytes / GB).toFixed(1),
-                  text.usageStates[usage.state],
+                  strings.admin.usageStates[usage.state],
                 )
-              : text.none}
+              : strings.admin.none}
           </p>
-          <Small>{text.analyticsEngine(summary.analyticsEngine)}</Small>
-          <Small>{text.privacy}</Small>
+          <Small>{strings.admin.analyticsEngine(summary.analyticsEngine)}</Small>
+          <Small>{strings.admin.privacy}</Small>
         </Section>
       </Dashboard>
     </Page>
@@ -231,11 +231,11 @@ export default function AdminPage() {
 function problemText(problem: Exclude<Problem, null>): string {
   switch (problem) {
     case 'unauthorized':
-      return text.wrongToken
+      return strings.admin.wrongToken
     case 'notConfigured':
-      return text.notConfigured
+      return strings.admin.notConfigured
     case 'failed':
-      return text.loadFailed
+      return strings.admin.loadFailed
   }
 }
 
@@ -243,7 +243,7 @@ const failed = (counts: EventCounts) =>
   Object.values(counts.joinFail).reduce((total, n) => total + (n ?? 0), 0)
 
 const ratio = (part: number, whole: number) =>
-  whole === 0 ? text.none : `${text.percent(part / whole)}（${part}／${whole}）`
+  whole === 0 ? strings.admin.none : `${strings.admin.percent(part / whole)}（${part}／${whole}）`
 
 const listed = <K extends string>(
   keys: readonly K[],
@@ -253,13 +253,15 @@ const listed = <K extends string>(
   const parts = keys
     .filter((key) => (counts[key] ?? 0) > 0)
     .map((key) => `${names[key]} ${counts[key]}`)
-  return parts.length === 0 ? text.none : parts.join('、')
+  return parts.length === 0 ? strings.admin.none : parts.join('、')
 }
 
 /** The average score with how many gave one, or — */
 const ratingAverage = (counts: EventCounts) => {
   const { count, average } = ratingStats(counts)
-  return average === null ? text.none : text.ratingAverage(average.toFixed(1), count)
+  return average === null
+    ? strings.admin.none
+    : strings.admin.ratingAverage(average.toFixed(1), count)
 }
 
 /** Highest score first, only the scores someone gave */
@@ -268,54 +270,54 @@ const ratingDistribution = (counts: EventCounts) => {
   const parts = [...RATING_SCORES]
     .reverse()
     .filter((score) => byScore[score] > 0)
-    .map((score) => text.ratingScore(score, byScore[score]))
-  return parts.length === 0 ? text.none : parts.join('、')
+    .map((score) => strings.admin.ratingScore(score, byScore[score]))
+  return parts.length === 0 ? strings.admin.none : parts.join('、')
 }
 
 const metricRows: { label: string; value: (counts: EventCounts) => string }[] = [
-  { label: text.metrics.joins, value: (c) => String(c.joinOk + failed(c)) },
-  { label: text.metrics.joinRate, value: (c) => ratio(c.joinOk, c.joinOk + failed(c)) },
+  { label: strings.admin.metrics.joins, value: (c) => String(c.joinOk + failed(c)) },
+  { label: strings.admin.metrics.joinRate, value: (c) => ratio(c.joinOk, c.joinOk + failed(c)) },
   {
-    label: text.metrics.joinFailures,
-    value: (c) => listed(JOIN_FAILURES, c.joinFail, text.reasons),
+    label: strings.admin.metrics.joinFailures,
+    value: (c) => listed(JOIN_FAILURES, c.joinFail, strings.admin.reasons),
   },
   {
-    label: text.metrics.reconnects,
-    value: (c) => listed(CONNECTION_LAYERS, c.reconnect, text.layers),
+    label: strings.admin.metrics.reconnects,
+    value: (c) => listed(CONNECTION_LAYERS, c.reconnect, strings.admin.layers),
   },
-  { label: text.metrics.rebuilds, value: (c) => String(c.rebuild) },
-  { label: text.metrics.relayRatio, value: (c) => ratio(c.relayed, c.media) },
-  { label: text.metrics.errors, value: (c) => String(c.errors) },
-  { label: text.metrics.rating, value: ratingAverage },
-  { label: text.metrics.ratingDistribution, value: ratingDistribution },
+  { label: strings.admin.metrics.rebuilds, value: (c) => String(c.rebuild) },
+  { label: strings.admin.metrics.relayRatio, value: (c) => ratio(c.relayed, c.media) },
+  { label: strings.admin.metrics.errors, value: (c) => String(c.errors) },
+  { label: strings.admin.metrics.rating, value: ratingAverage },
+  { label: strings.admin.metrics.ratingDistribution, value: ratingDistribution },
 ]
 
 const dayColumns: { label: string; value: (counts: EventCounts) => string }[] = [
-  { label: text.metrics.joins, value: (c) => String(c.joinOk + failed(c)) },
+  { label: strings.admin.metrics.joins, value: (c) => String(c.joinOk + failed(c)) },
   {
-    label: text.metrics.joinRate,
+    label: strings.admin.metrics.joinRate,
     value: (c) => {
       const total = c.joinOk + failed(c)
-      return total === 0 ? text.none : text.percent(c.joinOk / total)
+      return total === 0 ? strings.admin.none : strings.admin.percent(c.joinOk / total)
     },
   },
   {
-    label: text.metrics.reconnects,
+    label: strings.admin.metrics.reconnects,
     value: (c) => String(Object.values(c.reconnect).reduce((t, n) => t + (n ?? 0), 0)),
   },
-  { label: text.metrics.rebuilds, value: (c) => String(c.rebuild) },
+  { label: strings.admin.metrics.rebuilds, value: (c) => String(c.rebuild) },
   {
-    label: text.metrics.relayRatio,
-    value: (c) => (c.media === 0 ? text.none : text.percent(c.relayed / c.media)),
+    label: strings.admin.metrics.relayRatio,
+    value: (c) => (c.media === 0 ? strings.admin.none : strings.admin.percent(c.relayed / c.media)),
   },
-  { label: text.metrics.errors, value: (c) => String(c.errors) },
-  { label: text.metrics.rating, value: ratingAverage },
+  { label: strings.admin.metrics.errors, value: (c) => String(c.errors) },
+  { label: strings.admin.metrics.rating, value: ratingAverage },
 ]
 
 const Page = styled.main`
   min-height: 100dvh;
   padding: ${space(6)} ${space(4)};
-  font-family: ${font.ui};
+  font-family: ${font.current};
   background: ${color.bg};
   color: ${color.fg};
 `

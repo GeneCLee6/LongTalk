@@ -8,8 +8,6 @@ import { IconButton } from './IconButton.tsx'
 import { CamIcon, CamOffIcon, HourglassIcon, MicIcon, MicOffIcon } from './icons.tsx'
 import { VideoPreview } from './VideoPreview.tsx'
 
-const text = strings.waiting
-
 export interface WaitingScreenProps {
   /** The room's name as the top bar would show it */
   roomName: string
@@ -57,14 +55,14 @@ export function WaitingScreen({
         <Room title={roomName}>{roomName}</Room>
         <h1 id="waiting-title">
           <HourglassIcon />
-          {text.title}
+          {strings.waiting.title}
         </h1>
       </Head>
       <Frame data-theme="dark">
         {stream && camOn ? (
-          <VideoPreview stream={stream} label={text.preview} />
+          <VideoPreview stream={stream} label={strings.waiting.preview} />
         ) : (
-          <Placeholder>{text.camOff}</Placeholder>
+          <Placeholder>{strings.waiting.camOff}</Placeholder>
         )}
         <Controls>
           <IconButton
@@ -86,17 +84,19 @@ export function WaitingScreen({
       <Status role="status" aria-live="polite">
         {connection === 'ok' ? (
           <>
-            <Position>{text.position(lobby.position, lobby.count)}</Position>
-            <Body>{lobby.hostPresent ? text.body : text.hostAbsent}</Body>
+            <Position>{strings.waiting.position(lobby.position, lobby.count)}</Position>
+            <Body>{lobby.hostPresent ? strings.waiting.body : strings.waiting.hostAbsent}</Body>
           </>
         ) : (
-          <Warn>{connection === 'reconnecting' ? text.reconnecting : text.lost}</Warn>
+          <Warn>
+            {connection === 'reconnecting' ? strings.waiting.reconnecting : strings.waiting.lost}
+          </Warn>
         )}
       </Status>
       <Actions>
         {connection === 'lost' && <Button onClick={onRetry}>{strings.common.retry}</Button>}
         <Button variant="secondary" onClick={onLeave}>
-          {text.leave}
+          {strings.waiting.leave}
         </Button>
       </Actions>
     </Card>

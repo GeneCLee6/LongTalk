@@ -27,11 +27,8 @@ export interface MediaControlsProps {
   children?: ReactNode
 }
 
-const kindName = {
-  mic: strings.devices.mic,
-  cam: strings.devices.cam,
-  speaker: strings.devices.speaker,
-} as const
+// A function, not a constant: the text follows the language chosen now (strings.ts)
+const kindName = (choice: 'mic' | 'cam' | 'speaker'): string => strings.devices[choice]
 
 function deviceItems(
   choice: DeviceMenuChoice,
@@ -43,8 +40,8 @@ function deviceItems(
   const current = selected ?? options[0]?.deviceId ?? null
   return options.map((option, i) => ({
     id: `${choice}-${option.deviceId}`,
-    label: option.label || strings.prejoin.deviceFallback(kindName[choice], i + 1),
-    section: kindName[choice],
+    label: option.label || strings.prejoin.deviceFallback(kindName(choice), i + 1),
+    section: kindName(choice),
     checked: option.deviceId === current,
     onSelect: () => onSelect(choice, option.deviceId),
   }))

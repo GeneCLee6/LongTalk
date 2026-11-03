@@ -6,7 +6,7 @@
 
 ## 1. 原則
 
-- **只做能力偵測，不看 user agent。** 程式在 [`src/media/capabilities.ts`](../src/media/capabilities.ts)：要用一個功能之前先問它，沒有就隱藏或說明，不讓按鈕按了才壞。
+- **只做能力偵測，不看 user agent。** 程式在 [`src/media/capabilities.ts`](../src/media/capabilities.ts)：要用一個功能之前先問它，沒有就隱藏或說明，不讓按鈕按了才壞。唯一的例外是**說明文字**：權限教學（G1，`src/room/permissionGuide.ts`）看 user agent 猜你用哪個瀏覽器、先顯示那一套步驟（猜錯可以自己換），從不拿它決定功能開不開。
 - **這份與 `capabilities.ts` 一致。** §2 表格的第二欄就是 `Capabilities` 的 key；`tests/app/media/capabilities.test.ts` 會比對兩邊，加一個能力要同時加一列。
 - **偵測只說 API 在不在，不保證好用。** 各瀏覽器實際表現以實測為準；沒測過的就寫「未實測」，不寫成支援。
 - 麥克風、鏡頭、螢幕分享都只在 HTTPS（或 `localhost`）可用；http 頁面上 `navigator.mediaDevices` 不存在，會被當成「不能用裝置」處理。
@@ -28,6 +28,7 @@
 | 裝置插拔通知（`devicechange`） | `deviceChange` | ● | ○ | ○ | ○ | ? | ? | 拔掉的裝置要等軌結束才發現；接上新裝置不會自動補回 |
 | 複製到剪貼簿（`navigator.clipboard.writeText`） | `clipboard` | ○ | ○ | ○ | ○ | ○ | ○ | 頂部條「複製連結」改用分享選單（有的話），否則提示「請手動複製」並顯示連結（`e1-t05`） |
 | 系統分享選單（Web Share，`navigator.share`） | `webShare` | ○ | ○ | ✕ | ○ | ○ | ○ | 「更多」選單不顯示「分享連結」，用「複製連結」（`e1-t05`） |
+| 讀取權限狀態（`navigator.permissions.query` 的 `camera`、`microphone`） | `permissions` | ○ | ○ | ○（131+ 才認得這兩個名字） | ○（16+） | ○（16+） | ○ | 預先加入頁的權限教學照樣顯示，但分不出「系統擋住」與「瀏覽器擋住」，允許之後要自己按「再試一次」（G1，`e4-t09`） |
 
 ### 實測紀錄
 

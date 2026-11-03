@@ -102,10 +102,11 @@ describe('pre-join screen', () => {
 
   it('explains a refusal, offers to retry, and still lets the person join', async () => {
     const fake = await openPreJoin({ denyAll: true, hidden: true })
-    expect(await screen.findByRole('alert')).toHaveTextContent('瀏覽器沒有麥克風或鏡頭的權限')
+    // G1: the permission tutorial, with the steps for this browser and 再試一次
+    expect(await screen.findByRole('alert')).toHaveTextContent('瀏覽器擋住了麥克風和鏡頭')
     expect(screen.getByText('鏡頭已關閉')).toBeInTheDocument()
     expect(select('麥克風')).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: '重試' }))
+    fireEvent.click(screen.getByRole('button', { name: '再試一次' }))
     await waitFor(() => expect(fake.getUserMedia).toHaveBeenCalledTimes(2))
     fireEvent.change(screen.getByRole('textbox', { name: '你的名字' }), {
       target: { value: 'Gene' },

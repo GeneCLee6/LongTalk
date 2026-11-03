@@ -56,7 +56,7 @@ const Page = styled.main`
   display: grid;
   place-items: center;
   padding: ${space(6)};
-  font-family: ${font.ui};
+  font-family: ${font.current};
   background: ${color.bg};
   color: ${color.fg};
 `

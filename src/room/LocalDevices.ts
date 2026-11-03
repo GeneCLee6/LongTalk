@@ -57,7 +57,7 @@ export interface LocalDevicesOptions {
   mediaDevices: MediaDevicesLike | null
   chosen: DeviceChoices
   /** Remembers a choice (localStorage, shared with the pre-join screen) */
-  saveChoice?: (kind: keyof DeviceChoices, deviceId: string) => void
+  saveChoice?: (kind: keyof DeviceChoices, deviceId: string, label: string) => void
   onNotice?: (notice: DeviceNotice) => void
   createStream?: CreateStream
   /** Wait before the one quiet retry of a device that failed when the room opened it */
@@ -190,7 +190,12 @@ export class LocalDevices {
    * device that will not open leaves the current one in place (notice `switchFailed`).
    */
   async select(kind: keyof DeviceChoices, deviceId: string): Promise<void> {
-    this.options.saveChoice?.(kind, deviceId)
+    const list =
+      this.state.devices[
+        kind === 'mic' ? 'audioinput' : kind === 'cam' ? 'videoinput' : 'audiooutput'
+      ]
+    const label = list.find((option) => option.deviceId === deviceId)?.label ?? ''
+    this.options.saveChoice?.(kind, deviceId, label)
     this.update({ chosen: { ...this.state.chosen, [kind]: deviceId } })
     if (kind === 'speaker') return
     const device = this.state[kind]

@@ -5,6 +5,7 @@ import { color, font, fontSize, schemeVars } from './tokens.ts'
 // Scheme: the system's by default; data-theme on any element forces its subtree.
 export const GlobalStyle = createGlobalStyle`
   :root {
+    --lt-font-ui: ${font.ui};
     ${schemeVars('light')}
     color-scheme: light;
   }
@@ -29,12 +30,16 @@ export const GlobalStyle = createGlobalStyle`
 
   body {
     margin: 0;
-    font-family: ${font.ui};
+    font-family: ${font.current};
     font-size: ${fontSize.base};
     line-height: 1.5;
     background: ${color.bg};
     color: ${color.fg};
     -webkit-font-smoothing: antialiased;
+  }
+  /* English (G1, e4-t15): <html lang="en"> */
+  html:lang(en) {
+    --lt-font-ui: ${font.uiLatin};
   }
 
   button, input, select, textarea {

@@ -8,8 +8,6 @@ import { HandIcon, SmileIcon } from './icons.tsx'
 import { IconButton } from './IconButton.tsx'
 import { usePhoneLayout } from './layoutContext.ts'
 
-const text = strings.reactions
-
 export interface ReactionsButtonProps {
   /** Our hand is up (RoomDO's `Member.hand`): the button shows the hand, the picker 放下手 */
   handUp: boolean
@@ -72,7 +70,7 @@ export function ReactionsButton({ handUp, onReact, onToggleHand }: ReactionsButt
       id={panelId}
       // On a desktop a non-modal popover; in the phone's sheet the Drawer is the dialog
       role={sheet ? 'group' : 'dialog'}
-      aria-label={text.picker}
+      aria-label={strings.reactions.picker}
       $sheet={sheet}
       onKeyDown={sheet ? undefined : onKeyDown}
     >
@@ -83,8 +81,8 @@ export function ReactionsButton({ handUp, onReact, onToggleHand }: ReactionsButt
             ref={index === 0 ? first : undefined}
             type="button"
             data-reaction
-            aria-label={text.send(text.names[emoji])}
-            title={text.names[emoji]}
+            aria-label={strings.reactions.send(strings.reactions.names[emoji])}
+            title={strings.reactions.names[emoji]}
             $sheet={sheet}
             onClick={() => {
               onReact(emoji)
@@ -106,7 +104,7 @@ export function ReactionsButton({ handUp, onReact, onToggleHand }: ReactionsButt
         }}
       >
         <HandIcon />
-        {handUp ? text.lower : text.raise}
+        {handUp ? strings.reactions.lower : strings.reactions.raise}
       </Hand>
     </Panel>
   )
@@ -115,8 +113,8 @@ export function ReactionsButton({ handUp, onReact, onToggleHand }: ReactionsButt
     <Root ref={root}>
       <Trigger $up={handUp}>
         <IconButton
-          label={handUp ? text.buttonHandUp : text.button}
-          caption={text.button}
+          label={handUp ? strings.reactions.buttonHandUp : strings.reactions.button}
+          caption={strings.reactions.button}
           icon={handUp ? <HandIcon /> : <SmileIcon />}
           showLabel
           aria-haspopup="dialog"
@@ -127,7 +125,7 @@ export function ReactionsButton({ handUp, onReact, onToggleHand }: ReactionsButt
       </Trigger>
       {open &&
         (sheet ? (
-          <Drawer title={text.picker} onClose={() => setOpen(false)}>
+          <Drawer title={strings.reactions.picker} onClose={() => setOpen(false)}>
             {panel}
           </Drawer>
         ) : (

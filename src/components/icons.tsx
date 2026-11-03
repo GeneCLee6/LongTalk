@@ -246,3 +246,71 @@ export function HandIcon() {
     </svg>
   )
 }
+
+/** Two sliders: Chrome's site-information button left of the address (G1 permission guide) */
+export function SlidersIcon() {
+  return (
+    <svg {...common}>
+      <path d="M4 8h9M17 8h3M4 16h3M11 16h9" />
+      <circle cx="15" cy="8" r="2" />
+      <circle cx="9" cy="16" r="2" />
+    </svg>
+  )
+}
+
+/** A switch turned on (G1 permission guide: allow) */
+export function ToggleIcon() {
+  return (
+    <svg {...common}>
+      <rect x="2" y="7" width="20" height="10" rx="5" />
+      <circle cx="17" cy="12" r="2.5" />
+    </svg>
+  )
+}
+
+/** A menu bar with a dropdown (G1 permission guide: Safari's menu) */
+export function MenuBarIcon() {
+  return (
+    <svg {...common}>
+      <path d="M3 5h18M7 5v4M7 9h10v10H7z" />
+    </svg>
+  )
+}
+
+/** A small and a large A (G1 permission guide: Safari's page menu on iPhone) */
+export function TextSizeIcon() {
+  return (
+    <svg {...common}>
+      <path d="m3 18 3.5-8 3.5 8M4.3 15h4.4M12 18l4.5-12 4.5 12M13.7 14h5.6" />
+    </svg>
+  )
+}
+
+/** A gear: the system or app settings (G1 permission guide) */
+export function SettingsIcon() {
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1" />
+    </svg>
+  )
+}
+
+/** A circular arrow: try again (G1 permission guide) */
+export function RefreshIcon() {
+  return (
+    <svg {...common}>
+      <path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" />
+    </svg>
+  )
+}
+
+/** A globe: the language menu (G1, e4-t15) */
+export function GlobeIcon() {
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+    </svg>
+  )
+}

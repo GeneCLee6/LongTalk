@@ -5,6 +5,7 @@ import { parseRoomInput } from '../../shared/room-id.ts'
 import { createRoom } from '../api/rooms.ts'
 import { Button } from '../components/Button.tsx'
 import { TextInput } from '../components/Field.tsx'
+import { LanguageSelect } from '../components/LanguageSelect.tsx'
 import { Logo } from '../components/Logo.tsx'
 import { strings } from '../strings.ts'
 import { breakpoint, color, font, fontSize, radius, space } from '../styles/tokens.ts'
@@ -40,6 +41,7 @@ export function HomePage() {
     <Page>
       <Top>
         <Logo size={30} />
+        <LanguageSelect />
       </Top>
       <Hero>
         <h1>{strings.tagline}</h1>
@@ -90,7 +92,7 @@ const Page = styled.main`
   min-height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr auto;
-  font-family: ${font.ui};
+  font-family: ${font.current};
   background: ${color.bg};
   color: ${color.fg};
 `

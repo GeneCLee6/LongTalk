@@ -34,6 +34,11 @@ export interface Capabilities {
   clipboard: boolean
   /** navigator.share (Web Share API): the share sheet for the room link (mostly phones) */
   webShare: boolean
+  /**
+   * navigator.permissions.query (G1): the pre-join screen reads the camera and microphone
+   * permissions, so it can tell a system block from a browser one and retry once allowed
+   */
+  permissions: boolean
 }
 
 export type Capability = keyof Capabilities
@@ -51,6 +56,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'deviceChange',
   'clipboard',
   'webShare',
+  'permissions',
 ]
 
 /** Where detection looks: the browser's globals, or a stand-in in tests */
@@ -59,7 +65,12 @@ export interface CapabilityEnv {
   RTCRtpSender?: { prototype: object }
   HTMLMediaElement?: { prototype: object }
   AudioContext?: unknown
-  navigator?: { mediaDevices?: object | null; clipboard?: object | null; share?: unknown }
+  navigator?: {
+    mediaDevices?: object | null
+    clipboard?: object | null
+    share?: unknown
+    permissions?: object | null
+  }
 }
 
 const browser = (): CapabilityEnv => globalThis as unknown as CapabilityEnv
@@ -110,6 +121,11 @@ export function canWebShare(env: CapabilityEnv = browser()): boolean {
   return typeof env.navigator?.share === 'function'
 }
 
+/** Whether permissions can be read (navigator.permissions.query) */
+export function canQueryPermissions(env: CapabilityEnv = browser()): boolean {
+  return has(env.navigator?.permissions, 'query')
+}
+
 /** Everything at once (the doc's table, for this browser) */
 export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities {
   const devices = env.navigator?.mediaDevices
@@ -126,5 +142,6 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     deviceChange: has(devices, 'ondevicechange'),
     clipboard: canCopy(env),
     webShare: canWebShare(env),
+    permissions: canQueryPermissions(env),
   }
 }

@@ -6,8 +6,6 @@ import { color, fontSize, media, motion, radius, space } from '../styles/tokens.
 import { Button } from './Button.tsx'
 import { LogoMark } from './Logo.tsx'
 
-const text = strings.left
-
 export interface LeftScreenProps {
   /**
    * `left`: the person pressed 「離開」 (rejoin offered); `closed`: the room closed while they were
@@ -33,18 +31,18 @@ export function LeftScreen({ reason, roomName, onRate, onRejoin, onHome }: LeftS
   const [rated, setRated] = useState<RatingScore | null>(null)
   const closed = reason !== 'left'
   const heading = {
-    left: text.title,
-    closed: text.closedTitle,
-    ended: text.endedTitle,
-    endedSelf: text.endedSelfTitle,
-    removed: text.removedTitle,
+    left: strings.left.title,
+    closed: strings.left.closedTitle,
+    ended: strings.left.endedTitle,
+    endedSelf: strings.left.endedSelfTitle,
+    removed: strings.left.removedTitle,
   }[reason]
   const body = {
-    left: text.body(roomName),
-    closed: text.closedBody,
-    ended: text.endedBody(roomName),
-    endedSelf: text.endedSelfBody(roomName),
-    removed: text.removedBody(roomName),
+    left: strings.left.body(roomName),
+    closed: strings.left.closedBody,
+    ended: strings.left.endedBody(roomName),
+    endedSelf: strings.left.endedSelfBody(roomName),
+    removed: strings.left.removedBody(roomName),
   }[reason]
   const rate = (score: RatingScore) => {
     if (rated !== null) return
@@ -58,13 +56,13 @@ export function LeftScreen({ reason, roomName, onRate, onRejoin, onHome }: LeftS
       <Body>{body}</Body>
 
       <Rating role="group" aria-labelledby="left-question">
-        <h2 id="left-question">{text.question}</h2>
+        <h2 id="left-question">{strings.left.question}</h2>
         <Scores>
           {RATING_SCORES.map((score) => (
             <li key={score}>
               <Score
                 type="button"
-                aria-label={text.scoreLabel(score, text.scores[score])}
+                aria-label={strings.left.scoreLabel(score, strings.left.scores[score])}
                 aria-pressed={rated === score}
                 disabled={rated !== null}
                 $chosen={rated === score}
@@ -72,17 +70,17 @@ export function LeftScreen({ reason, roomName, onRate, onRejoin, onHome }: LeftS
               >
                 {score}
               </Score>
-              <ScoreName aria-hidden="true">{text.scores[score]}</ScoreName>
+              <ScoreName aria-hidden="true">{strings.left.scores[score]}</ScoreName>
             </li>
           ))}
         </Scores>
-        <Small role="status">{rated === null ? text.privacy : text.thanks}</Small>
+        <Small role="status">{rated === null ? strings.left.privacy : strings.left.thanks}</Small>
       </Rating>
 
       <Actions>
-        {!closed && <Button onClick={onRejoin}>{text.rejoin}</Button>}
+        {!closed && <Button onClick={onRejoin}>{strings.left.rejoin}</Button>}
         <Button variant={closed ? 'primary' : 'secondary'} onClick={onHome}>
-          {text.home}
+          {strings.left.home}
         </Button>
       </Actions>
     </Card>

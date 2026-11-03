@@ -4,7 +4,9 @@ import { isClientId, isSessionToken, normalizeName } from '../../shared/protocol
 // What the browser remembers between visits (AC-1.2, AC-4.2):
 // - the display name, in localStorage: every room, every tab;
 // - the chosen microphone, camera and speaker (e2-t06), in localStorage: the pre-join screen
-//   and the room read and write the same choice;
+//   and the room read and write the same choice. G1 (e4-t09) keeps each one's label too: Safari
+//   and Firefox give a site new device ids now and then (and every browser does after its data is
+//   cleared), so a remembered id that is gone is looked up again by its label (resolveDevice);
 // - the room's session token, in sessionStorage: it survives a reload of the tab, but a second
 //   tab (or the next visit) joins as someone new instead of taking the first tab's place;
 // - this browser's own random id (F1), in localStorage: every `join` carries it, and a member the
@@ -18,6 +20,7 @@ import { isClientId, isSessionToken, normalizeName } from '../../shared/protocol
 
 const NAME_KEY = 'longtalk.name'
 const DEVICES_KEY = 'longtalk.devices'
+const DEVICE_LABELS_KEY = 'longtalk.deviceLabels'
 const CLIENT_KEY = 'longtalk.client'
 const VIEW_KEY = 'longtalk.view'
 const PREFS_KEY = 'longtalk.prefs'
@@ -113,9 +116,48 @@ export function loadDevices(): DeviceChoices {
   return choices
 }
 
-/** Remembers one choice, keeping the others */
-export function saveDevice(kind: keyof DeviceChoices, deviceId: string): void {
+/** The label of each remembered device (G1), for when its id has changed; null when unknown */
+export function loadDeviceLabels(): DeviceChoices {
+  const labels = defaultDevices()
+  try {
+    const saved = JSON.parse(read('localStorage', DEVICE_LABELS_KEY) ?? '{}') as Record<
+      string,
+      unknown
+    >
+    for (const kind of ['mic', 'cam', 'speaker'] as const) {
+      if (isDeviceId(saved[kind])) labels[kind] = saved[kind]
+    }
+  } catch {
+    // Unreadable: no labels
+  }
+  return labels
+}
+
+/** Remembers one choice (with its label, when the browser shows labels), keeping the others */
+export function saveDevice(kind: keyof DeviceChoices, deviceId: string, label = ''): void {
   write('localStorage', DEVICES_KEY, JSON.stringify({ ...loadDevices(), [kind]: deviceId }))
+  write(
+    'localStorage',
+    DEVICE_LABELS_KEY,
+    JSON.stringify({ ...loadDeviceLabels(), [kind]: label || null }),
+  )
+}
+
+/**
+ * Where a remembered device is now (G1, e4-t09): its id when the list still has it; otherwise the
+ * device with the same label (the browser gave it a new id); null when it is gone (unplugged:
+ * the browser's default is used meanwhile, and the choice stays remembered for when it is back).
+ * An empty list (no permission yet: no ids to compare) keeps the remembered id.
+ */
+export function resolveDevice(
+  deviceId: string | null,
+  label: string | null,
+  options: readonly { deviceId: string; label: string }[],
+): string | null {
+  if (deviceId === null || options.length === 0) return deviceId
+  if (options.some((option) => option.deviceId === deviceId)) return deviceId
+  if (label) return options.find((option) => option.label === label)?.deviceId ?? null
+  return null
 }
 
 /** How the stage looks, remembered between meetings (G2, e4-t10, e4-t11) */

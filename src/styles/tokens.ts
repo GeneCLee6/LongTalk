@@ -78,6 +78,12 @@ export const color = vars
 
 export const font = {
   ui: "'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, -apple-system, 'Segoe UI', sans-serif",
+  // The English interface (G1): a Latin font first, so ’ and “ ” are not the CJK font's
+  // full-width ones; Chinese names still fall through to the CJK fonts
+  uiLatin:
+    "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif",
+  // What components use: the stack for the language shown (GlobalStyle sets the variable)
+  current: 'var(--lt-font-ui)',
   // The wordmark only (DESIGN.md §7)
   brand: "'Inter', system-ui, sans-serif",
   // Password fields: a Latin font first, so the mask dot is not the CJK font's full-width one

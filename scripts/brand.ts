@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from '@playwright/test'
 import { BRAND_TAGLINE, ICONS, OG_IMAGE, webManifest } from '../src/brand.ts'
-import { strings } from '../src/strings.ts'
+import { zhTW as strings } from '../src/i18n/zh-TW.ts'
 import { font, palette } from '../src/styles/tokens.ts'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
