@@ -38,6 +38,13 @@ export interface MenuProps {
   align?: 'start' | 'end'
   /** The icon trigger shows its caption (the toolbar's 更多) */
   showLabel?: boolean
+  /**
+   * The icon trigger's accessible name when it says more than `label` (which stays the caption
+   * and the sheet's title), with a count in `badge` (the phone's 更多 while people wait, G3)
+   */
+  triggerLabel?: string
+  badge?: number
+  badgeTone?: 'primary' | 'warn'
 }
 
 /**
@@ -53,6 +60,9 @@ export function Menu({
   placement = 'below',
   align = 'start',
   showLabel = false,
+  triggerLabel,
+  badge,
+  badgeTone,
 }: MenuProps) {
   const sheet = usePhoneLayout() !== null
   const [open, setOpen] = useState(false)
@@ -178,7 +188,15 @@ export function Menu({
   return (
     <Root ref={rootRef}>
       {icon ? (
-        <IconButton label={label} icon={icon} showLabel={showLabel} {...triggerProps} />
+        <IconButton
+          label={triggerLabel ?? label}
+          caption={label}
+          icon={icon}
+          showLabel={showLabel}
+          badge={badge}
+          badgeTone={badgeTone}
+          {...triggerProps}
+        />
       ) : (
         <Button variant="secondary" {...triggerProps}>
           {label}

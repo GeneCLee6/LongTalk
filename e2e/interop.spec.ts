@@ -19,7 +19,9 @@ import { strings } from '../src/strings.ts'
 // admits it and it sees and hears the room; then the host locks the room, everyone sees the
 // padlock, and a fifth browser is shown the locked screen at once. After the share, the stage
 // (G2): the host spotlights a member and everyone sees them big, another pins someone else for
-// herself only, and she hides her own tile and shows it again.
+// herself only, and she hides her own tile and shows it again. Right after the chat, raised hands
+// and reactions (G3): a member raises his hand, the host sees it on his tile and first in the
+// participants list and lowers it (he is told); another reacts and the others see it float.
 // A second, shorter test (F3)
 // covers the password, co-hosts and ending: the host sets a password; a newcomer tries a wrong
 // one and is asked again, then gets in with the right one; another comes through a link with
@@ -410,6 +412,47 @@ interop(
         await toolbarButton(alice, strings.toolbar.chat).click()
       },
     )
+
+    await interop.step(
+      'Bob raises his hand: Alice sees it on his tile and first in the list, and lowers it (G3)',
+      async () => {
+        await toolbarButton(bob, strings.reactions.button).click()
+        await bob.page
+          .getByRole('dialog', { name: strings.reactions.picker })
+          .getByRole('button', { name: strings.reactions.raise })
+          .click()
+        const hand = tile(alice, bob).getByRole('img', { name: strings.reactions.handPosition(1) })
+        await expect(hand, 'Alice sees Bob’s hand on his tile').toBeVisible()
+        await toolbarButton(alice, strings.toolbar.participantsCount(3)).click()
+        const list = alice.page.getByRole('list', { name: strings.participants.list })
+        await expect(list.getByRole('listitem').first()).toHaveAttribute('aria-label', bob.name)
+        await alice.page
+          .getByRole('button', { name: strings.participants.actions(bob.name) })
+          .click()
+        await alice.page.getByRole('menuitem', { name: strings.reactions.lowerHand }).click()
+        await expect(hand).toHaveCount(0)
+        await expect(
+          bob.page.getByText(strings.hostNotice.handLowered(`${strings.participants.host} Alice`)),
+        ).toBeVisible()
+        await toolbarButton(alice, strings.toolbar.participantsCount(3)).click()
+      },
+    )
+
+    await interop.step('Carol reacts: Alice and Bob see it float over her tile (G3)', async () => {
+      await toolbarButton(carol, strings.reactions.button).click()
+      await carol.page
+        .getByRole('button', { name: strings.reactions.send(strings.reactions.names['👍']) })
+        .click()
+      await carol.page.keyboard.press('Escape')
+      for (const viewer of [alice, bob]) {
+        await expect(
+          tile(viewer, carol).getByRole('img', {
+            name: strings.reactions.from(carol.name, strings.reactions.names['👍'], 1),
+          }),
+          `${viewer.name} sees Carol's 👍`,
+        ).toBeVisible()
+      }
+    })
 
     await interop.step('every way: video frames and audio', async () => {
       for (const viewer of members) {

@@ -6,6 +6,7 @@ import { ChatIcon, LeaveIcon, MoreIcon, PeopleIcon, ScreenShareIcon } from './ic
 import { usePhoneLayout } from './layoutContext.ts'
 import { MediaControls, type MediaControlsProps } from './MediaControls.tsx'
 import { Menu, type MenuItem } from './Menu.tsx'
+import { ReactionsButton, type ReactionsButtonProps } from './ReactionsButton.tsx'
 
 export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
   /** Members in the room, on the participants button */
@@ -35,6 +36,11 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
   moreItems: MenuItem[]
   /** Leave the room (on phones the top bar has the button instead) */
   onLeave: () => void
+  /**
+   * 反應 (G3): the reactions and the raised hand. On a phone it takes the fifth key and
+   * participants moves into 更多 (DESIGN.md §4.3)
+   */
+  reactions?: ReactionsButtonProps
 }
 
 /**
@@ -44,10 +50,11 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
  * as its badge); participants from F1 (e1-t08: the same panel or drawer, with the member count
  * as its badge).
  *
- * On a phone (e4-t07) it is one row of icons within a thumb's reach: microphone, camera, chat,
- * participants, more (DESIGN.md §4.3's fifth key, reactions, comes with E5; participants holds
- * its place until then), and 離開 moves to the top bar's right end, away from the thumb, so nobody
- * leaves by accident.
+ * On a phone (e4-t07) it is one row of icons within a thumb's reach: microphone, camera,
+ * reactions, chat, more (DESIGN.md §4.3; participants held the reactions' place until G3 and is
+ * now in 更多, and a tab away in the chat drawer; 更多 carries the waiting room's badge for a
+ * host), and 離開 moves to the top bar's right end, away from the thumb, so nobody leaves by
+ * accident. Reactions come before chat on a desktop too, after share (DESIGN.md's toolbar).
  *
  * Where there is no 分享螢幕 button (e3-t10, AC-3.6) 更多 says why, as its first item, greyed
  * out with the reason under it: phone browsers cannot share; neither can a desktop browser
@@ -67,9 +74,16 @@ export function Toolbar({
   onToggleParticipants,
   moreItems,
   onLeave,
+  reactions,
   ...media
 }: ToolbarProps) {
   const phone = usePhoneLayout() !== null
+  // On a phone 反應 takes participants' key; participants is the first of 更多 then
+  const participantsInMore = phone && reactions !== undefined
+  const participantsLabel =
+    waitingCount > 0
+      ? strings.toolbar.participantsWaiting(memberCount, waitingCount)
+      : strings.toolbar.participantsCount(memberCount)
   const shareLabel = sharing ? strings.screenShare.stop : strings.toolbar.share
   const shareItem: MenuItem | null = !canShareScreen
     ? {
@@ -87,7 +101,10 @@ export function Toolbar({
           onSelect: onToggleShare,
         }
       : null
-  const more = shareItem ? [shareItem, ...moreItems] : moreItems
+  const participantsItem: MenuItem[] = participantsInMore
+    ? [{ id: 'participants', label: participantsLabel, onSelect: onToggleParticipants }]
+    : []
+  const more = [...(shareItem ? [shareItem] : []), ...participantsItem, ...moreItems]
   return (
     <MediaControls {...media}>
       {canShareScreen && !phone && (
@@ -99,6 +116,7 @@ export function Toolbar({
           onClick={onToggleShare}
         />
       )}
+      {reactions && <ReactionsButton {...reactions} />}
       <IconButton
         label={strings.toolbar.chatUnread(chatUnread)}
         caption={strings.toolbar.chat}
@@ -108,23 +126,28 @@ export function Toolbar({
         aria-expanded={chatOpen}
         onClick={onToggleChat}
       />
-      <IconButton
-        label={
-          waitingCount > 0
-            ? strings.toolbar.participantsWaiting(memberCount, waitingCount)
-            : strings.toolbar.participantsCount(memberCount)
-        }
-        caption={strings.toolbar.participants}
-        icon={<PeopleIcon />}
-        badge={waitingCount > 0 ? waitingCount : memberCount}
-        badgeTone={waitingCount > 0 ? 'warn' : 'primary'}
-        showLabel
-        aria-expanded={participantsOpen}
-        onClick={onToggleParticipants}
-      />
+      {!participantsInMore && (
+        <IconButton
+          label={participantsLabel}
+          caption={strings.toolbar.participants}
+          icon={<PeopleIcon />}
+          badge={waitingCount > 0 ? waitingCount : memberCount}
+          badgeTone={waitingCount > 0 ? 'warn' : 'primary'}
+          showLabel
+          aria-expanded={participantsOpen}
+          onClick={onToggleParticipants}
+        />
+      )}
       {more.length > 0 && (
         <Menu
           label={strings.toolbar.more}
+          triggerLabel={
+            participantsInMore && waitingCount > 0
+              ? strings.toolbar.moreWaiting(waitingCount)
+              : undefined
+          }
+          badge={participantsInMore && waitingCount > 0 ? waitingCount : undefined}
+          badgeTone="warn"
           icon={<MoreIcon />}
           items={more}
           placement="above"

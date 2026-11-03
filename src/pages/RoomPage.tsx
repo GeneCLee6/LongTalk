@@ -7,12 +7,14 @@ import {
   normalizeName,
   waitingQueue,
   type HostMemberAction,
+  type Member,
   type NoticeMessage,
   type RoomInfo,
   type Role,
   type WaitingEntry,
 } from '../../shared/protocol.ts'
 import { normalizePassword } from '../../shared/password.ts'
+import { handQueue, type Reaction } from '../../shared/reactions.ts'
 import { can } from '../../shared/roles.ts'
 import {
   focusFirst,
@@ -33,7 +35,11 @@ import { ConfirmDialog } from '../components/ConfirmDialog.tsx'
 import { LeaveDialog, PasswordDialog } from '../components/HostDialogs.tsx'
 import { Drawer } from '../components/Drawer.tsx'
 import { LeftScreen } from '../components/LeftScreen.tsx'
-import { PhoneLayoutContext, usePhoneLayoutQuery } from '../components/layoutContext.ts'
+import {
+  PhoneLayoutContext,
+  usePhoneLayoutQuery,
+  useReducedMotion,
+} from '../components/layoutContext.ts'
 import { MemberAudio } from '../components/MemberAudio.tsx'
 import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
@@ -44,6 +50,7 @@ import { ShareTile } from '../components/ShareTile.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
 import { Stage } from '../components/Stage.tsx'
 import { Tile, type TileProps } from '../components/Tile.tsx'
+import { OffStageReactions } from '../components/TileReactions.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
 import { Toolbar } from '../components/Toolbar.tsx'
 import { TopBar } from '../components/TopBar.tsx'
@@ -64,14 +71,20 @@ import {
   clearSession,
   loadDevices,
   loadName,
+  loadPrefs,
   loadSession,
   loadView,
   saveDevice,
   saveName,
+  savePrefs,
   saveView,
   type DeviceChoices,
+  type RoomPrefs,
   type ViewPrefs,
 } from '../room/session.ts'
+import { memberChanges, type MemberChanges } from '../room/roomEvents.ts'
+import { Sounds, crowdAllowsSound } from '../room/sounds.ts'
+import { useReactions } from '../room/useReactions.ts'
 import { useHeldSpeaker } from '../room/useHeldSpeaker.ts'
 import { useLocalDevices } from '../room/useLocalDevices.ts'
 import { useLocalPreview } from '../room/useLocalPreview.ts'
@@ -443,6 +456,8 @@ function Room({
     onError,
     onNotice: onHostControl,
     sendChat,
+    onReaction,
+    sendReaction,
   } = useRoomConnection(roomId, choices.name, choices.password)
   const toasts = useToasts()
   const { show } = toasts
@@ -503,6 +518,12 @@ function Room({
   }, [passwordRefused])
   const self = state.you ? state.view?.members[state.you] : undefined
   const role: Role = self?.role ?? 'participant'
+  // Our raised hand (e5-t04): RoomDO keeps it (worker/roles.ts `raiseHand`)
+  const handUp = self?.hand != null
+  const onToggleHand = () => {
+    send({ t: 'hand', up: !handUp })
+    if (!handUp) show(strings.reactions.raised)
+  }
   // A handover's notice says who gave us the role (F3): the generic 「你現在是主持人」 stays quiet
   const announceHost = useHostNotice(self?.role, show)
   useEffect(() => {
@@ -525,6 +546,27 @@ function Room({
     you: state.you,
     open: chatOpen,
   })
+  // 更多's switches (G3): 音效 and 隱藏表情反應, remembered (session.ts)
+  const [prefs, setPrefs] = useState<RoomPrefs>(loadPrefs)
+  const updatePrefs = (changes: Partial<RoomPrefs>) => {
+    const next = { ...prefs, ...changes }
+    savePrefs(next)
+    setPrefs(next)
+  }
+  // The room's sounds (e4-t16): never before a gesture, never while 音效 is off (sounds.ts)
+  const [sounds] = useState(() => new Sounds())
+  useEffect(() => sounds.setEnabled(prefs.sounds), [sounds, prefs.sounds])
+  useEffect(() => () => sounds.close(), [sounds])
+  // A chat message from someone else while the chat is closed: the preview bubble, and a blip
+  useEffect(() => {
+    if (chat.preview) sounds.play('chat')
+  }, [chat.preview, sounds])
+  // Reactions floating over the tiles (e5-t03); none at all while hidden
+  const reducedMotion = useReducedMotion()
+  const reactions = useReactions(onReaction, { hidden: prefs.hideReactions, reducedMotion })
+  const onReact = (emoji: Reaction) => {
+    if (sendReaction(emoji) === 'rateLimited') show(strings.reactions.tooFast, 'warn')
+  }
   // The room refused a message as too fast (the browser checks first, so this is rare)
   useEffect(
     () =>
@@ -590,6 +632,14 @@ function Room({
       checked: hideNoVideo,
       onSelect: () => setHideNoVideo((on) => !on),
     },
+    {
+      id: 'hide-reactions',
+      label: strings.reactions.hide,
+      section: viewSection,
+      kind: 'checkbox',
+      checked: prefs.hideReactions,
+      onSelect: () => updatePrefs({ hideReactions: !prefs.hideReactions }),
+    },
     ...(pinnedId !== null
       ? [
           {
@@ -653,6 +703,14 @@ function Room({
       ? [{ id: 'rename-room', label: strings.rename.room, onSelect: () => setRenaming('room') }]
       : []),
     ...viewItems,
+    {
+      id: 'sounds',
+      label: strings.sounds.toggle,
+      section: strings.sounds.section,
+      kind: 'checkbox',
+      checked: prefs.sounds,
+      onSelect: () => updatePrefs({ sounds: !prefs.sounds }),
+    },
   ]
   const onNotice = useCallback((notice: DeviceNotice) => show(noticeText(notice), 'warn'), [show])
   // The microphone and camera chosen on the pre-join screen, opened again for the room; the
@@ -669,6 +727,8 @@ function Room({
     [local.ready, micSending, camSending],
   )
   const [speakerSupported] = useState(canChooseSpeaker)
+  // The sounds go to the speaker chosen for the room, where Web Audio can (Chrome, Edge)
+  useEffect(() => sounds.setSpeaker(local.chosen.speaker), [sounds, local.chosen.speaker])
 
   // The SFU proxy asks for the session token on every call; the transport reads the latest
   const token = useRef(state.token)
@@ -784,6 +844,10 @@ function Room({
         announceHost()
         show(strings.hostNotice.madeHost(who))
         return
+      // G3 (e5-t04)
+      case 'handLowered':
+        show(strings.hostNotice.handLowered(who))
+        return
     }
   })
   useEffect(() => onHostControl((notice) => onHostNotice(notice)), [onHostControl])
@@ -792,6 +856,9 @@ function Room({
     send({ t: 'host', action, memberId })
     if (action === 'remove') {
       show(strings.participants.removed(viewMembers?.[memberId]?.name ?? ''))
+    }
+    if (action === 'lowerHand') {
+      show(strings.reactions.lowered(viewMembers?.[memberId]?.name ?? ''))
     }
   }
   const onMuteAll = () => {
@@ -832,6 +899,19 @@ function Room({
   const waitingList = waitingQueue(state.view?.waiting)
   const canAdmit = can(role, 'admit')
   useWaitingNotice(canAdmit ? waitingList : null, show)
+  // Someone joined, left or raised a hand (G3): sounds (join and leave only in a small room) and,
+  // for who can lower hands, a toast
+  const staff = can(role, 'lowerHand')
+  useMemberEvents(viewMembers, state.you, state.welcomes, (changes, count) => {
+    if (changes.raised.length > 0 && staff) {
+      for (const id of changes.raised)
+        show(strings.reactions.handRaised(viewMembers?.[id]?.name ?? ''))
+      sounds.play('hand')
+    }
+    if (!crowdAllowsSound(count)) return
+    if (changes.joined.length > 0) sounds.play('join')
+    else if (changes.left.length > 0) sounds.play('leave')
+  })
   const onLock = (on: boolean) => {
     send({ t: 'host', action: 'lock', on })
     show(on ? strings.participants.lockedNow : strings.participants.unlockedNow)
@@ -883,6 +963,8 @@ function Room({
   }
 
   const members = Object.values(state.view?.members ?? {})
+  // Everyone's place in the raised-hand queue (e5-t04), 1 first
+  const handPlace = new Map(handQueue(members).map((member, index) => [member.id, index + 1]))
   // Each member's camera as their tile shows it: ours while it sends, theirs while it is on
   const videoOf = (member: (typeof members)[number]): MediaStreamTrack | null => {
     if (member.id === state.you) return media.videoRefused ? null : camSending
@@ -1074,6 +1156,8 @@ function Room({
                       }
                       // The speaking outline follows our own microphone while it sends, theirs
                       // while it is on
+                      hand={handPlace.get(member.id) ?? null}
+                      reactions={reactions[member.id]}
                       level={you ? micSending : mic && !mic.muted ? audio : null}
                       micMuted={you ? micSending === null : (mic?.muted ?? true)}
                       onHeard={you ? undefined : () => setLastHeard(member.id)}
@@ -1081,6 +1165,19 @@ function Room({
                   )
                 })}
               </Stage>
+            )}
+            {inRoom && (
+              // Reactions from someone whose tile is not on the stage (hidden): beside it
+              <OffStageReactions
+                entries={members.flatMap((member) =>
+                  stageMembers.some((shown) => shown.id === member.id)
+                    ? []
+                    : (reactions[member.id] ?? []).map((bubble) => ({
+                        name: member.id === state.you ? strings.common.you : member.name,
+                        bubble,
+                      })),
+                )}
+              />
             )}
             <Notices>
               {state.status === 'lost' && (
@@ -1158,6 +1255,7 @@ function Room({
           }}
           onSelect={(choice, deviceId) => void devices?.select(choice, deviceId)}
           speakerSupported={speakerSupported}
+          reactions={{ handUp, onReact, onToggleHand }}
         />
       </ToolbarArea>
       {panel !== null && phone !== null && (
@@ -1336,6 +1434,32 @@ function useWaitingNotice(waiting: WaitingEntry[] | null, show: (text: string) =
     if (arrived.length === 1) show(strings.participants.waitingArrived(arrived[0].name))
     else if (arrived.length > 1) show(strings.participants.waitingArrivedMany(arrived.length))
   }, [ids, show])
+}
+
+/**
+ * Calls `onChange` with who joined, left or raised a hand (G3, roomEvents.ts) whenever the room's
+ * members change, and how many are in the room now. The first view after each welcome is where
+ * we start from, not a change: who was there already did not just arrive.
+ */
+function useMemberEvents(
+  members: Readonly<Record<string, Member>> | undefined,
+  you: string | null,
+  welcomes: number,
+  onChange: (changes: MemberChanges, count: number) => void,
+) {
+  const previous = useRef<{ welcomes: number; members: Readonly<Record<string, Member>> } | null>(
+    null,
+  )
+  const notify = useEffectEvent(onChange)
+  useEffect(() => {
+    if (!members) return
+    const before = previous.current?.welcomes === welcomes ? previous.current.members : null
+    previous.current = { welcomes, members }
+    if (!before) return
+    const changes = memberChanges(before, members, you)
+    if (changes.joined.length + changes.left.length + changes.raised.length === 0) return
+    notify(changes, Object.keys(members).length)
+  }, [members, you, welcomes])
 }
 
 /** 「<名字> 開始分享畫面」 when someone else starts sharing (not when we do) */

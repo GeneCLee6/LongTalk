@@ -40,7 +40,7 @@ class FakeRoom {
   add(id: string, name: string): void {
     this.sent[id] = []
     this.#update((members) => {
-      members[id] = { id, name, role: 'participant', joinedAt: 1, reconnecting: false, tracks: [] }
+      members[id] = { id, name, role: 'participant', joinedAt: 1, reconnecting: false, tracks: [], hand: null }
     })
   }
 

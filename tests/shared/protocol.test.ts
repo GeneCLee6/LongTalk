@@ -35,6 +35,7 @@ const state = {
       joinedAt: 2,
       reconnecting: false,
       tracks: [],
+      hand: null,
     },
   },
   waiting: {},

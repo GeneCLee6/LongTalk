@@ -11,8 +11,17 @@ import {
   radius,
   space,
 } from '../styles/tokens.ts'
-import { MicOffIcon, PinIcon, ReconnectIcon, SpeakingIcon, SpotlightIcon } from './icons.tsx'
+import type { FloatingReaction } from '../room/floatingReactions.ts'
+import {
+  HandIcon,
+  MicOffIcon,
+  PinIcon,
+  ReconnectIcon,
+  SpeakingIcon,
+  SpotlightIcon,
+} from './icons.tsx'
 import { TileVisibleContext } from './layoutContext.ts'
+import { TileReactions } from './TileReactions.tsx'
 import { useTrack } from './useTrack.ts'
 
 export interface TileProps {
@@ -37,6 +46,10 @@ export interface TileProps {
   onTogglePin?: () => void
   /** Spotlight or end it (a host or co-host only: the room decides, worker/roles.ts) */
   onToggleSpotlight?: () => void
+  /** The member's hand is up (G3, e5-t04): their place in the queue, 1 first; null when down */
+  hand?: number | null
+  /** Their reactions floating over the tile now (G3, e5-t03) */
+  reactions?: readonly FloatingReaction[]
 }
 
 /**
@@ -59,6 +72,8 @@ export function Tile({
   spotlighted = false,
   onTogglePin,
   onToggleSpotlight,
+  hand = null,
+  reactions = NO_REACTIONS,
 }: TileProps) {
   const visible = useContext(TileVisibleContext)
   const shown = visible ? video : null
@@ -105,6 +120,17 @@ export function Tile({
             {strings.view.pinnedBadge}
           </Badge>
         )}
+        {hand !== null && (
+          <Badge
+            $tone="hand"
+            role="img"
+            aria-label={strings.reactions.handPosition(hand)}
+            title={strings.reactions.handPosition(hand)}
+          >
+            <HandIcon />
+            <span aria-hidden="true">{strings.reactions.handBadge}</span>
+          </Badge>
+        )}
         {(onTogglePin || onToggleSpotlight) && (
           <Actions>
             {onTogglePin && (
@@ -134,6 +160,7 @@ export function Tile({
           </Actions>
         )}
       </Corner>
+      <TileReactions name={name} reactions={reactions} />
       <Nameplate>
         {micMuted ? (
           <Mark $tone="danger" role="img" aria-label={strings.room.micMuted}>
@@ -154,6 +181,8 @@ export function Tile({
     </Frame>
   )
 }
+
+const NO_REACTIONS: readonly FloatingReaction[] = []
 
 const appear = keyframes`
   from { opacity: 0; transform: scale(0.96); }
@@ -236,16 +265,18 @@ const Corner = styled.div`
   }
 `
 
-const Badge = styled.span<{ $tone?: 'warn' | 'brand' }>`
+const Badge = styled.span<{ $tone?: 'warn' | 'brand' | 'hand' }>`
   display: inline-flex;
   align-items: center;
   gap: ${space(1)};
   padding: ${space(1)} ${space(2)};
   border-radius: ${radius.pill};
-  background: ${({ $tone }) => ($tone === 'brand' ? color.primary : color.overlay)};
-  color: ${({ $tone }) => ($tone === 'brand' ? color.onPrimary : color.warn)};
+  background: ${({ $tone }) =>
+    $tone === 'brand' ? color.primary : $tone === 'hand' ? color.warn : color.overlay};
+  color: ${({ $tone }) =>
+    $tone === 'brand' ? color.onPrimary : $tone === 'hand' ? color.onWarn : color.warn};
+  font-weight: ${({ $tone }) => ($tone === 'hand' ? 700 : 600)};
   font-size: ${fontSize.nameplate};
-  font-weight: 600;
   white-space: nowrap;
 
   svg {

@@ -60,6 +60,7 @@ const member = (id: string, name: string, role: Member['role'], joinedAt: number
   joinedAt,
   reconnecting: false,
   tracks: [],
+  hand: null,
 })
 
 function welcome(members: Member[], room: Frame = {}): Frame {

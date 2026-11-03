@@ -19,8 +19,10 @@ import {
   type ErrorCode,
   type LobbyMessage,
   type NoticeMessage,
+  type ReactionMessage,
   type RoomView,
 } from '../../shared/protocol.ts'
+import { REACTION_RATE, type Reaction } from '../../shared/reactions.ts'
 import { PASSWORD_WAIT_MS } from '../../shared/password.ts'
 import { Backoff } from './backoff.ts'
 
@@ -213,9 +215,12 @@ export class RoomConnection {
   }
   /** The room's CHAT_RATE, checked here too so a refused message stays in the box */
   private readonly chatRate = new ChatRateLimit()
+  /** The room's REACTION_RATE, so a reaction the room would drop is not sent (G3) */
+  private readonly reactionRate = new ChatRateLimit(REACTION_RATE)
   private readonly listeners = new Set<() => void>()
   private readonly errorListeners = new Set<(code: ErrorCode) => void>()
   private readonly noticeListeners = new Set<(notice: NoticeMessage) => void>()
+  private readonly reactionListeners = new Set<(reaction: ReactionMessage) => void>()
 
   constructor(roomId: string, join: JoinAs, options: RoomConnectionOptions = {}) {
     const origin =
@@ -248,6 +253,15 @@ export class RoomConnection {
   onNotice = (listener: (notice: NoticeMessage) => void): (() => void) => {
     this.noticeListeners.add(listener)
     return () => this.noticeListeners.delete(listener)
+  }
+
+  /**
+   * Someone in the room reacted (G3, `reaction`; our own come back too); returns a function that
+   * removes the listener
+   */
+  onReaction = (listener: (reaction: ReactionMessage) => void): (() => void) => {
+    this.reactionListeners.add(listener)
+    return () => this.reactionListeners.delete(listener)
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -473,6 +487,10 @@ export class RoomConnection {
         if (this.rev < 0) return
         for (const listener of this.noticeListeners) listener(message)
         return
+      case 'reaction':
+        if (this.rev < 0) return
+        for (const listener of this.reactionListeners) listener(message)
+        return
       case 'chat': {
         // Only after this socket's welcome (the history follows it)
         if (this.rev < 0) return
@@ -501,6 +519,20 @@ export class RoomConnection {
     if (this.state.status !== 'open' || this.socket?.readyState !== OPEN) return 'offline'
     if (!this.chatRate.take('self', now)) return 'rateLimited'
     this.send({ t: 'chat', text })
+    return 'sent'
+  }
+
+  /**
+   * A reaction to everyone (G3, e5-t03): `sent`, or why not (`rateLimited`: over REACTION_RATE,
+   * the room would drop it; `offline`). It shows when the room sends it back.
+   */
+  sendReaction = (
+    emoji: Reaction,
+    now: number = Date.now(),
+  ): 'sent' | 'rateLimited' | 'offline' => {
+    if (this.state.status !== 'open' || this.socket?.readyState !== OPEN) return 'offline'
+    if (!this.reactionRate.take('self', now)) return 'rateLimited'
+    this.send({ t: 'react', emoji })
     return 'sent'
   }
 
