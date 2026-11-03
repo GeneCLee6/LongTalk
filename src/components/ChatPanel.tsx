@@ -330,6 +330,9 @@ const Hidden = styled.span`
 
 const Compose = styled.form`
   display: grid;
+  /* The column may shrink below the textarea's own width (its 20 columns): without it Firefox
+     sized the column to that and pushed the send button past the panel's edge (H6) */
+  grid-template-columns: minmax(0, 1fr);
   gap: ${space(1)};
   padding: ${space(2)} ${space(3)} ${space(3)};
   border-top: 1px solid ${color.line};

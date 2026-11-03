@@ -191,7 +191,7 @@ jobs:
 
       - name: Interop test against the preview
         if: steps.check.outputs.run == 'true'
-        run: npm run test:e2e
+        run: npm run test:e2e -- --project=chromium
 
       - uses: actions/upload-artifact@v4
         if: failure() && steps.check.outputs.run == 'true'
@@ -202,13 +202,70 @@ jobs:
             playwright-report/
           retention-days: 7
 
+  # H6 (e2-t16, AC-2.8): a Firefox and a Chromium in one room on this preview, through the real
+  # SFU (e2e/crossbrowser.spec.ts): media both ways, a mute, a share each way; then the same with
+  # Playwright's WebKit where its build has WebRTC and capture devices. A job of its own beside
+  # `e2e`, so it neither slows nor holds up the Chromium interop test; skipped like it when there
+  # is no preview with the SFU. Not a required check (DEPLOY.md §7).
+  e2e-firefox:
+    needs: deploy
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_URL: ${{ needs.deploy.outputs.url }}
+      SFU: ${{ needs.deploy.outputs.sfu }}
+      CLOUDFLARE_API_TOKEN: ''
+      CLOUDFLARE_ACCOUNT_ID: ''
+    steps:
+      - name: Is there a preview with the SFU?
+        id: check
+        run: |
+          if [ -z "$BASE_URL" ] || [ "$SFU" != "true" ]; then
+            echo "::notice::No preview with the Realtime SFU; skipping the cross-browser interop test"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.check.outputs.run == 'true'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@v7
+        if: steps.check.outputs.run == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies, Firefox, Chromium and WebKit
+        if: steps.check.outputs.run == 'true'
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium firefox webkit
+
+      - name: Firefox (then WebKit) with Chromium against the preview
+        if: steps.check.outputs.run == 'true'
+        run: npm run test:e2e -- --project=firefox
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.check.outputs.run == 'true'
+        with:
+          name: e2e-firefox
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
   # e11-t05 (AC-11.5): hammers this preview's room creation and WebSockets within reason
   # (scripts/abuse.ts, about a minute) and checks each limit answers: Turnstile (the preview's test
   # keys), the creation limit, a frame flood, an oversized frame, the connection rate, the security
-  # headers, and with PREVIEW_ADMIN_TOKEN the blocklist. After the browser tests, so the limits it
+  # headers, and with PREVIEW_ADMIN_TOKEN the blocklist. After the browser tests (both e2e jobs), so the limits it
   # spends for the runner's network never get in their way. Skipped when there is no preview.
   abuse:
-    needs: [deploy, e2e]
+    needs: [deploy, e2e, e2e-firefox]
     if: always() && github.event.action != 'closed' && needs.deploy.outputs.url != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10

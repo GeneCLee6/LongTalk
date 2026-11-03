@@ -114,7 +114,70 @@ REALTIME_TURN_KEY_API_TOKEN=...
 
 PR 預覽的 Worker 每個 PR 都是新的：在 GitHub 也設定同名的 `REALTIME_APP_ID`、`REALTIME_APP_SECRET`、`REALTIME_TURN_KEY_ID`、`REALTIME_TURN_KEY_API_TOKEN`（`gh secret set …`），`preview.yml` 部署後會把它們寫進該 PR 的 Worker；沒設定就跳過（notice；沒有 TURN 的預覽只用 STUN）。建議預覽與正式站用**不同的 Realtime app**，流量分開看。
 
-### 兩台裝置互通測試（會議室頁）
+### 實機測試計畫（H6 整合版，`e2-t16`）
+
+第 1–24 步是每一批留下的細節；這一節把它們**依裝置排成一條路線**，每一項寫它勾哪條 AC、細節在第幾步。自動化已經做掉的不用再測：三個 Chromium 經 SFU 互通（`Preview / e2e`）、Firefox 與 Chromium 互通（`Preview / e2e-firefox`）、三個引擎的首頁／預先加入／聊天／版面（`UI checks / browsers`）、axe 與 Lighthouse（`UI checks / a11y`）。實測結果（裝置、系統、瀏覽器版本、通過與否）寫進一個 issue 或 PR，並把 `docs/BROWSER-SUPPORT.md` 對應的格子改成 ●、在「實測紀錄」加一列。
+
+#### 短版：一台電腦＋一支手機，15–30 分鐘
+
+**準備**（2 分鐘）：Windows 電腦的 Chrome（或 Edge）、一支手機（iPhone Safari 或 Android Chrome；另一種下次再跑一次）、一副耳機。用正式站。電腦當主持人 A，手機是 B。
+
+| # | 做什麼 | 通過的樣子 | AC（細節） |
+| --- | --- | --- | --- |
+| 1 | A 首頁「開一間房」，預先加入頁選喇叭 › 「測試喇叭」 | 鏡像預覽、音量表會動、提示音從選的喇叭出來 | AC-4.2（第 17 步） |
+| 2 | 連結用 LINE 傳給 B，B 點開、允許權限、加入 | 兩邊**互看互聽**，含電腦 → 手機的視訊 | AC-2.2 的一半（第 1–3 步） |
+| 3 | A、B 各自靜音、關鏡頭再打開；A 用 ▴ 換麥克風或鏡頭 | 對方立刻看到紅色麥克風與首字；換裝置不斷線 | AC-2.3（第 5 步） |
+| 4 | B 直拿、橫拿，點「更多」與 ▴ | 直拿單欄、工具列一列；橫拿演講者；抽屜從下方滑出 | AC-4.6 的這支手機（第 8 步） |
+| 5 | B 打開聊天用注音打字，按換行鍵；再按送出；A 回一則 | 換行鍵只選字不送出；A 那邊未讀 1 與氣泡 | AC-5.1（第 11 步） |
+| 6 | A 分享一個正在播 YouTube 的分頁 | B 2 秒內看到、聽到影片；提示條的三條停止路徑都能停 | AC-3.1、AC-3.2、AC-3.3、AC-4.3（第 9、10 步） |
+| 7 | A 分享一份小字文件；再分享影片時按提示「切到動態」 | B 字看得清楚；影片變順 | AC-3.4（第 24 步） |
+| 8 | B 的「更多」第一項「分享螢幕」 | 灰色、寫手機不能分享、用電腦加入 | AC-3.6 的手機部分（第 10 步） |
+| 9 | A 在參與者面板靜音 B、把 B 設為聚光燈、釘選自己 | B 被告知、能自己再打開；聚光燈全員、釘選只有 A | AC-1.4 主持人部分、AC-4.4（第 12、14 步） |
+| 10 | B 按「反應」› 👍、「舉手」；A 放下 B 的手 | A 看到飄起、聽到舉手音效；B 被告知 | AC-5.3、AC-4.5（第 16 步） |
+| 11 | B 關 Wi-Fi 30 秒再打開；再把瀏覽器切到背景 10 秒回來 | 8 秒內自己接回、A 看到「重新連線中」又恢復 | AC-2.5（第 7 步） |
+| 12 | B 用 `…/r/<房>?ice=relay` 重新加入 | 名牌「經由轉送伺服器」，照常通話 | AC-2.4（第 6 步） |
+| 13 | 兩邊「離開」、評分；A 打開 `/admin` | 評分、進房、重連、TURN 都有算到 | AC-11.3 的顯示部分（§8） |
+
+做完這張表，**這兩台**的 Chrome（Windows）與手機的 `webrtc`、`getUserMedia`、`getDisplayMedia`（電腦）、`replaceTrack`、`audioContext`、`setSinkId`（Chrome）可以在 BROWSER-SUPPORT 改成 ●。
+
+#### 完整版：依裝置
+
+每台都先跑短版的 1–3 步（加入、互看互聽、開關），再做該台的項目。另一端用電腦 Chrome 就好。
+
+**Windows：Chrome 與 Edge**（Edge 再跑一次短版 1–6）
+- 分享整個螢幕勾「分享系統音訊」：對方聽得到電腦聲音、聽不到自己的回音；開喇叭分享時有沒有兩次聲音（AC-3.2，第 10 步）。
+- 三人同時分享、第四人被擋、選主區重新整理後記得；分享會議分頁時的「換一個畫面」（AC-3.5、AC-3.3，第 24 步）。
+- `chrome://webrtc-internals`：三層 simulcast、8 人時下行 ≤ 4 Mbps、釘選 720／條帶 180、背景分頁降到 180（AC-2.6，第 20 步）。
+- clumsy 丟包、限上行：訊號格、統計面板、降畫質 → 停收 → 建議純音訊，全程有聲音（AC-2.7，第 22 步）。
+- 設定面板三個開關即時生效、靜音中講話提醒、HD 關、純音訊、省電模式；進階噪音抑制的錄音比對（AC-6.1–6.4，第 21、23 步）。
+- 主持人控制、等候室與鎖房、密碼與共同主持人、結束會議（AC-1.4、AC-1.5，第 12、13、15 步）。
+- 安裝 App、離線殼、新版本提示、快捷鍵（AC-4.7、AC-4.9，第 18 步）；只用鍵盤與 NVDA（AC-4.9，第 19 步）。
+
+**Mac：Safari 與 Firefox**
+- Safari、Firefox 各跑一次短版 1–7：記下 Safari 有沒有喇叭選單（`setSinkId`）、Firefox 有。
+- 分享：Safari、Firefox 的選擇器沒有音訊選項、提示條沒有音訊按鈕；關掉「螢幕與系統錄音」權限時的說明（AC-3.1、AC-3.2，第 9、10 步）。
+- Firefox 分享會議所在的**視窗**：出現「你分享的是會議室…」提醒（Firefox 靠視窗標題認出；第 24 步）。
+- Safari「更多 › 連線統計」的「送出的層」：Safari 實際送出幾層 simulcast；只有一層也算通過（依風險表退化為單層，別人照樣看得到），寫進 BROWSER-SUPPORT（第 20 步）。Firefox 也記一次。
+- Firefox 打開進階噪音抑制：麥克風不是 48 kHz 時出現「無法開啟進階噪音抑制」並關掉，聲音不斷（第 23 步）。
+- VoiceOver（⌘F5）念格子名字與狀態（AC-4.9，第 19 步）。
+
+**iPhone：Safari**
+- 短版 1–5、8、10、11 全部（AC-4.6 的 iPhone 那一半）；沒有喇叭選單、沒有「測試喇叭」。
+- 切到別的 App 再回來：鏡頭停了又自己恢復；瀏海、動態島、Home 指示條不壓到頂部條與工具列（第 8 步）。
+- 權限：設定裡關掉鏡頭權限再開連結，看到 iPhone 的步驟（AC-4.2，第 17 步）。
+- 「分享 › 加入主畫面」，首頁提示只出現一次，從主畫面打開沒有網址列（AC-4.7，第 18 步）。
+- VoiceOver 念格子與按鈕（AC-4.9，第 19 步）。
+
+**Android：Chrome**
+- 短版 1–5、8、10、11 全部（AC-4.6 的 Android 那一半）；前後鏡頭切換。
+- 首頁「安裝 LongTalk」、從桌面圖示打開是獨立視窗（AC-4.7，第 18 步）。
+- 電量 ≤ 20 % 拔掉電源進會議室：一次「電量不多了」提示（AC-6.4 一部分，第 23 步）。
+- 權限被封鎖時的 Android 步驟與自動再試（AC-4.2，第 17 步）。
+- 4G／5G 網路加入一次（`?ice=relay` 也試）。
+
+**什麼時候勾**：AC-2.8 要六欄（Chrome、Edge、Firefox、Safari macOS、iOS Safari、Android Chrome）都至少跑過短版 1–3 並記成 ●；其餘 AC 照各步驟寫的條件（多半是「兩台不同裝置都對上」）。
+
+### 兩台裝置互通測試（會議室頁；第 1–24 步是每一批的細節）
 
 A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）；改用會議室本身：
 
@@ -328,13 +391,32 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
 
 ```bash
 npx playwright install chromium        # 第一次
-BASE_URL=https://longtalk-pr-<號>.genelee-pro.workers.dev npm run test:e2e
-PW_CHANNEL=chrome BASE_URL=… npm run test:e2e   # 用已安裝的 Chrome，不下載 Chromium
+BASE_URL=https://longtalk-pr-<號>.genelee-pro.workers.dev npm run test:e2e -- --project=chromium
+PW_CHANNEL=chrome BASE_URL=… npm run test:e2e -- --project=chromium   # 用已安裝的 Chrome，不下載 Chromium
 ```
 
 `BASE_URL` 必須是有 SFU secret 的部署（PR 預覽或正式站）；`npm run dev` 的本機 Worker 沒有 secret，媒體連不上。`npm test`（Vitest）只跑 `tests/`，不會撿到 `e2e/`。
 
 **是不是必過的檢查**：目前不是（`main` 的保護只要求 `CI / verify`）。它依賴 Cloudflare 與 SFU secret，fork 的 PR 也不會跑；穩定跑過幾個 PR 後，可以在分支保護加上 Preview workflow 的 `e2e`（略過時算通過）。
+
+### 多瀏覽器：Firefox 與 WebKit（H6，`e2-t16`，AC-2.8）
+
+兩個地方，都不是必過的檢查，也不拖慢上面的 Chromium 互通測試：
+
+- **`Preview / e2e-firefox`**（`preview.yml`，和 `e2e` 平行的另一個 job；略過條件一樣）：`e2e/crossbrowser.spec.ts`（`playwright.config.ts` 的 `firefox` project）。一個 Firefox（假鏡頭是變色的畫面、假麥克風是固定音，用 prefs 打開：`e2e/fakeDevices.ts`；Playwright 不能在 Firefox 授權鏡頭與麥克風，所以改成不問）和一個 Chromium 在 PR 預覽的同一間房、經真的 SFU：互看每秒 ≥ 5 幀（用 `requestVideoFrameCallback` 數，Firefox 的 `getVideoPlaybackQuality` 對 MediaStream 是 0）、互聽、Firefox 靜音對方看到並聽到靜音、兩邊輪流分享（替身畫面）對方看得到；兩邊送出的 `outbound-rtp`（幾層 simulcast、大小、幀率、編碼）印在 log 與報告附件。第二個測試用 Playwright 的 **WebKit** 做同一套（Linux 的 WebKit 有 WebRTC 與假裝置；沒有時略過）。失敗時上傳 `e2e-firefox` artifact。
+- **`UI checks / browsers`**（`ui.yml`，Playwright Docker image，不需要部署）：`e2e/local/browsers.spec.ts` 在 **Chromium、Firefox、WebKit** 各跑一次（`playwright.local.config.ts` 的三個 project；a11y 與 visual 只在 chromium）：用 app 自己的 `capabilities.ts`（測試時用 Vite 打包成一段 script 在頁面裡跑）偵測，和 `docs/BROWSER-SUPPORT.md` 的 Chrome、Firefox、Safari 欄比（✕ 必須偵測為否，● ○ 必須為是；Playwright 引擎和品牌瀏覽器已知不同的寫在 `ENGINE_DIFFERENCES`）；首頁與開房；預先加入（假裝置的預覽在動、裝置有名字、沒有喇叭能力就沒有喇叭選單）；拒絕權限與沒有裝置時的提示、照樣能加入；兩人進房、可以分享的瀏覽器才有「分享螢幕」、聊天雙向（送出鈕整個在畫面內）、參與者面板；390×844 的視窗工具列在畫面內、沒有橫向捲動。每個瀏覽器偵測到什麼寫進 run 的 Summary（`scripts/browser-report.ts`）與 `browsers` artifact。
+
+**本機跑**：
+
+```bash
+npx playwright install chromium firefox webkit         # 第一次
+npm run build && npm run test:browsers                 # 三個引擎，對 vite preview
+BASE_URL=https://longtalk-pr-<號>.genelee-pro.workers.dev npm run test:e2e -- --project=firefox
+```
+
+Windows 版的 Playwright WebKit 沒有 WebRTC：本機 `test:browsers` 的 WebKit 只跑偵測、首頁與「這個瀏覽器不能視訊通話」畫面，其他略過；`--project=firefox` 的 WebKit 測試也略過。CI 的 Linux 全部會跑。
+
+**穩定**：兩個 job 第一次在 #35 跑；觀察幾個 PR 都穩，再考慮加進分支保護（和 `e2e`、`a11y`、`visual` 一樣，目前只有 `CI / verify` 必過）。
 
 ### 不需要部署的檢查：無障礙與視覺回歸（G5，`e4-t14`、`e4-t17`）
 

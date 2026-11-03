@@ -19,6 +19,7 @@
     "deploy": "npm run build && wrangler deploy",
     "test:e2e": "playwright test",
     "test:ui": "playwright test -c playwright.local.config.ts",
+    "test:browsers": "playwright test -c playwright.local.config.ts browsers.spec.ts",
     "lighthouse": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/lighthouse.ts"
   },
   "dependencies": {

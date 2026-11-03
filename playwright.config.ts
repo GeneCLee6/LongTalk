@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test'
+import { chromiumFakeMedia, firefoxFakeMedia } from './e2e/fakeDevices.ts'
 
 /**
  * End-to-end interop test (e2-t10, AC-2.2): three Chromium browsers with Chrome's fake camera and
@@ -10,6 +11,11 @@ import { defineConfig } from '@playwright/test'
  * The deployment needs REALTIME_APP_ID / REALTIME_APP_SECRET (DEPLOY.md §5); without them every
  * SFU call answers 503 and the test fails at "remote video". Locally, `PW_CHANNEL=chrome` uses the
  * installed Chrome instead of Playwright's Chromium (`npx playwright install chromium`).
+ *
+ * Two projects: `chromium` (the interop test, the language and PWA checks) and `firefox` (H6,
+ * e2-t16: e2e/crossbrowser.spec.ts, a Firefox and a Chromium in one room; CI job `e2e-firefox`).
+ * `npm run test:e2e` runs both (`npx playwright install chromium firefox`); pick one with
+ * `-- --project=chromium`.
  */
 const baseURL = process.env.BASE_URL
 if (!baseURL) {
@@ -30,21 +36,31 @@ export default defineConfig({
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL,
-    browserName: 'chromium',
-    channel: process.env.PW_CHANNEL || undefined,
     locale: 'zh-TW',
-    permissions: ['camera', 'microphone'],
-    launchOptions: {
-      args: [
-        '--use-fake-device-for-media-stream',
-        '--use-fake-ui-for-media-stream',
-        '--autoplay-policy=no-user-gesture-required',
-      ],
-    },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
   },
+  projects: [
+    {
+      name: 'chromium',
+      testIgnore: ['local/**', 'crossbrowser.spec.ts'],
+      use: {
+        browserName: 'chromium',
+        channel: process.env.PW_CHANNEL || undefined,
+        permissions: ['camera', 'microphone'],
+        launchOptions: { args: chromiumFakeMedia },
+      },
+    },
+    {
+      name: 'firefox',
+      testMatch: 'crossbrowser.spec.ts',
+      use: {
+        browserName: 'firefox',
+        launchOptions: { firefoxUserPrefs: firefoxFakeMedia },
+      },
+    },
+  ],
 })

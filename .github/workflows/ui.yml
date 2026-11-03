@@ -14,6 +14,10 @@ name: UI checks
 #           e2e/local/__screenshots__. When they differ (or are missing) the job fails and uploads
 #           `visual-baselines`: the new screenshots, laid out to be copied over the old ones once
 #           the change is meant (DEPLOY.md §7). Run it by hand with `update` to get them anyway.
+#   browsers  the cross-browser smoke suite (H6, e2-t16; e2e/local/browsers.spec.ts) in Chromium,
+#           Firefox and WebKit: what LongTalk detects held against docs/BROWSER-SUPPORT.md (the
+#           table is in the run's summary), home, pre-join with fake, denied and absent devices,
+#           two members with chat and the participants panel, a phone-sized window
 #
 # Not required checks for merging into main (only CI's `verify` is): see DEPLOY.md §7.
 on:
@@ -138,3 +142,45 @@ jobs:
             test-results/
             playwright-report/
           retention-days: 7
+
+  browsers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      # Has Chromium, Firefox and WebKit with their system libraries
+      image: mcr.microsoft.com/playwright:v1.64.0-noble
+      options: --ipc=host
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Chromium, Firefox and WebKit
+        env:
+          # Firefox will not start when HOME is not the container user's (Playwright's CI docs)
+          HOME: /root
+        run: npm run test:browsers
+
+      - name: What each browser detected
+        if: always()
+        run: node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/browser-report.ts >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browsers
+          path: |
+            browser-report/
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
