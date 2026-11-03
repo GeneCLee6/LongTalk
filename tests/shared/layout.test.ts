@@ -16,6 +16,7 @@ import {
   pickSpeaker,
   PORTRAIT_TILE_ASPECT,
   shareLayout,
+  shareSlots,
   SPEAKER_SWITCH_MS,
   speakerLayout,
   stageFocus,
@@ -482,5 +483,21 @@ describe('holdSpeaker (G2, e4-t10): the big tile does not flip back and forth', 
       held: { id: 'b', since: 1100 },
       wait: 0,
     })
+  })
+})
+
+describe('shareSlots (H5, e3-t07): which share is in the main area', () => {
+  it('shows the latest share big and the others in the strip, never our own', () => {
+    expect(shareSlots([], 'me', null)).toEqual({ main: null, strip: [] })
+    expect(shareSlots(['me'], 'me', null)).toEqual({ main: null, strip: [] })
+    expect(shareSlots(['a', 'b', 'c'], 'me', null)).toEqual({ main: 'c', strip: ['a', 'b'] })
+    expect(shareSlots(['a', 'me', 'b'], 'me', null)).toEqual({ main: 'b', strip: ['a'] })
+  })
+
+  it('keeps the viewer’s choice while that member shares, else the latest again', () => {
+    expect(shareSlots(['a', 'b', 'c'], 'me', 'a')).toEqual({ main: 'a', strip: ['b', 'c'] })
+    // They stopped: the latest; our own share is never a choice
+    expect(shareSlots(['b', 'c'], 'me', 'a')).toEqual({ main: 'c', strip: ['b'] })
+    expect(shareSlots(['b', 'me'], 'me', 'me')).toEqual({ main: 'b', strip: [] })
   })
 })

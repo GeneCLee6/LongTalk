@@ -17,6 +17,7 @@ import {
   type Unsubscribe,
   type UplinkStats,
 } from './MediaTransport.ts'
+import type { ShareMode } from './shareMode.ts'
 
 /**
  * An in-memory SFU for tests: transports created from the same FakeSfu can publish to and
@@ -63,6 +64,8 @@ export class FakeTransport implements MediaTransport {
   readonly sending = new Map<string, MediaStreamTrack | null>()
   /** The highest layer each published video sends, by trackName (setTopLayer; `high` on publish) */
   readonly topLayers = new Map<string, Layer>()
+  /** Each published screen's mode (setShareMode, e3-t06), by trackName, in the order asked */
+  readonly shareModes: { trackName: string; mode: ShareMode }[] = []
   /**
    * The uplink getStats() reports (e6-t04): the estimate, and the limitation of every camera
    * and screen we send; tests set it. `stats` overrides it
@@ -174,6 +177,16 @@ export class FakeTransport implements MediaTransport {
       throw new MediaTransportError('not_found', `Not published: ${trackName}`)
     }
     if (this.topLayers.has(trackName)) this.topLayers.set(trackName, top)
+  }
+
+  async setShareMode(trackName: string, mode: ShareMode): Promise<void> {
+    this.#requireSession()
+    if (!this.#ownTracks.has(trackName)) {
+      throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    }
+    if (this.publishOptions.get(trackName)?.kind === 'screen') {
+      this.shareModes.push({ trackName, mode })
+    }
   }
 
   async getStats(): Promise<TransportStats> {

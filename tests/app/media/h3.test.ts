@@ -167,6 +167,22 @@ describe('speaking while muted (e6-t03)', () => {
   })
 })
 
+describe('simulcast encodings: the priority on the first one only (H5)', () => {
+  it('Chrome refuses a non-default priority on any encoding but the first', () => {
+    // A screen with `high` on both layers made addTransceiver throw: it went out as one layer
+    const screen = simulcastEncodings('screen')
+    expect(screen.map((e) => [e.rid, e.priority, e.networkPriority])).toEqual([
+      ['f', 'high', 'high'],
+      ['h', undefined, undefined],
+    ])
+    expect(
+      simulcastEncodings('cam')
+        .slice(1)
+        .every((e) => e.priority === undefined),
+    ).toBe(true)
+  })
+})
+
 describe('HD: the camera’s top layer (e6-t04)', () => {
   it('turns the 720p layer off for medium, keeping the lower two', () => {
     const encodings = simulcastEncodings('cam')

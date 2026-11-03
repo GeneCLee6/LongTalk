@@ -23,6 +23,7 @@ import {
   uplinkVerdict,
 } from '../media/quality.ts'
 import { capFrameRate, POWER_SAVING_BUDGET_BPS, POWER_SAVING_FPS } from '../media/powerSaving.ts'
+import type { ShareMode } from '../media/shareMode.ts'
 import { sampleStats, type StatsSample } from '../media/stats.ts'
 import {
   MediaTransportError,
@@ -61,7 +62,7 @@ import type { VideoDemandStore } from './videoDemand.ts'
 //
 // The screen (D1, e3-t01) is the third kind: `setScreen` hands over the captured screen (null:
 // not sharing). Unlike the camera it is published when sharing starts and unpublished when it
-// ends (RoomDO allows one sharer and only lists the sharer's screen); its video goes out as VP8
+// ends (RoomDO only lists the screens of members who share); its video goes out as VP8
 // like the camera's (CloudflareRealtimeTransport). Once the month is audio-only it is not
 // published (`screenRefused`).
 //
@@ -69,8 +70,13 @@ import type { VideoDemandStore } from './videoDemand.ts'
 // (null: none, or the sharer turned it off). It is published once the screen is, after it (an
 // audio track of its own, through the same transport), the first time there is sound to send;
 // turning it off and on after that replaces what it sends, like the microphone, and the room is
-// told it is muted. It is unpublished with the screen, and before a screen picked again. In an
-// audio-only month the screen is refused, and so its sound never goes out either.
+// told it is muted. It is unpublished with the screen. In an audio-only month the screen is
+// refused, and so its sound never goes out either.
+//
+// Share modes (H5, e3-t06): `setScreenMode` (文字 or 動態, media/shareMode.ts) is applied to the
+// published screen live (MediaTransport.setShareMode) and to any screen published later. A screen
+// picked again while sharing (換一個畫面, e3-t09) replaces what the published track sends
+// (replaceTrack: subscribers keep their subscription) and gets the mode again.
 //
 // Subscriptions are a desired / actual reconciliation, the only way anything gets subscribed:
 // `setDesired` hands over every other member's tracks from RoomDO; `reconcile` subscribes to what
@@ -383,6 +389,9 @@ export class RoomMedia {
   private sendingTop: Layer | null = null
   /** The highest layer the published screen sends now (e2-t15); null before it is published */
   private sendingScreenTop: Layer | null = null
+  /** The share mode asked for (e3-t06, setScreenMode) and the one the published screen has */
+  private wantedScreenMode: ShareMode = 'text'
+  private sendingScreenMode: ShareMode | null = null
   /** The latest stats sample (H3's uplink check reads it: one getStats() path) */
   private lastSample: StatsSample | null = null
   private readonly uplinkSampleMs: number
@@ -522,6 +531,17 @@ export class RoomMedia {
     this.wantedScreen = track
     this.wantedScreenAudio = audio
     if (track === null && this.state.screenRefused) this.update({ screenRefused: false })
+    if (!this.ready) return this.localQueue
+    return this.syncLocal()
+  }
+
+  /**
+   * How the shared screen is encoded (e3-t06): 文字 or 動態 (media/shareMode.ts), applied live
+   * to the published screen and to every screen published after it
+   */
+  setScreenMode(mode: ShareMode): Promise<void> {
+    if (mode === this.wantedScreenMode) return this.localQueue
+    this.wantedScreenMode = mode
     if (!this.ready) return this.localQueue
     return this.syncLocal()
   }
@@ -798,6 +818,7 @@ export class RoomMedia {
     this.sendingScreenAudio = null
     this.sendingTop = null
     this.sendingScreenTop = null
+    this.sendingScreenMode = null
     this.lastSample = null
     this.uplinkCheck = null
     this.update({
@@ -937,6 +958,8 @@ export class RoomMedia {
     await this.applyScreen(transport)
     if (this.closed || !this.ready || transport !== this.transport) return
     await this.applyScreenTop(transport)
+    if (this.closed || !this.ready || transport !== this.transport) return
+    await this.applyScreenMode(transport)
   }
 
   /**
@@ -994,6 +1017,20 @@ export class RoomMedia {
     this.sendingScreenTop = top
   }
 
+  /** The share mode on the published screen (e3-t06), after a publish or a new screen too */
+  private async applyScreenMode(transport: MediaTransport): Promise<void> {
+    const own = this.state.published.find((track) => track.kind === 'screen')
+    const mode = this.wantedScreenMode
+    if (!own || this.sendingScreenMode === mode) return
+    try {
+      await transport.setShareMode(own.trackName, mode)
+    } catch {
+      return
+    }
+    if (this.closed || transport !== this.transport) return
+    this.sendingScreenMode = mode
+  }
+
   /**
    * One uplink sample while the camera sends its 720p layer (e6-t04): several short ones in a row
    * hold HD back, and a retry is scheduled
@@ -1049,6 +1086,22 @@ export class RoomMedia {
   private async applyScreen(transport: MediaTransport): Promise<void> {
     const want = this.wantedScreen
     if (want === this.sendingScreen) return this.applyScreenAudio(transport)
+    const current = this.state.published.find((track) => track.kind === 'screen')
+    if (want && current && this.sendingScreen) {
+      // Another screen picked while sharing (換一個畫面, e3-t09): sent on the same track, so
+      // nobody's subscription changes; its sound follows (applyScreenAudio), and so does the
+      // share mode's contentHint, which belongs to the track
+      try {
+        await transport.replaceTrack(current.trackName, want)
+      } catch (error) {
+        if (!this.closed && transport === this.transport) this.update({ error: errorCode(error) })
+        return
+      }
+      if (this.closed || transport !== this.transport) return
+      this.sendingScreen = want
+      this.sendingScreenMode = null
+      return this.applyScreenAudio(transport)
+    }
     // The screen's sound belongs to the screen that goes: it goes first
     await this.unpublishOwn(transport, 'screenAudio')
     if (this.closed || transport !== this.transport) return
@@ -1085,8 +1138,10 @@ export class RoomMedia {
         error: null,
       })
       this.reportTracks()
-      // A new publish sends every layer; applyScreenTop applies the uplink's ceiling (e2-t15)
+      // A new publish sends every layer; applyScreenTop applies the uplink's ceiling (e2-t15),
+      // applyScreenMode the share mode (e3-t06)
       this.sendingScreenTop = 'high'
+      this.sendingScreenMode = null
     } catch (error) {
       if (this.closed || transport !== this.transport) return
       const code = errorCode(error)

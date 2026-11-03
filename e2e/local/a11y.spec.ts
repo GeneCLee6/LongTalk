@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { joinRoom, newRoom, openPreJoin, secondMember, strings, viewports } from './helpers.ts'
 
 // G5 (e4-t14, AC-4.9): axe-core finds nothing on every screen and the open states that matter
@@ -124,6 +124,72 @@ test('the room, its panels, menus and dialogs have no axe violations', async ({
   await expect(page.getByRole('dialog')).toBeVisible()
   await expectNoViolations(page, 'leave question')
   await bob.context.close()
+})
+
+/** getDisplayMedia replaced by a moving canvas (headless Chromium has no picker), as a window */
+async function stubScreen(context: BrowserContext, displaySurface: string) {
+  await context.addInitScript((surface) => {
+    navigator.mediaDevices.getDisplayMedia = async () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 640
+      canvas.height = 360
+      const context = canvas.getContext('2d')!
+      let frame = 0
+      setInterval(() => {
+        frame += 1
+        context.fillStyle = '#ffffff'
+        context.fillRect(0, 0, 640, 360)
+        context.fillStyle = '#0e7490'
+        context.fillRect((frame * 12) % 640, 120, 120, 120)
+      }, 1000 / 15)
+      const stream = canvas.captureStream(15)
+      const track = stream.getVideoTracks()[0]
+      const settings = track.getSettings.bind(track)
+      track.getSettings = () => ({ ...settings(), displaySurface: surface })
+      return stream
+    }
+  }, displaySurface)
+}
+
+test('sharing: the bar with its preview and warnings, two shares and the picker (H5)', async ({
+  browser,
+}) => {
+  const adaContext = await browser.newContext(viewports.desktop)
+  await stubScreen(adaContext, 'monitor')
+  const page = await adaContext.newPage()
+  const path = await newRoom(page)
+  await joinRoom(page, path, 'Ada')
+  const bobContext = await browser.newContext(viewports.desktop)
+  await stubScreen(bobContext, 'window')
+  const bob = await bobContext.newPage()
+  await joinRoom(bob, path, 'Bob')
+  const carolContext = await browser.newContext(viewports.desktop)
+  await stubScreen(carolContext, 'window')
+  const carol = await carolContext.newPage()
+  await joinRoom(carol, path, 'Carol')
+  const share = (member: Page) =>
+    member
+      .getByRole('toolbar', { name: strings.devices.controls })
+      .getByRole('button', { name: strings.toolbar.share, exact: true })
+      .click()
+
+  // Bob shares a window: his bar has the 文字／動態 switch and his own small preview
+  await share(bob)
+  const bobBar = bob.getByRole('region', { name: strings.screenShare.youAreSharing })
+  await expect(bobBar.getByRole('img', { name: strings.screenShare.preview })).toBeVisible()
+  await expectNoViolations(bob, 'the sharing bar with its preview')
+  // Carol shares too: Ada sees the latest big with the picker, Bob's in the strip
+  await share(carol)
+  await expect(page.getByRole('group', { name: strings.screenShare.picker })).toBeVisible()
+  await expectNoViolations(page, 'two shares and the picker')
+  // Ada shares her whole screen with the meeting in front: the warning (e3-t09)
+  await page.bringToFront()
+  await share(page)
+  await expect(
+    page.getByRole('alert').filter({ hasText: strings.screenShare.selfCapture.screenWithMeeting }),
+  ).toBeVisible({ timeout: 10_000 })
+  await expectNoViolations(page, 'the self-capture warning')
+  for (const context of [adaContext, bobContext, carolContext]) await context.close()
 })
 
 test('the phone room and its drawers have no axe violations', async ({ browser }) => {

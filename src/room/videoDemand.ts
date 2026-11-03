@@ -60,4 +60,8 @@ export class VideoDemandStore {
 const rank = (d: VideoDemand) => (d.visible ? 1 + d.width * d.height : 0)
 
 const sameDemand = (a: VideoDemand, b: VideoDemand) =>
-  a.width === b.width && a.height === b.height && a.visible === b.visible && a.aspect === b.aspect
+  a.width === b.width &&
+  a.height === b.height &&
+  a.visible === b.visible &&
+  a.aspect === b.aspect &&
+  (a.sourceShortSide ?? null) === (b.sourceShortSide ?? null)

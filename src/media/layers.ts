@@ -19,6 +19,11 @@
 //    follows what is already being received (398 kbps while receiving 362, PR preview), so as a
 //    cap it holds every layer low for good. A link that carries less than the budget is H2's to
 //    notice from loss and freezes and lower the budget (e2-t15).
+//    Several shares (H5, e3-t07): the one in the main area (the biggest screen drawn) keeps its
+//    top layer at the full DOWNLINK_BUDGET_BPS even when the caps add up to more: screens rarely
+//    send near their caps (a still screen sends almost nothing) and it is what the viewer reads,
+//    while the strip's shares and cameras are already at their lowest. Once H2 lowers the budget
+//    (the link really struggles) it steps down like anything else.
 // 4. Hysteresis: a layer already asked for stays while the tile is between "good enough" and
 //    "fully covered" (so a tile resized around a boundary does not flip), and stepping up needs
 //    headroom in the budget (UPGRADE_HEADROOM). Callers debounce layout changes on top.
@@ -32,6 +37,11 @@ export interface VideoDemand {
   width: number
   height: number
   visible: boolean
+  /**
+   * The received picture's short side in pixels (min of videoWidth, videoHeight); null or absent
+   * before frames. Screens only use it (H5): a shared window is rarely the nominal 1080p
+   */
+  sourceShortSide?: number | null
   /** The received picture's width / height (videoWidth / videoHeight); null before frames */
   aspect: number | null
 }
@@ -81,13 +91,34 @@ export function shownShortSide(kind: LayeredKind, demand: VideoDemand): number {
   return Math.max(0, s * Math.min(1, aspect))
 }
 
+/**
+ * The layers of a kind with their short sides for this video. A camera is captured at a known
+ * size (devices.ts), so the nominal sides hold. A screen is whatever was shared: a window, a tab,
+ * a 720p canvas. Once frames arrive at the layer asked for (`current`), the full capture's short
+ * side is that picture's times the layer's scale, and each layer's side follows from it (H5: a
+ * 720p window's half layer is 360 lines, not the nominal 540, so a 540-line main area needs `f`).
+ */
+export function layerSides(
+  kind: LayeredKind,
+  demand: VideoDemand | null,
+  current: Layer | null,
+): readonly SimulcastLayer[] {
+  const layers = ladder(kind)
+  const received = demand?.sourceShortSide
+  if (kind !== 'screen' || !received || received <= 0 || !current) return layers
+  const now = layers.find((l) => l.layer === current)
+  if (!now) return layers
+  const full = received * now.scaleResolutionDownBy
+  return layers.map((l) => ({ ...l, shortSide: Math.round(full / l.scaleResolutionDownBy) }))
+}
+
 /** The layer for one video by size alone, keeping `current` while it is in the hysteresis band */
 export function layerForSize(
   kind: LayeredKind,
   demand: VideoDemand | null,
   current: Layer | null,
 ): Layer {
-  const layers = ladder(kind)
+  const layers = layerSides(kind, demand, current)
   const lowest = layers[layers.length - 1]
   if (!demand || !demand.visible || demand.width <= 0 || demand.height <= 0) return lowest.layer
   const needed = shownShortSide(kind, demand)
@@ -128,7 +159,9 @@ export function chooseLayers(inputs: readonly LayerInput[], budgetBps: number): 
   /** How much of what the tile shows a layer covers (1: all of it) */
   const coverage = (i: LayerInput, layer: Layer) => {
     const needed = i.demand?.visible ? shownShortSide(i.kind, i.demand) : 0
-    const side = ladder(i.kind).find((l) => l.layer === layer)?.shortSide ?? 0
+    const current = i.current ? clampLayer(i.kind, i.current) : null
+    const side =
+      layerSides(i.kind, i.demand, current).find((l) => l.layer === layer)?.shortSide ?? 0
     return needed > 0 ? Math.min(1, side / needed) : 1
   }
   const area = (i: LayerInput) => (i.demand?.visible ? i.demand.width * i.demand.height : 0)
@@ -156,12 +189,15 @@ export function chooseLayers(inputs: readonly LayerInput[], budgetBps: number): 
   }
   const stepDown = (input: LayerInput) =>
     chosen.set(input.key, lower(input.kind, chosen.get(input.key)!)!)
-  for (let next = nextDown(inputs); next && total() > budgetBps; next = nextDown(inputs)) {
+  // The main share keeps its layer at the full budget (above)
+  const main = budgetBps >= DOWNLINK_BUDGET_BPS ? mainScreen(inputs) : null
+  const reducible = inputs.filter((input) => input !== main)
+  for (let next = nextDown(reducible); next && total() > budgetBps; next = nextDown(reducible)) {
     stepDown(next)
   }
   // Upgrades must leave headroom: take them back, no lower than the layer asked for now
   const upgraded = () =>
-    inputs.filter(
+    reducible.filter(
       (i) => i.current !== null && ORDER[chosen.get(i.key)!] > ORDER[clampLayer(i.kind, i.current)],
     )
   for (
@@ -172,6 +208,21 @@ export function chooseLayers(inputs: readonly LayerInput[], budgetBps: number): 
     stepDown(next)
   }
   return chosen
+}
+
+/** The biggest visible screen (the share in the main area); null when no screen is drawn */
+function mainScreen(inputs: readonly LayerInput[]): LayerInput | null {
+  let best: LayerInput | null = null
+  let bestArea = 0
+  for (const input of inputs) {
+    if (input.kind !== 'screen' || !input.demand?.visible) continue
+    const area = input.demand.width * input.demand.height
+    if (area > bestArea || (area === bestArea && best && input.key < best.key)) {
+      best = input
+      bestArea = area
+    }
+  }
+  return best
 }
 
 /** A tile's drawn size in device pixels: CSS pixels times the pixel ratio (at most MAX_PIXEL_RATIO) */

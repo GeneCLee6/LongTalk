@@ -493,13 +493,30 @@ export const en: Strings = {
     label: (name: string) => `${name}’s screen`,
     region: (name: string) => `Screen shared by ${name}`,
     waiting: (name: string) => `${name} started sharing; it’s on its way…`,
-    takeOverTitle: 'Take over sharing?',
-    takeOverBody: (name: string) =>
-      `${name} is sharing their screen. If you take over, ${name}’s share stops and yours starts.`,
-    takeOver: 'Take over',
-    takenOver: (name: string) => `${name} took over sharing, so your share stopped.`,
     stopped: 'Your share was stopped.',
     started: (name: string) => `${name} started sharing their screen`,
+    full: (max: number) => `${max} people are already sharing. Try again once one of them stops.`,
+    picker: 'Choose whose share is in the main area',
+    showMain: (name: string) => `Show ${name}’s screen in the main area`,
+    mode: 'Sharing mode',
+    modeText: 'Text',
+    modeMotion: 'Motion',
+    modeTextHint: 'Sharpness first, for documents, code and slides',
+    modeMotionHint: 'Smoothness first, for video and animation',
+    motionHint: 'What you’re sharing keeps moving. Motion mode will look smoother.',
+    motionSwitch: 'Switch to Motion',
+    motionDismiss: 'No thanks',
+    preview: 'What you’re sharing (preview)',
+    previewOff: 'No preview while sharing a whole screen, so it doesn’t repeat endlessly',
+    selfCapture: {
+      meetingTab: 'You’re sharing the meeting’s own tab, so everyone sees it repeat endlessly.',
+      meetingWindow:
+        'You’re sharing the window the meeting is in, so everyone sees it repeat endlessly.',
+      screenWithMeeting:
+        'The meeting is on the screen you’re sharing, so everyone sees it repeat endlessly. Switch to the window you want to show, or share something else.',
+    },
+    repick: 'Share something else',
+    selfCaptureDismiss: 'Got it',
     problems: {
       denied:
         'Your system won’t let the browser share the screen. On a Mac, allow this browser in “System Settings › Privacy & Security › Screen & System Audio Recording”, restart the browser and try again.',

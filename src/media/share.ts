@@ -1,7 +1,8 @@
 // Picking what to share (e3-t01): the browser's getDisplayMedia picker, with the options the PRD
 // asks for (E3 需求), and its failures sorted into what the room says about them. Publishing the
-// track is MediaTransport's business (publish({ kind: 'screen' }), CLAUDE.md rule 2). Text and
-// motion modes (contentHint and constraints, e3-t06) build on this file. No React here.
+// track is MediaTransport's business (publish({ kind: 'screen' }), CLAUDE.md rule 2); text and
+// motion modes are the encoder's (shareMode.ts, e3-t06), the capture is the same for both. At the
+// end: whether what was picked shows the meeting itself (e3-t09). No React here.
 //
 // The share's own sound (e3-t04): where the browser can capture it (Chromium on the desktop: a
 // tab's audio everywhere, the whole system's sound on Windows and ChromeOS; capabilities.ts
@@ -48,7 +49,7 @@ export type CaptureResult =
  * (2026-11-03) found 15 fps choppy for scrolling and video; the encoder (encoding.ts: `balanced`
  * degradation, the uplink's larger share, at most 2.5 Mbps) gives up frame rate and resolution
  * together when the network or CPU cannot keep up, and a still screen sends almost nothing
- * whatever the rate (measurements in ADR-001; the text/motion switch is e3-t06). No audio here:
+ * whatever the rate (measurements in ADR-001; 文字／動態 only change the encoder, shareMode.ts). No audio here:
  * displayMediaOptions adds it where the browser can capture it (e3-t04).
  */
 export const DISPLAY_MEDIA_OPTIONS = {
@@ -140,4 +141,109 @@ export async function captureScreen(
     // Read-only here: the encoder picks for itself
   }
   return { ok: true, track, audio: sound }
+}
+
+// ── What was picked, and whether it is the meeting itself (e3-t09) ──────────────────────────
+//
+// The picker already leaves this tab out (selfBrowserSurface: 'exclude', Chromium) and offers to
+// switch source while sharing (surfaceSwitching). What it cannot leave out: another tab of a
+// meeting, the browser window the meeting is in, or a whole screen the meeting is on, all of
+// which show the meeting inside the share (and the share inside the meeting: a mirror that goes
+// on forever). What is checked, from the cheapest certainty down:
+// - a tab (`browser`): Capture Handle (Chromium): every meeting tab announces a handle starting
+//   with CAPTURE_HANDLE_PREFIX, and the captured tab's handle says whether it is one of ours;
+// - a window: its label is the window's title in Firefox; ours contains the page's title;
+// - a screen (`monitor`): the meeting is on it while this page is in front (visible and
+//   focused) for a moment after sharing starts (the page decides when, useSelfCapture).
+
+/** What getDisplayMedia captured, as getSettings() says (null where the browser does not say) */
+export type DisplaySurface = 'monitor' | 'window' | 'browser'
+
+/** The start of the handle every LongTalk tab announces (Capture Handle) */
+export const CAPTURE_HANDLE_PREFIX = 'longtalk:'
+
+/**
+ * - `meetingTab`: a tab of the meeting (Capture Handle says so)
+ * - `meetingWindow`: the browser window the meeting is in
+ * - `screenWithMeeting`: a whole screen, with the meeting in front on it
+ */
+export type SelfCapture = 'meetingTab' | 'meetingWindow' | 'screenWithMeeting'
+
+export interface CapturedSurface {
+  surface: DisplaySurface | null
+  /** The captured tab's Capture Handle, when it announces one */
+  handle: string | null
+  label: string
+}
+
+/** The kind of source a captured track shows, and what it says about itself */
+export function capturedSurface(track: MediaStreamTrack): CapturedSurface {
+  const settings = (track.getSettings?.() ?? {}) as MediaTrackSettings & { displaySurface?: string }
+  const surface = settings.displaySurface
+  const handleOf = (track as { getCaptureHandle?: () => { handle?: string } | null })
+    .getCaptureHandle
+  let handle: string | null = null
+  try {
+    handle = handleOf?.call(track)?.handle || null
+  } catch {
+    handle = null
+  }
+  return {
+    surface:
+      surface === 'monitor' || surface === 'window' || surface === 'browser' ? surface : null,
+    handle,
+    label: track.label ?? '',
+  }
+}
+
+/**
+ * Whether the share shows the meeting (e3-t09). `pageTitle`: this page's title (the room's
+ * name); `inFront`: this page has been visible and focused for a moment while sharing.
+ */
+export function selfCapture(
+  captured: CapturedSurface,
+  page: { pageTitle: string; inFront: boolean },
+): SelfCapture | null {
+  switch (captured.surface) {
+    case 'browser':
+      return captured.handle?.startsWith(CAPTURE_HANDLE_PREFIX) ? 'meetingTab' : null
+    case 'window': {
+      const title = page.pageTitle.trim()
+      return title.length > 0 && captured.label.includes(title) ? 'meetingWindow' : null
+    }
+    case 'monitor':
+      return page.inFront ? 'screenWithMeeting' : null
+    default:
+      return null
+  }
+}
+
+/** Where the browser has Capture Handle (Chromium) */
+interface CaptureHandleDevices {
+  setCaptureHandleConfig?: (config: {
+    handle: string
+    exposeOrigin: boolean
+    permittedOrigins: string[]
+  }) => void
+}
+
+/**
+ * Announces this tab as a meeting tab (Capture Handle, Chromium), so a share of it is recognised
+ * (selfCapture). Only this site's own pages can read it. Does nothing where it is not there.
+ */
+export function announceMeetingTab(
+  id: string,
+  devices: CaptureHandleDevices | undefined = browserDevices() as CaptureHandleDevices | undefined,
+  origin: string = typeof location === 'undefined' ? '' : location.origin,
+): void {
+  if (typeof devices?.setCaptureHandleConfig !== 'function' || !origin) return
+  try {
+    devices.setCaptureHandleConfig({
+      handle: `${CAPTURE_HANDLE_PREFIX}${id}`,
+      exposeOrigin: true,
+      permittedOrigins: [origin],
+    })
+  } catch {
+    // Not in a top-level document, or refused: nothing is announced
+  }
 }

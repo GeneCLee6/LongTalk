@@ -39,6 +39,10 @@ export function useVideoDemand(
         height: devicePixels(height, ratio),
         visible,
         aspect,
+        sourceShortSide:
+          element.videoWidth > 0 && element.videoHeight > 0
+            ? Math.min(element.videoWidth, element.videoHeight)
+            : null,
       })
     }
     report()

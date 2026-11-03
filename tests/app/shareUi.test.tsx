@@ -1,6 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ConfirmDialog } from '../../src/components/ConfirmDialog.tsx'
 import { LoadFailedBoundary, LoadFailedScreen } from '../../src/components/LoadFailed.tsx'
 import { PhoneLayoutContext } from '../../src/components/layoutContext.ts'
 import { ShareTile } from '../../src/components/ShareTile.tsx'
@@ -99,30 +98,6 @@ describe('share UI (e3-t03)', () => {
     const bar = screen.getByRole('region', { name: '你正在分享畫面' })
     fireEvent.click(within(bar).getByRole('button', { name: '停止分享' }))
     expect(onStop).toHaveBeenCalledTimes(1)
-  })
-
-  it('asks whether to take over, yes having focus; Escape is no', () => {
-    const onConfirm = vi.fn()
-    const onCancel = vi.fn()
-    render(
-      <ConfirmDialog
-        title={strings.screenShare.takeOverTitle}
-        body={strings.screenShare.takeOverBody('子安')}
-        confirmLabel={strings.screenShare.takeOver}
-        onConfirm={onConfirm}
-        onCancel={onCancel}
-      />,
-    )
-    const dialog = screen.getByRole('alertdialog', { name: '接手分享？' })
-    expect(dialog).toHaveAccessibleDescription(
-      '子安 正在分享畫面。接手後，子安 的分享會停止，改成分享你的畫面。',
-    )
-    const yes = within(dialog).getByRole('button', { name: '接手分享' })
-    expect(yes).toHaveFocus()
-    fireEvent.click(yes)
-    expect(onConfirm).toHaveBeenCalledTimes(1)
-    fireEvent.keyDown(dialog, { key: 'Escape' })
-    expect(onCancel).toHaveBeenCalledTimes(1)
   })
 })
 

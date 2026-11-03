@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import styled from 'styled-components'
 import { strings } from '../strings.ts'
 import { color, fontSize, radius, space } from '../styles/tokens.ts'
@@ -10,14 +11,23 @@ export interface ShareTileProps {
   name: string
   /** Their screen as received; null until it arrives */
   video: MediaStreamTrack | null
+  /**
+   * A share in the strip (H5, e3-t07): the whole tile is a button that brings it to the main
+   * area. Its small size asks for the screen's lower layer (layers.ts)
+   */
+  onShowMain?: () => void
+  /** The main area's picker between several shares (SharePicker), top right */
+  picker?: ReactNode
 }
 
 /**
  * The share in the main area (e3-t03, e3-t05; DESIGN.md §4.3): the whole picture, letterboxed
  * (never cropped: a shared document must show its edges), with a 「<名字> 的畫面」 tag in the
- * brand colour top-left. Until the first frames arrive it says the share is on its way.
+ * brand colour top-left. Until the first frames arrive it says the share is on its way. With
+ * several shares (H5), the main one carries the picker and the others sit in the strip, each a
+ * button that brings it to the main area.
  */
-export function ShareTile({ name, video }: ShareTileProps) {
+export function ShareTile({ name, video, onShowMain, picker }: ShareTileProps) {
   const videoRef = useTrack<HTMLVideoElement>(video)
   // The share's drawn size picks its simulcast layer (e2-t12)
   useVideoDemand(videoRef, video)
@@ -38,6 +48,14 @@ export function ShareTile({ name, video }: ShareTileProps) {
         </Waiting>
       )}
       <Tag>{strings.screenShare.label(name)}</Tag>
+      {picker && <PickerSlot>{picker}</PickerSlot>}
+      {onShowMain && (
+        <ShowMain
+          type="button"
+          aria-label={strings.screenShare.showMain(name)}
+          onClick={onShowMain}
+        />
+      )}
     </Frame>
   )
 }
@@ -94,4 +112,25 @@ const Tag = styled.figcaption`
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+`
+
+const PickerSlot = styled.div`
+  position: absolute;
+  top: ${space(2)};
+  right: ${space(2)};
+  max-width: calc(100% - ${space(4)});
+`
+
+/** The strip share's whole surface: one click (or Enter) brings it to the main area */
+const ShowMain = styled.button`
+  position: absolute;
+  inset: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+
+  &:hover {
+    background: ${color.hover};
+  }
 `

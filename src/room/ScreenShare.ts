@@ -1,18 +1,25 @@
 import type { ClientMessage, ErrorCode, ShareInfo } from '../../shared/protocol.ts'
-import type { CaptureResult, ShareProblem } from '../media/share.ts'
+import {
+  capturedSurface,
+  type CaptureResult,
+  type CapturedSurface,
+  type ShareProblem,
+} from '../media/share.ts'
+import type { ShareMode } from '../media/shareMode.ts'
 
-// This member's side of the room's one screen share (e3-t02, e3-t03). RoomDO decides who shares
-// (CLAUDE.md rule 1); this only asks, follows what the room says, and keeps the captured screen
-// in step with it:
+// This member's side of the room's screen shares (e3-t02, e3-t03; several members at once from
+// H5, e3-t07). RoomDO decides who shares (CLAUDE.md rule 1); this only asks, follows what the
+// room says, and keeps the captured screen in step with it:
 //
-// 1. Share pressed: when someone else shares, ask first (`confirm`) whether to take over.
-// 2. The browser's picker (`picking`; it must open in the click, hence after the question).
-// 3. `share` to the room (`claiming`); the screen is published (RoomMedia) only once the room
-//    names us the sharer (`sharing`). `share_busy` (someone started first) asks again with the
-//    screen already picked; `audio_only` stops.
-// 4. Stopping: the 你正在分享 bar, the toolbar, and the browser's own "stop sharing" (the track
-//    ends) all end up in stop(): `unshare` and the capture stops. Losing the share (someone took
-//    over, the host stopped it) stops the capture too, with a notice.
+// 1. Share pressed: the browser's picker (`picking`; it must open in the click).
+// 2. `share` to the room (`claiming`); the screen is published (RoomMedia) only once the room
+//    lists our share (`sharing`). `share_full` (MAX_SHARES members already share) and
+//    `audio_only` stop, with a notice. Nobody's share is ever taken over.
+// 3. Stopping: the 你正在分享 bar, the toolbar, and the browser's own "stop sharing" (the track
+//    ends) all end up in stop(): `unshare` and the capture stops. Losing the share (the host
+//    stopped it) stops the capture too, with a notice.
+// 4. 換一個畫面 (e3-t09): repick() opens the picker again while sharing; what is picked replaces
+//    the screen (and its sound) without ending the share; closing the picker keeps the old one.
 //
 // A share the room still lists for us when we have no screen (a reload while sharing) is ended.
 //
@@ -21,37 +28,47 @@ import type { CaptureResult, ShareProblem } from '../media/share.ts'
 // sent or not by RoomMedia, which tells the room it is muted like a microphone). It stops with
 // the screen, on every way the share ends.
 //
+// The mode (e3-t06): 文字 or 動態, chosen on the sharing bar (`mode`, kept for the next share while
+// in the room); RoomMedia applies it. `motionHint`: the screen moves too much for 文字 (the page's
+// sampler says so, noticeMotion), shown once per screen picked.
+//
 // No React here: useScreenShare wraps it.
 
 /**
  * - `idle`: not sharing
- * - `confirm`: asking whether to take over from the member who shares (with the screen already
- *   picked when the room said `share_busy`)
  * - `picking`: the browser's picker is open
- * - `claiming`: picked; waiting for the room to name us the sharer
- * - `sharing`: the room lists us as the sharer; the screen is published
+ * - `claiming`: picked; waiting for the room to list our share
+ * - `sharing`: the room lists our share; the screen is published
  */
-export type SharePhase = 'idle' | 'confirm' | 'picking' | 'claiming' | 'sharing'
+export type SharePhase = 'idle' | 'picking' | 'claiming' | 'sharing'
 
 export interface ScreenShareState {
   phase: SharePhase
-  /** The captured screen, while claiming, confirming a take-over or sharing */
+  /** The captured screen, while claiming or sharing */
   track: MediaStreamTrack | null
   /** The screen's sound (tab or system audio), when the picker gave any (e3-t04) */
   audio: MediaStreamTrack | null
   /** Whether the sound is sent now (the sharing bar's switch); on when sharing starts */
   audioOn: boolean
+  /** What the screen is (a tab, a window, a whole screen), for the presenter view and e3-t09 */
+  surface: CapturedSurface | null
+  /** 文字 or 動態 (e3-t06) */
+  mode: ShareMode
+  /** The screen keeps moving while in 文字: suggest 動態 (e3-t06) */
+  motionHint: boolean
+  /** The picker is open again to change what is shared (換一個畫面) */
+  repicking: boolean
 }
 
 export type ShareNotice =
   /** The picker failed for a reason worth saying (closing it is not one) */
   | { type: 'problem'; problem: Exclude<ShareProblem, 'cancelled'> }
-  /** Someone else took over the share */
-  | { type: 'takenOver'; by: string }
   /** The room ended our share (the host, from F1) */
   | { type: 'stopped' }
   /** The month is audio-only: no screen either */
   | { type: 'audioOnly' }
+  /** MAX_SHARES members already share (H5) */
+  | { type: 'full' }
 
 export interface ScreenShareOptions {
   /** Opens the browser's picker (src/media/share.ts captureScreen) */
@@ -59,6 +76,8 @@ export interface ScreenShareOptions {
   /** Sends a message to the room */
   send: (message: ClientMessage) => void
   notify: (notice: ShareNotice) => void
+  /** The mode to start in; 文字 without it */
+  mode?: ShareMode
 }
 
 export const idleShare: ScreenShareState = {
@@ -66,22 +85,26 @@ export const idleShare: ScreenShareState = {
   track: null,
   audio: null,
   audioOn: true,
+  surface: null,
+  mode: 'text',
+  motionHint: false,
+  repicking: false,
 }
 
 export class ScreenShare {
   private readonly options: ScreenShareOptions
-  private state: ScreenShareState = idleShare
+  private state: ScreenShareState
   private readonly listeners = new Set<() => void>()
-  private you: string | null = null
-  private share: ShareInfo | null = null
-  /** The takeOver of the last `share` sent, to send it again after a reconnect */
-  private takeOver = false
+  private ours: ShareInfo | null = null
   /** The share (its `since`) we last sent `unshare` for, so it is not sent on every patch */
   private unsharedSince: number | null = null
+  /** The motion hint was shown (or answered) for the screen shared now */
+  private hinted = false
   private closed = false
 
   constructor(options: ScreenShareOptions) {
     this.options = options
+    this.state = { ...idleShare, mode: options.mode ?? 'text' }
   }
 
   getState = (): ScreenShareState => this.state
@@ -91,27 +114,10 @@ export class ScreenShare {
     return () => this.listeners.delete(listener)
   }
 
-  /** Share pressed: asks first when someone else shares, else opens the picker */
+  /** Share pressed: opens the picker */
   request(): Promise<void> {
     if (this.closed || this.state.phase !== 'idle') return Promise.resolve()
-    if (this.share && this.share.memberId !== this.you) {
-      this.update({ ...idleShare, phase: 'confirm' })
-      return Promise.resolve()
-    }
-    return this.pick(false)
-  }
-
-  /** Take over: yes. Opens the picker, or claims with the screen already picked */
-  confirm(): Promise<void> {
-    if (this.closed || this.state.phase !== 'confirm') return Promise.resolve()
-    if (!this.state.track) return this.pick(true)
-    this.claim(true)
-    return Promise.resolve()
-  }
-
-  /** Take over: no */
-  cancel(): void {
-    if (this.state.phase === 'confirm') this.release()
+    return this.pick()
   }
 
   /** Stop sharing (the bar, the toolbar, or the browser ended the capture) */
@@ -119,7 +125,7 @@ export class ScreenShare {
     const { phase } = this.state
     if (phase === 'claiming' || phase === 'sharing') {
       this.options.send({ t: 'unshare' })
-      if (this.share?.memberId === this.you) this.unsharedSince = this.share?.since ?? null
+      if (this.ours) this.unsharedSince = this.ours.since
     }
     if (phase !== 'idle' && phase !== 'picking') this.release()
   }
@@ -130,19 +136,83 @@ export class ScreenShare {
     this.update({ ...this.state, audioOn: !this.state.audioOn })
   }
 
-  /** The room view's share and our member id, on every change */
-  setRoom(share: ShareInfo | null, you: string | null): void {
-    this.share = share
-    this.you = you
+  /** 文字 or 動態 (e3-t06): applied live by RoomMedia, kept for the next share */
+  setMode = (mode: ShareMode): void => {
+    if (this.closed || mode === this.state.mode) return
+    // Choosing either answers the hint
+    if (this.state.motionHint) this.hinted = true
+    this.update({ ...this.state, mode, motionHint: false })
+  }
+
+  /** The page's sampler: the screen keeps moving (true) or calmed down (e3-t06) */
+  noticeMotion = (moving: boolean): void => {
+    const { phase, mode, motionHint } = this.state
+    const show = moving && phase === 'sharing' && mode === 'text' && !this.hinted
+    if (show === motionHint) return
+    // Shown once: hidden when it calms down, and not shown again for this screen
+    if (motionHint) this.hinted = true
+    this.update({ ...this.state, motionHint: show })
+  }
+
+  /** The hint's 「不用」: not shown again for this screen */
+  dismissMotionHint = (): void => {
+    if (!this.state.motionHint) return
+    this.hinted = true
+    this.update({ ...this.state, motionHint: false })
+  }
+
+  /**
+   * 換一個畫面 (e3-t09): the picker again while sharing; what is picked replaces the screen and
+   * its sound, the share goes on. Closing the picker keeps what is shared.
+   */
+  async repick(): Promise<void> {
+    if (this.closed || this.state.repicking) return
+    if (this.state.phase !== 'sharing' && this.state.phase !== 'claiming') return
+    this.update({ ...this.state, repicking: true })
+    const result = await this.options.capture()
+    const { phase } = this.state
+    if (this.closed || (phase !== 'sharing' && phase !== 'claiming')) {
+      // Left or stopped while the picker was open
+      if (result.ok) {
+        result.track.stop()
+        result.audio?.stop()
+      }
+      if (!this.closed && this.state.repicking) this.update({ ...this.state, repicking: false })
+      return
+    }
+    if (!result.ok) {
+      this.update({ ...this.state, repicking: false })
+      if (result.problem !== 'cancelled') {
+        this.options.notify({ type: 'problem', problem: result.problem })
+      }
+      return
+    }
+    this.releaseCapture()
+    this.listen(result.track, result.audio)
+    this.hinted = false
+    this.update({
+      ...this.state,
+      track: result.track,
+      audio: result.audio,
+      audioOn: true,
+      surface: capturedSurface(result.track),
+      motionHint: false,
+      repicking: false,
+    })
+  }
+
+  /** The room view's shares and our member id, on every change */
+  setRoom(shares: Readonly<Record<string, ShareInfo>> | undefined, you: string | null): void {
+    this.ours = (you !== null && shares?.[you]) || null
     this.evaluate()
   }
 
   /** The room refused our `share` */
   refused(code: ErrorCode): void {
     if (this.state.phase !== 'claiming') return
-    if (code === 'share_busy') {
-      // Someone started sharing between our press and our claim: ask, keeping what was picked
-      this.update({ ...this.state, phase: 'confirm' })
+    if (code === 'share_full') {
+      this.release()
+      this.options.notify({ type: 'full' })
     } else if (code === 'audio_only') {
       this.release()
       this.options.notify({ type: 'audioOnly' })
@@ -151,7 +221,7 @@ export class ScreenShare {
 
   /** The room welcomed us again: a claim the dropped socket may have lost is sent again */
   rejoined(): void {
-    if (this.state.phase === 'claiming') this.options.send({ t: 'share', takeOver: this.takeOver })
+    if (this.state.phase === 'claiming') this.options.send({ t: 'share' })
   }
 
   /** Leaving the room: the capture stops (the room ends the share with the member) */
@@ -161,8 +231,8 @@ export class ScreenShare {
     this.listeners.clear()
   }
 
-  private async pick(takeOver: boolean): Promise<void> {
-    this.update({ ...idleShare, phase: 'picking' })
+  private async pick(): Promise<void> {
+    this.update({ ...this.idle(), phase: 'picking' })
     const result = await this.options.capture()
     if (this.closed) {
       if (result.ok) {
@@ -172,17 +242,29 @@ export class ScreenShare {
       return
     }
     if (!result.ok) {
-      this.update(idleShare)
+      this.update(this.idle())
       if (result.problem !== 'cancelled') {
         this.options.notify({ type: 'problem', problem: result.problem })
       }
       return
     }
-    // The browser's own "stop sharing" button ends the track
-    result.track.addEventListener('ended', this.stop)
-    result.audio?.addEventListener('ended', this.audioEnded)
-    this.update({ ...idleShare, phase: 'picking', track: result.track, audio: result.audio })
-    this.claim(takeOver)
+    this.listen(result.track, result.audio)
+    this.hinted = false
+    this.update({
+      ...this.idle(),
+      phase: 'claiming',
+      track: result.track,
+      audio: result.audio,
+      surface: capturedSurface(result.track),
+    })
+    this.options.send({ t: 'share' })
+    this.evaluate()
+  }
+
+  /** The browser's own "stop sharing" button ends the track; the sound may end on its own */
+  private listen(track: MediaStreamTrack, audio: MediaStreamTrack | null): void {
+    track.addEventListener('ended', this.stop)
+    audio?.addEventListener('ended', this.audioEnded)
   }
 
   /** The sound ended on its own (its source went away): the screen goes on without it */
@@ -190,39 +272,34 @@ export class ScreenShare {
     if (this.state.audio) this.update({ ...this.state, audio: null })
   }
 
-  /** Asks the room for the share, with what was picked */
-  private claim(takeOver: boolean): void {
-    this.takeOver = takeOver
-    this.update({ ...this.state, phase: 'claiming' })
-    this.options.send({ t: 'share', takeOver })
-    this.evaluate()
-  }
-
-  /** Brings our phase in line with who the room says shares */
+  /** Brings our phase in line with whether the room lists our share */
   private evaluate(): void {
     const { phase } = this.state
-    const ours = this.share !== null && this.you !== null && this.share.memberId === this.you
-    if (ours) {
+    if (this.ours) {
       if (phase === 'claiming') this.update({ ...this.state, phase: 'sharing' })
       else if (
         (phase === 'idle' || phase === 'picking') &&
-        this.unsharedSince !== this.share!.since
+        this.unsharedSince !== this.ours.since
       ) {
         // Listed as sharing without a screen: left over from before a reload
-        this.unsharedSince = this.share!.since
+        this.unsharedSince = this.ours.since
         this.options.send({ t: 'unshare' })
       }
       return
     }
     if (phase === 'sharing') {
-      const by = this.share?.memberId ?? null
       this.release()
-      this.options.notify(by ? { type: 'takenOver', by } : { type: 'stopped' })
+      this.options.notify({ type: 'stopped' })
     }
   }
 
-  /** Stops the capture and goes idle */
-  private release(): void {
+  /** Idle, keeping the mode chosen */
+  private idle(): ScreenShareState {
+    return { ...idleShare, mode: this.state.mode }
+  }
+
+  /** Stops the captured screen and its sound */
+  private releaseCapture(): void {
     const { track, audio } = this.state
     if (track) {
       track.removeEventListener('ended', this.stop)
@@ -232,7 +309,13 @@ export class ScreenShare {
       audio.removeEventListener('ended', this.audioEnded)
       audio.stop()
     }
-    if (this.state !== idleShare) this.update(idleShare)
+  }
+
+  /** Stops the capture and goes idle */
+  private release(): void {
+    this.releaseCapture()
+    const { phase, track, audio, repicking } = this.state
+    if (phase !== 'idle' || track || audio || repicking) this.update(this.idle())
   }
 
   private update(state: ScreenShareState): void {

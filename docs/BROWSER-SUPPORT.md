@@ -52,6 +52,7 @@ Edge、Firefox、Safari（macOS）、iOS Safari 都還沒有實測。
 - **Android Chrome**：不能分享螢幕；選喇叭的支援度不確定，app 以偵測結果為準。
 - **Firefox**：116 版起才有 `setSinkId`；分享螢幕不能帶分頁或系統音訊（`shareAudio` 偵測為否，選擇器不要求音訊）。
 - **Safari（macOS）**：分享螢幕沒有音訊；simulcast 與編碼差異預計在 `e2-t16` 實測。
+- **分享的防鏡像與簡報者縮圖（H5）**：`selfBrowserSurface`、`surfaceSwitching` 只有 Chromium（其他瀏覽器忽略）；認出「分享了別的會議分頁」靠 Capture Handle（`setCaptureHandleConfig`／`getCaptureHandle`，只有 Chromium）；認出「分享了會議所在的視窗」靠視窗軌的 label 是標題（Firefox；Chrome 的 label 不是標題，認不出來）；整個螢幕靠 `displaySurface`（Chrome、Edge、Firefox、Safari 都有）。縮圖與動態內容提示用 `ImageCapture.grabFrame()`（Chromium，分頁在背景也能取）或 `requestVideoFrameCallback`（Firefox、Safari，分頁在背景時可能不更新）；兩者都沒有就沒有縮圖、也沒有提示，分享照常。文字／動態的 `degradationPreference` Firefox 忽略（只有 `contentHint` 與各層上限生效）。以上依文件，`DEPLOY.md` §5 第 24 步實測。
 - **分享音訊（Chrome／Edge，D2）**：分頁音訊要在選擇器勾「同時分享分頁音訊」（預設勾）；整個螢幕的系統音訊只在 Windows、ChromeOS（macOS 依版本）；分享視窗通常沒有音訊。LongTalk 要求 `restrictOwnAudio`（系統音訊裡不含這個會議分頁自己播的聲音，避免大家聽到自己的回音）與 `suppressLocalAudioPlayback: false`（分享者自己仍聽得到分頁）；不支援的瀏覽器會忽略這兩個選項。以上依文件，要在 `DEPLOY.md` §5 第 10 步實測。
 
 ## 4. 怎麼更新這份

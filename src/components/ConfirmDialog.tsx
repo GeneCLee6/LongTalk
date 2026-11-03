@@ -7,14 +7,14 @@ import { Button } from './Button.tsx'
 export interface ConfirmDialogProps {
   title: string
   body: string
-  /** The yes button's text (the question's verb: 接手分享) */
+  /** The yes button's text (the question's verb: 移出) */
   confirmLabel: string
   onConfirm: () => void
   onCancel: () => void
 }
 
 /**
- * A small modal yes / no question (D1: take over the share?). The yes button has focus; Escape or
+ * A small modal yes / no question (remove someone, end the meeting). The yes button has focus; Escape or
  * a click outside is no; focus goes back where it was when it closes. The yes click is a user
  * gesture, so it may open the browser's screen picker.
  */
