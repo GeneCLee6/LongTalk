@@ -1,12 +1,21 @@
 import { useState } from 'react'
 import styled from 'styled-components'
 import type { HostMemberAction, Member, WaitingEntry } from '../../shared/protocol.ts'
+import { handQueue } from '../../shared/reactions.ts'
 import { RANK, can, canActOn, type Role } from '../../shared/roles.ts'
 import { strings } from '../strings.ts'
 import { avatar, avatarColor, color, fontSize, motion, radius, space } from '../styles/tokens.ts'
 import { Button } from './Button.tsx'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
-import { CamIcon, CamOffIcon, MicIcon, MicOffIcon, MoreIcon, ScreenShareIcon } from './icons.tsx'
+import {
+  CamIcon,
+  CamOffIcon,
+  HandIcon,
+  MicIcon,
+  MicOffIcon,
+  MoreIcon,
+  ScreenShareIcon,
+} from './icons.tsx'
 import { Menu, type MenuItem } from './Menu.tsx'
 
 const text = strings.participants
@@ -46,6 +55,7 @@ const noop = () => {}
 
 /** What the per-person menu offers, in order, with the role table's action for each */
 const MEMBER_ACTIONS: readonly { action: HostMemberAction; label: string; danger?: true }[] = [
+  { action: 'lowerHand', label: strings.reactions.lowerHand },
   { action: 'muteMember', label: text.mute },
   { action: 'camOff', label: text.camOffAction },
   { action: 'stopShare', label: text.stopShare },
@@ -66,6 +76,9 @@ const MEMBER_ACTIONS: readonly { action: HostMemberAction; label: string; danger
  *
  * For the host (F3, e1-t15, e1-t16): the room's password among the switches, and in each
  * person's menu 設為／取消共同主持人 and 設為主持人 (asks first).
+ *
+ * Raised hands (G3, e5-t04): whoever has a hand up comes first, in the order they raised it,
+ * with a numbered hand; a host or co-host can lower it from the person's menu (放下手, first).
  */
 export function ParticipantsPanel({
   members,
@@ -94,12 +107,18 @@ export function ParticipantsPanel({
     | null
   >(null)
   const role: Role = members.find((member) => member.id === you)?.role ?? 'participant'
-  const sorted = [...members].sort(
-    (a, b) =>
-      Number(b.id === you) - Number(a.id === you) ||
-      RANK[b.role] - RANK[a.role] ||
-      a.joinedAt - b.joinedAt,
-  )
+  // Raised hands first, in the queue's order (G3); then ourselves, by role, by arrival
+  const hands = handQueue(members)
+  const handPlace = new Map(hands.map((member, index) => [member.id, index + 1]))
+  const rest = members
+    .filter((member) => !handPlace.has(member.id))
+    .sort(
+      (a, b) =>
+        Number(b.id === you) - Number(a.id === you) ||
+        RANK[b.role] - RANK[a.role] ||
+        a.joinedAt - b.joinedAt,
+    )
+  const sorted = [...hands, ...rest]
   const canMuteAll = can(role, 'muteAll')
   const canEnd = can(role, 'endMeeting')
   const canLock = can(role, 'lockRoom')
@@ -120,6 +139,7 @@ export function ParticipantsPanel({
       camOff: !!cam && !cam.muted,
       stopShare: member.id === sharerId,
       remove: true,
+      lowerHand: member.hand != null,
     }
     const self = member.id === you
     // Co-hosts and handing over (F3): only the host, never on oneself; handing over only to
@@ -259,6 +279,15 @@ export function ParticipantsPanel({
               <Who>
                 <Name>{member.name}</Name>
                 <Tags>
+                  {handPlace.has(member.id) && (
+                    <HandTag
+                      role="img"
+                      aria-label={strings.reactions.handPosition(handPlace.get(member.id)!)}
+                    >
+                      <HandIcon />
+                      <span aria-hidden="true">{handPlace.get(member.id)}</span>
+                    </HandTag>
+                  )}
                   {member.id === you && <Tag>{text.you}</Tag>}
                   {roleLabel && <Tag $strong>{roleLabel}</Tag>}
                   {member.reconnecting && <Tag $warn>{text.reconnecting}</Tag>}
@@ -463,6 +492,25 @@ const Tag = styled.span<{ $strong?: boolean; $warn?: boolean }>`
   color: ${({ $strong, $warn }) => ($warn ? color.warn : $strong ? color.primary : color.muted)};
   font-size: ${fontSize.badge};
   line-height: 1.6;
+`
+
+/** A raised hand and its place in the queue (G3): amber, like the tile's */
+const HandTag = styled.span`
+  display: inline-flex;
+  align-items: center;
+  gap: ${space(0.5)};
+  padding: 0 ${space(1.5)};
+  border-radius: ${radius.pill};
+  background: ${color.warn};
+  color: ${color.onWarn};
+  font-size: ${fontSize.badge};
+  font-weight: 700;
+  line-height: 1.6;
+
+  svg {
+    width: 12px;
+    height: 12px;
+  }
 `
 
 const States = styled.span`

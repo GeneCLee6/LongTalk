@@ -36,6 +36,7 @@ import {
   type TracksMessage,
   type WaitingEntry,
 } from '../shared/protocol.ts'
+import { REACTION_RATE, type Reaction } from '../shared/reactions.ts'
 import {
   ASSUMED_BITRATE,
   MAX_REPORTED_BITRATE,
@@ -134,6 +135,7 @@ const HOST_RULE: Readonly<Record<HostMessage['action'], Action>> = {
   setPassword: 'setPassword',
   setCohost: 'setCohost',
   makeHost: 'makeHost',
+  lowerHand: 'lowerHand',
 }
 
 const NO_CONNS: ReadonlySet<string> = new Set()
@@ -274,6 +276,8 @@ export class RoomHost {
   private chatId = 0
   /** CHAT_RATE per member; in memory only (an eviction forgets it) */
   private readonly chatRate = new ChatRateLimit()
+  /** Reactions per member (G3, REACTION_RATE), in memory like the chat's */
+  private readonly reactionRate = new ChatRateLimit(REACTION_RATE)
   /** Removed (F1) and denied (F2) browsers and until when, by client id */
   private readonly bans = new Map<string, { until: number; kind: BanKind }>()
   /** The `lobby` each waiting member was sent last (F2), to send it only when it changes */
@@ -339,6 +343,7 @@ export class RoomHost {
     this.baselines.clear()
     this.relayed.clear()
     this.chatRate.clear()
+    this.reactionRate.clear()
     this.bans.clear()
     this.lobbies.clear()
     for (const ban of bans) {
@@ -359,13 +364,15 @@ export class RoomHost {
       })
     }
     for (const record of sessions) {
-      // Members stored by protocol v2 have no tracks, by v3 no `muted`, by v5 no role
+      // Members stored by protocol v2 have no tracks, by v3 no `muted`, by v5 no role, by v12 no
+      // hand
       const tracks = (record.member.tracks ?? []).map((track) => ({
         ...track,
         muted: track.muted ?? false,
       }))
       const role = record.member.role ?? 'participant'
-      this.members.set(record.member.id, { ...record.member, role, tracks })
+      const hand = typeof record.member.hand === 'number' ? record.member.hand : null
+      this.members.set(record.member.id, { ...record.member, role, tracks, hand })
       this.sessions.set(record.member.id, {
         token: record.token,
         conn: record.conn,
@@ -601,7 +608,43 @@ export class RoomHost {
       case 'spotlight':
         this.spotlight(connId, conn.member!, message.memberId)
         return
+      case 'react':
+        this.react(conn.member!, message.emoji)
+        return
+      case 'hand':
+        this.raiseHand(connId, conn.member!, message.up)
+        return
     }
+  }
+
+  /**
+   * `react` (G3, e5-t03): to everyone in the room, the sender too (worker/roles.ts `react`), at
+   * most REACTION_RATE per member. Nothing is kept. A refused or too-fast reaction is dropped
+   * without an answer: nobody needs to be told a 👍 did not go out.
+   */
+  private react(memberId: string, emoji: Reaction): void {
+    if (!this.allowed(memberId, 'react')) return
+    if (!this.reactionRate.take(memberId, this.deps.now())) return
+    const frame: ServerMessage = { t: 'reaction', from: memberId, emoji }
+    for (const [id, conn] of this.conns) {
+      if (this.inRoom(conn)) this.deps.sockets.send(id, frame)
+    }
+  }
+
+  /**
+   * `hand` (G3, e5-t04): the member raises or lowers their own hand (worker/roles.ts
+   * `raiseHand`; refused with `forbidden` for someone waiting). A hand already up keeps its
+   * place in the queue.
+   */
+  private raiseHand(connId: string, memberId: string, up: boolean): void {
+    if (!this.allowed(memberId, 'raiseHand')) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    const member = this.members.get(memberId)!
+    if ((member.hand !== null) === up) return
+    this.setMember(memberId, { hand: up ? this.deps.now() : null })
+    this.publish()
   }
 
   /**
@@ -695,6 +738,13 @@ export class RoomHost {
         return
       case 'remove':
         this.removeMember(message.memberId)
+        return
+      case 'lowerHand':
+        // Only a hand that is up: lowering one already down changes nothing and tells nobody
+        if (this.members.get(message.memberId)?.hand == null) return
+        this.setMember(message.memberId, { hand: null })
+        this.notify(message.memberId, { t: 'notice', notice: 'handLowered', by: memberId })
+        this.publish()
         return
       case 'muteAll':
         // Everyone the actor may mute: everyone ranked below (a host also mutes co-hosts)
@@ -1407,6 +1457,7 @@ export class RoomHost {
         joinedAt: now,
         reconnecting: false,
         tracks: [],
+        hand: null,
       }
       this.members.set(memberId, member)
       this.sessions.set(memberId, {
@@ -1476,6 +1527,7 @@ export class RoomHost {
     this.baselines.delete(memberId)
     this.relayed.delete(memberId)
     this.chatRate.forget(memberId)
+    this.reactionRate.forget(memberId)
     this.lobbies.delete(memberId)
   }
 
@@ -1593,6 +1645,7 @@ export class RoomHost {
     this.chat = []
     this.chatId = 0
     this.chatRate.clear()
+    this.reactionRate.clear()
     this.bans.clear()
     this.lobbies.clear()
     this.password = null

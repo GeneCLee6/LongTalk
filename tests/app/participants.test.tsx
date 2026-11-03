@@ -22,7 +22,7 @@ const person = (
   joinedAt: number,
   tracks: MemberTrack[] = [track('mic'), track('cam')],
   reconnecting = false,
-): Member => ({ id, name, role, joinedAt, reconnecting, tracks })
+): Member => ({ id, name, role, joinedAt, reconnecting, tracks, hand: null })
 
 const MEMBERS = [
   person('w', 'Wei', 'participant', 3, [track('mic', true)], true),

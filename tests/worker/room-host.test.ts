@@ -172,6 +172,7 @@ const member = (
   joinedAt,
   reconnecting,
   tracks: [],
+  hand: null,
 })
 
 describe('RoomHost', () => {

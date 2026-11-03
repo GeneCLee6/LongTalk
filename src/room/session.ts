@@ -13,12 +13,14 @@ import { isClientId, isSessionToken, normalizeName } from '../../shared/protocol
 // - how the stage looks (G2): the layout chosen on a desktop and 隱藏自己, in localStorage. Pins
 //   and 隱藏沒有視訊的人 are not remembered: they are for this meeting (someone hidden by the
 //   latter would otherwise be missing from the next meeting with no sign why).
+// - 更多's switches (G3): 音效 and 隱藏表情反應, in localStorage.
 // Storage can be missing or throw (private mode, blocked cookies): then nothing is remembered.
 
 const NAME_KEY = 'longtalk.name'
 const DEVICES_KEY = 'longtalk.devices'
 const CLIENT_KEY = 'longtalk.client'
 const VIEW_KEY = 'longtalk.view'
+const PREFS_KEY = 'longtalk.prefs'
 const tokenKey = (roomId: string) => `longtalk.session.${roomId}`
 
 function storage(kind: 'localStorage' | 'sessionStorage'): Storage | null {
@@ -140,4 +142,33 @@ export function loadView(): ViewPrefs {
 
 export function saveView(view: ViewPrefs): void {
   write('localStorage', VIEW_KEY, JSON.stringify(view))
+}
+
+/** 更多's switches, remembered between meetings (G3: e4-t16, e5-t03) */
+export interface RoomPrefs {
+  /** 音效: join, leave, raised hands, chat while it is closed */
+  sounds: boolean
+  /** 隱藏表情反應: nobody's reactions float over the tiles (this browser only) */
+  hideReactions: boolean
+}
+
+export const DEFAULT_PREFS: RoomPrefs = { sounds: true, hideReactions: false }
+
+export function loadPrefs(): RoomPrefs {
+  try {
+    const saved: unknown = JSON.parse(read('localStorage', PREFS_KEY) ?? 'null')
+    if (typeof saved !== 'object' || saved === null) return DEFAULT_PREFS
+    const { sounds, hideReactions } = saved as Record<string, unknown>
+    return {
+      sounds: typeof sounds === 'boolean' ? sounds : DEFAULT_PREFS.sounds,
+      hideReactions:
+        typeof hideReactions === 'boolean' ? hideReactions : DEFAULT_PREFS.hideReactions,
+    }
+  } catch {
+    return DEFAULT_PREFS
+  }
+}
+
+export function savePrefs(prefs: RoomPrefs): void {
+  write('localStorage', PREFS_KEY, JSON.stringify(prefs))
 }

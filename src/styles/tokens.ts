@@ -19,6 +19,8 @@ const light = {
   danger: '#DC2626',
   onDanger: '#FFFFFF',
   warn: '#D97706',
+  // Text on a `warn` background (the raised-hand badge, G3)
+  onWarn: '#1F1300',
   tileFrom: '#1E293B',
   tileTo: '#0F172A',
   // Controls laid over video (pre-join preview, later the tiles)
@@ -46,6 +48,7 @@ const dark: Record<ColorToken, string> = {
   danger: '#F87171',
   onDanger: '#1F0A0A',
   warn: '#FBBF24',
+  onWarn: '#1F1300',
   tileFrom: '#1E293B',
   tileTo: '#0F172A',
   overlay: 'rgba(11, 18, 32, 0.72)',

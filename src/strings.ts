@@ -180,9 +180,47 @@ export const strings = {
     // The chat button's accessible name with its unread badge (D3)
     chatUnread: (count: number) => (count > 0 ? `聊天（${count} 則未讀）` : '聊天'),
     more: '更多',
+    // 更多 on a phone while someone waits (F2): participants moved in there (G3)
+    moreWaiting: (waiting: number) => `更多（${waiting} 人在等候室）`,
     leave: '離開',
-    // Buttons whose feature lands in a later batch (reactions, E5)
+    // Buttons whose feature lands in a later batch
     comingSoon: (feature: string) => `「${feature}」即將推出`,
+  },
+  // Reactions and raised hands (G3: e5-t03, e5-t04)
+  reactions: {
+    button: '反應',
+    // The toolbar button's accessible name while our hand is up
+    buttonHandUp: '反應（你已舉手）',
+    picker: '表情反應與舉手',
+    names: {
+      '👍': '讚',
+      '❤️': '愛心',
+      '😂': '大笑',
+      '😮': '驚訝',
+      '👏': '拍手',
+      '🎉': '慶祝',
+    },
+    send: (name: string) => `送出「${name}」`,
+    // A floating reaction's accessible name: 「Bob：拍手 ×3」
+    from: (who: string, name: string, count: number) =>
+      count > 1 ? `${who}：${name} ×${count}` : `${who}：${name}`,
+    hide: '隱藏表情反應',
+    tooFast: '反應送得太快了，稍等一下再送',
+    raise: '舉手',
+    lower: '放下手',
+    raised: '你舉手了，主持人會看到',
+    // On the tile and in the participants list
+    handBadge: '舉手',
+    handPosition: (position: number) => `舉手，第 ${position} 位`,
+    // For a host or co-host
+    handRaised: (name: string) => `${name} 舉手了`,
+    lowerHand: '放下手',
+    lowered: (name: string) => `已放下 ${name} 的手`,
+  },
+  // Sounds (G3, e4-t16): 更多 › 通知
+  sounds: {
+    section: '通知',
+    toggle: '音效',
   },
   // The participants panel and the host controls (F1: e1-t07, e1-t08)
   participants: {
@@ -300,6 +338,8 @@ export const strings = {
     madeCohost: (actor: string) => `${actor} 把你設為共同主持人。`,
     cohostRevoked: (actor: string) => `${actor} 取消了你的共同主持人。`,
     madeHost: (actor: string) => `${actor} 把主持人交給你了，你現在是主持人。`,
+    // G3 (e5-t04)
+    handLowered: (actor: string) => `${actor} 放下了你的手。`,
   },
   // Screen sharing (D1: e3-t01 – e3-t03, e3-t05)
   screenShare: {

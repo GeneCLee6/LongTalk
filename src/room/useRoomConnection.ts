@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
-import type { ClientMessage, ErrorCode, NoticeMessage } from '../../shared/protocol.ts'
+import type {
+  ClientMessage,
+  ErrorCode,
+  NoticeMessage,
+  ReactionMessage,
+} from '../../shared/protocol.ts'
+import type { Reaction } from '../../shared/reactions.ts'
 import { watchNetwork } from './network.ts'
 import { RoomConnection, type ChatSendResult, type RoomConnectionState } from './RoomConnection.ts'
 import { clearSession, loadClientId, loadSession, saveSession } from './session.ts'
@@ -23,6 +29,10 @@ export interface RoomConnectionHandle {
   onNotice: (listener: (notice: NoticeMessage) => void) => () => void
   /** Sends a chat message (D3); anything but `sent` means the text should stay in the box */
   sendChat: (text: string) => ChatSendResult
+  /** Listens for everyone's reactions (G3); returns a function that stops listening */
+  onReaction: (listener: (reaction: ReactionMessage) => void) => () => void
+  /** Sends a reaction (G3); `rateLimited` when it would be too many too fast */
+  sendReaction: (emoji: Reaction) => 'sent' | 'rateLimited' | 'offline'
 }
 
 /**
@@ -75,5 +85,7 @@ export function useRoomConnection(
     onError: connection.onError,
     onNotice: connection.onNotice,
     sendChat: connection.sendChat,
+    onReaction: connection.onReaction,
+    sendReaction: connection.sendReaction,
   }
 }

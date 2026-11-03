@@ -103,6 +103,16 @@
 // 17. Ending (F3, e1-t17): after `endMeeting` the room remembers for ENDED_TOMBSTONE_MS that it
 //    ended: a socket opening then (a member coming back from a dropped connection) is closed with
 //    CloseCode.ended instead of CloseCode.roomNotFound.
+// 18. Reactions (G3, e5-t03, shared/reactions.ts): `react` with one of REACTIONS goes to everyone
+//    in the room (the sender too) as `reaction` with the sender's id, at once and nowhere else:
+//    the room keeps no record, someone joining later never sees it. Over REACTION_RATE the room
+//    drops it without an answer (worker/roles.ts `react`; someone waiting may not).
+// 19. Raised hands (G3, e5-t04): `hand` `up` raises or lowers the member's own hand
+//    (worker/roles.ts `raiseHand`); `Member.hand` is when it went up (the server's clock), null
+//    while it is down, and the queue is in that order (handQueue). Raising a hand already up
+//    keeps its place. `host` `lowerHand` lowers someone else's (worker/roles.ts `lowerHand`: a
+//    host or co-host, on someone ranked below), who gets `notice` `handLowered`. A hand stays up
+//    while its member reconnects and goes with the member.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -121,6 +131,8 @@
 // v11 → v12 (F3): `join.password`, `RoomInfo.passwordSetAt`, `host` actions `setPassword`,
 //   `setCohost`, `makeHost`, `leave.host`, notices `madeCohost`, `cohostRevoked`, `madeHost`,
 //   close codes `passwordRequired`, `passwordWrong`, `passwordWait`.
+// v12 → v13 (G3): `react`, `reaction`, `Member.hand`, `hand`, `host` action `lowerHand`, notice
+//   `handLowered`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -128,11 +140,12 @@
 import { isChatMessage, normalizeChatText, type ChatMessage } from './chat.ts'
 import type { JsonValue, PatchOp } from './patch.ts'
 import { normalizePassword } from './password.ts'
+import { isReaction, type Reaction } from './reactions.ts'
 import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 12
+export const PROTOCOL_VERSION = 13
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -305,6 +318,11 @@ export type Member = {
   reconnecting: boolean
   /** What the member publishes now, at most one track of each kind */
   tracks: MemberTrack[]
+  /**
+   * When the member raised their hand (G3, e5-t04; the server's clock): the queue's order
+   * (shared/reactions.ts handQueue); null while it is down
+   */
+  hand: number | null
 }
 
 /** What every member sees of the room: the state `snapshot` sends and `patch` keeps up to date */
@@ -357,6 +375,8 @@ export type NoticeKind =
   | 'madeCohost'
   | 'cohostRevoked'
   | 'madeHost'
+  // G3 (e5-t04): a host or co-host lowered this member's raised hand
+  | 'handLowered'
 
 export type NoticeMessage = { t: 'notice'; notice: NoticeKind; by: string; all?: true }
 
@@ -386,6 +406,9 @@ export type LobbyMessage = {
  */
 export type ChatServerMessage = { t: 'chat'; messages: ChatMessage[]; reset?: true }
 
+/** Someone in the room reacted (G3, e5-t03): `from` is their member id (maybe our own) */
+export type ReactionMessage = { t: 'reaction'; from: string; emoji: Reaction }
+
 export type ServerMessage =
   | WelcomeMessage
   | SnapshotMessage
@@ -394,6 +417,7 @@ export type ServerMessage =
   | ChatServerMessage
   | NoticeMessage
   | LobbyMessage
+  | ReactionMessage
 
 // ── Browser → server ─────────────────────────────────────────────────────────────────────────
 
@@ -457,8 +481,14 @@ export type SpotlightMessage = { t: 'spotlight'; memberId: string | null }
 /** A chat message to everyone in the room (D3); `text` is normalizeChatText's */
 export type ChatClientMessage = { t: 'chat'; text: string }
 
-/** The host controls that act on one member (F1); `memberId` says who */
-export type HostMemberAction = 'muteMember' | 'camOff' | 'stopShare' | 'remove'
+/** A reaction to everyone in the room (G3, e5-t03) */
+export type ReactClientMessage = { t: 'react'; emoji: Reaction }
+
+/** Raise (`up`) or lower the member's own hand (G3, e5-t04) */
+export type HandMessage = { t: 'hand'; up: boolean }
+
+/** The host controls that act on one member (F1; `lowerHand` G3); `memberId` says who */
+export type HostMemberAction = 'muteMember' | 'camOff' | 'stopShare' | 'remove' | 'lowerHand'
 
 /** The host controls that act on the whole room (F1; `admitAll` F2) */
 export type HostRoomAction = 'muteAll' | 'endMeeting' | 'admitAll'
@@ -487,7 +517,13 @@ export type HostAction =
   | HostCohostAction
   | HostHandoverAction
 
-const HOST_MEMBER_ACTIONS: readonly string[] = ['muteMember', 'camOff', 'stopShare', 'remove']
+const HOST_MEMBER_ACTIONS: readonly string[] = [
+  'muteMember',
+  'camOff',
+  'stopShare',
+  'remove',
+  'lowerHand',
+]
 const HOST_ROOM_ACTIONS: readonly string[] = ['muteAll', 'endMeeting', 'admitAll']
 const HOST_WAITING_ACTIONS: readonly string[] = ['admit', 'deny']
 const HOST_SWITCH_ACTIONS: readonly string[] = ['lock', 'waitingRoom']
@@ -515,6 +551,8 @@ export type ClientMessage =
   | ShareMessage
   | UnshareMessage
   | SpotlightMessage
+  | ReactClientMessage
+  | HandMessage
 
 // ── POST /api/rooms ──────────────────────────────────────────────────────────────────────────
 
@@ -625,6 +663,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       const text = normalizeChatText(value.text)
       return text === null ? null : { t: 'chat', text }
     }
+    case 'react':
+      return isReaction(value.emoji) ? { t: 'react', emoji: value.emoji } : null
+    case 'hand':
+      return typeof value.up === 'boolean' ? { t: 'hand', up: value.up } : null
     case 'host': {
       const action = value.action
       if (typeof action !== 'string') return null
@@ -744,6 +786,10 @@ export function parseServerMessage(raw: string): ServerMessage | null {
         value.room !== null &&
         typeof value.hostPresent === 'boolean'
         ? (value as LobbyMessage)
+        : null
+    case 'reaction':
+      return typeof value.from === 'string' && isReaction(value.emoji)
+        ? (value as ReactionMessage)
         : null
     default:
       return null

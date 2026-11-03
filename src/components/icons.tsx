@@ -226,3 +226,23 @@ export function SpotlightIcon() {
     </svg>
   )
 }
+
+/** A smiling face (G3: the toolbar's 反應) */
+export function SmileIcon() {
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8 14a5 5 0 0 0 8 0M9 9.5h.01M15 9.5h.01" />
+    </svg>
+  )
+}
+
+/** An open hand (G3: a raised hand) */
+export function HandIcon() {
+  return (
+    <svg {...common}>
+      <path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V11M11 10V4.5a1.5 1.5 0 0 1 3 0V11M14 10.5V6a1.5 1.5 0 0 1 3 0v7" />
+      <path d="M8 12.5 6.6 11a1.6 1.6 0 0 0-2.4 2.1L7.5 18a6 6 0 0 0 5 3h.5a5 5 0 0 0 5-5v-3" />
+    </svg>
+  )
+}
