@@ -1346,7 +1346,6 @@ export class RoomMedia {
       clear: limit === null && verdict === 'good',
       cam: sends('cam'),
       screen: sends('screen'),
-      availableBps: sample.availableOutgoingBitrate,
     })
     if (after === before) return
     this.update({ uplink: after })

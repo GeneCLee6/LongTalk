@@ -322,7 +322,6 @@ const up = (over: Partial<UplinkInput> = {}): UplinkInput => ({
   clear: true,
   cam: true,
   screen: false,
-  availableBps: null,
   ...over,
 })
 
@@ -370,15 +369,6 @@ describe('UplinkAdaptation (e2-t15)', () => {
     for (let i = 0; i < RESTORE_TICKS - 1; i++) machine.step(up())
     expect(machine.state.cam).toBe('medium')
     machine.step(up())
-    expect(machine.state.cam).toBe('high')
-  })
-
-  it('waits for room on the uplink when the browser estimates it', () => {
-    const machine = new UplinkAdaptation()
-    for (let i = 0; i < LIMIT_TICKS; i++) machine.step(up({ pressure: 'bandwidth', clear: false }))
-    for (let i = 0; i < RESTORE_TICKS * 3; i++) machine.step(up({ availableBps: 600_000 }))
-    expect(machine.state.cam).toBe('medium')
-    for (let i = 0; i < RESTORE_TICKS; i++) machine.step(up({ availableBps: 3_000_000 }))
     expect(machine.state.cam).toBe('high')
   })
 

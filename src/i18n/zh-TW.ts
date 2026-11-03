@@ -786,8 +786,6 @@ export const zhTW = {
     suggest: '網路不佳：已暫停其他人的視訊，聲音仍不穩。切換成純音訊可以讓聲音更穩。',
     switchAudioOnly: '切換成純音訊',
     dismiss: '不用了',
-    audioOnly: '純音訊模式：不收視訊，也不送你的鏡頭。',
-    leaveAudioOnly: '恢復視訊',
     audioOnlyOn: '已切換成純音訊',
   },
   rename: {

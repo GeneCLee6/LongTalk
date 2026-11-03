@@ -20,13 +20,14 @@
 //
 // Uplink: when the encoder of our camera or screen is held back by bandwidth or the SFU reports
 // heavy loss for LIMIT_TICKS intervals in a row, stop sending the top layer (camera, then screen,
-// then the camera's middle one: limitSendLayers); after RESTORE_TICKS clear ones (and, when the
-// browser estimates the uplink, room for the layer), send it again. A restore that is followed
+// then the camera's middle one: MediaTransport.setTopLayer); after RESTORE_TICKS clear ones, send
+// it again. Not "when the estimate has room": with the layer off the browser only probes up to
+// what it sends, so availableOutgoingBitrate never shows room for it (measured on the PR preview,
+// #31: the top layer stayed off for good; H3 found the same for HD, media/uplink.ts). A restore that is followed
 // by pressure within RELAPSE_TICKS doubles the next wait. A busy CPU only ever turns off the
 // camera's top layer: the 720p encode is what costs, the small layers save little and a screen
 // at half size loses its text (measured on CI, #31: a starved runner reports `cpu` for minutes,
 // and going further left everyone at 180p).
-import { SIMULCAST } from './encoding.ts'
 import { DOWNLINK_BUDGET_BPS } from './layers.ts'
 import type { Layer } from './MediaTransport.ts'
 import type { SignalLevel } from './quality.ts'
@@ -183,8 +184,6 @@ export interface UplinkInput {
   /** Which videos we send now (simulcast) */
   cam: boolean
   screen: boolean
-  /** The browser's uplink estimate, bits per second; null when it gives none */
-  availableBps: number | null
 }
 
 export const LIMIT_TICKS = 5
@@ -197,13 +196,6 @@ const UPLINK_STEPS: readonly { kind: 'cam' | 'screen'; to: Layer }[] = [
   { kind: 'screen', to: 'medium' },
   { kind: 'cam', to: 'low' },
 ]
-
-const sendsBps = (kind: 'cam' | 'screen', highest: Layer): number => {
-  const order: Record<Layer, number> = { high: 2, medium: 1, low: 0 }
-  return SIMULCAST[kind]
-    .filter((layer) => order[layer.layer] <= order[highest])
-    .reduce((sum, layer) => sum + layer.maxBitrate, 0)
-}
 
 export const FULL_UPLINK: UplinkState = { cam: 'high', screen: 'high' }
 
@@ -257,14 +249,7 @@ export class UplinkAdaptation {
     }
     if (this.#steps > 0 && this.#clear >= this.#restoreTicks) {
       this.#clear = 0
-      const next = this.#steps - 1
-      const restored = { ...this.#target(next) }
-      // Room for it on the uplink, where the browser says how much there is
-      const needs =
-        (input.cam ? sendsBps('cam', restored.cam) : 0) +
-        (input.screen ? sendsBps('screen', restored.screen) : 0)
-      if (input.availableBps !== null && input.availableBps < needs) return this.#state
-      this.#steps = next
+      this.#steps -= 1
       this.#sinceRestore = 0
       return this.#apply()
     }

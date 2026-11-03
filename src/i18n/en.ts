@@ -784,8 +784,6 @@ export const en: Strings = {
       'Poor network: others’ video is paused and sound is still choppy. Audio-only can make the sound steadier.',
     switchAudioOnly: 'Switch to audio-only',
     dismiss: 'No thanks',
-    audioOnly: 'Audio-only: no video received, and your camera isn’t sent.',
-    leaveAudioOnly: 'Turn video back on',
     audioOnlyOn: 'Switched to audio-only',
   },
   rename: {
