@@ -50,7 +50,7 @@
 
 **規則**：所有媒體相關的呼叫經過 `src/media/MediaTransport.ts` 介面（`connect`、`publish`、`unpublish`、`subscribe`、`unsubscribe`、`setPreferredLayer`、`getStats`、`on`、`close`）。`CloudflareRealtimeTransport` 是第一個實作；介面的測試用 `FakeTransport` 跑。**A2 定稿：決定、Realtime 實際端點、介面與切換條件見 [`adr-001-media-layer.md`](adr-001-media-layer.md)。**
 
-**Simulcast（H1）**：鏡頭以 1280×720 擷取、發三層（`f`／`h`／`q`），分享兩層，都是 VP8（`src/media/encoding.ts`）。每個接收端自己選層：格子把畫出的大小與是否看得見報給 `VideoDemandStore`（`src/components/useVideoDemand.ts`），`RoomMedia` 用 `src/media/layers.ts` 的純函式（大小、可見、每人 3.4 Mbps 的視訊下行預算、遲滯）決定，經 `MediaTransport.setPreferredLayer` 對 SFU 的 `tracks/update` 送出；頻寬真的不夠時由 SFU 自己往下換（`priorityOrdering: asciibetical`）。層是接收端與 SFU 之間的事，RoomDO 不參與。細節與實測在 ADR-001「Simulcast」。
+**Simulcast（H1）**：鏡頭以 1280×720 擷取、發三層（`f`／`h`／`q`），分享兩層，都是 VP8（`src/media/encoding.ts`）。每個接收端自己選層：格子把畫出的大小與是否看得見報給 `VideoDemandStore`（`src/components/useVideoDemand.ts`），`RoomMedia` 用 `src/media/layers.ts` 的純函式（大小、可見、每人 3.4 Mbps 的視訊下行預算、遲滯）決定，經 `MediaTransport.setPreferredLayer` 對 SFU 的 `tracks/update` 送出；SFU 照要的層送（`priorityOrdering: none`），頻寬比預算少時的降層是 H2 的 `e2-t15`。層是接收端與 SFU 之間的事，RoomDO 不參與。細節與實測在 ADR-001「Simulcast」。
 
 ## 4. 資料流：一個人進房
 
