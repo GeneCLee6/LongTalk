@@ -310,7 +310,7 @@ describe('CloudflareRealtimeTransport', () => {
           trackName: 'cam-1',
           simulcast: {
             preferredRid: 'h',
-            priorityOrdering: 'asciibetical',
+            priorityOrdering: 'none',
             ridNotAvailable: 'asciibetical',
           },
         },
@@ -332,7 +332,7 @@ describe('CloudflareRealtimeTransport', () => {
             trackName: 'cam-1',
             simulcast: {
               preferredRid: 'f',
-              priorityOrdering: 'asciibetical',
+              priorityOrdering: 'none',
               ridNotAvailable: 'asciibetical',
             },
           },

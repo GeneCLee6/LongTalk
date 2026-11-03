@@ -13,12 +13,12 @@
 //    low as it goes.
 // 3. Bandwidth: everything asked for must fit DOWNLINK_BUDGET_BPS (AC-2.6: an 8-person grid
 //    stays under 4 Mbps, audio included), counted at each layer's bitrate cap. Over it, the
-//    smallest tiles step down first, cameras before the screen. A link that carries less is
-//    Realtime's to handle: every subscription asks with `priorityOrdering: asciibetical`, so the
-//    SFU sends a lower layer when the preferred one does not fit its own estimate. The browser's
-//    availableIncomingBitrate is not used: on Realtime's downlink it follows what is already
-//    being received (398 kbps while receiving 362, PR preview), so as a cap it holds every layer
-//    low for good. Reacting to loss and freezes is H2's (e2-t15).
+//    smallest tiles step down first, cameras before the screen. The SFU sends what is asked for
+//    (`priorityOrdering: none`: its own estimate held layers down and moved them about, ADR-001),
+//    and the browser's availableIncomingBitrate is not used either: on Realtime's downlink it
+//    follows what is already being received (398 kbps while receiving 362, PR preview), so as a
+//    cap it holds every layer low for good. A link that carries less than the budget is H2's to
+//    notice from loss and freezes and lower the budget (e2-t15).
 // 4. Hysteresis: a layer already asked for stays while the tile is between "good enough" and
 //    "fully covered" (so a tile resized around a boundary does not flip), and stepping up needs
 //    headroom in the budget (UPGRADE_HEADROOM). Callers debounce layout changes on top.

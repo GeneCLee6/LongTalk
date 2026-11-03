@@ -165,6 +165,17 @@ describe('RoomMedia: simulcast layers (e2-t11, e2-t12)', () => {
     expect(camKey).toMatch(/\/cam-/)
   })
 
+  it('sends a layout change made while the connection was down once it is back', async () => {
+    const { bobTransport, demand, camKey, cam } = await room()
+    bobTransport.simulateState('reconnecting')
+    demand.report(cam, {}, drawn(1280, 720))
+    await debounced()
+    expect(bobTransport.layerRequests).toEqual([])
+    bobTransport.simulateState('connected')
+    await debounced()
+    expect(bobTransport.preferredLayers.get(camKey)).toBe('high')
+  })
+
   it('asks again when a layer request fails', async () => {
     const { bob, bobTransport, demand, camKey, cam } = await room(DEBOUNCE)
     const real = bobTransport.setPreferredLayer.bind(bobTransport)

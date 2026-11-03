@@ -64,7 +64,7 @@ LongTalk 的核心是 2–8 人（M0／M1）的音訊、視訊與螢幕分享，
   - **pull 的 mid 從「那條軌」的結果讀**（比對發布者 session 與 trackName），找不到對應的 transceiver 就是兩邊對 SDP 的認知不同，transport `failed` 重建。
   - **SDP 交換做到一半失敗**（SFU 已收下 offer 但 answer 套不上、`/renegotiate` 被拒、或任何 406）時，瀏覽器與 SFU 不再一致，重試只會一直被拒：transport `failed`，由 `RoomMedia` 重建 session。
   - 「還沒好」（`not_found_track_error`、`empty_track_error`、`track_not_in_room`）的訂閱以退避重試（2、4、8 秒，最多每 15 秒一次），軌還在房間清單上就不放棄；發布失敗也一樣重試。
-- **simulcast**：發布端 `sendEncodings` 用 rid `f`／`h`／`q`（1、½、¼ 解析度）；接收端 `preferredRid` 搭配 `priorityOrdering`／`ridNotAvailable: 'asciibetical'`，字母越前面越優先，所以 `f` 是最高層。`Layer` 對應：`high→f`、`medium→h`、`low→q`。
+- **simulcast**：發布端 `sendEncodings` 用 rid `f`／`h`／`q`（1、½、¼ 解析度）；接收端 `preferredRid` 搭配 `priorityOrdering`／`ridNotAvailable: 'asciibetical'`，字母越前面越優先，所以 `f` 是最高層。`Layer` 對應：`high→f`、`medium→h`、`low→q`。H1 實作與實測見下面「Simulcast」。
 - **TURN**（`e2-t07`）：`POST https://rtc.live.cloudflare.com/v1/turn/keys/{TURN Key ID}/credentials/generate-ice-servers`，標頭 `Authorization: Bearer <TURN Key API Token>`，body `{"ttl": 秒數}`，回 `{ iceServers: [...] }` 直接給 `RTCPeerConnection`。清單可能含 port 53 的 URL，瀏覽器會擋，不用 trickle ICE 時要濾掉。A2 先只用 `stun:stun.cloudflare.com:3478`。**B3 實作**（`worker/turn.ts`、`POST /api/turn/<roomId>`）：只發給帶成員 session token 的呼叫（RoomDO `sfuAccess` 判斷，房外 401），TTL 3 小時、瀏覽器到 2/3 時向 Worker 再要一次並 `setConfiguration`，重建 PeerConnection 時也重新要；port 53 的 URL 在 Worker 濾掉；沒有 TURN secret 或 Cloudflare 回錯時回 `stun:stun.cloudflare.com:3478`（`turn: false`），通話照常。定價：SFU 與 TURN 共用 1,000 GB，TURN 與 SFU 之間的流量不重複計費。
 - **錄製**：Realtime SFU 沒有內建錄影。WebSocket adapter（GA）能把音訊以 PCM、視訊以 JPEG 幀送到自己的 WebSocket 端點：適合即時逐字稿（E8），不適合錄完整視訊。雲端錄影的選項（自架合成 vs RealtimeKit 錄影）留給 `e8-t04`。這回答了 E2「未決問題」的第一題。
 
@@ -111,7 +111,55 @@ interface MediaTransport {
 - **分享**：`frameRate { ideal: 30, max: 30 }`（原本 15）；`contentHint` 留 `detail`（`motion` 或不設時前 14 秒只有 720p，字糊；`detail`＋`balanced` 從第一秒就是 1080p）；sender `degradationPreference: 'balanced'`（壓力下解析度與幀率一起降，不再只掉幀）、`priority`／`networkPriority: 'high'`（同一條 PeerConnection 的頻寬估計依優先權分配，分享拿大份）、`maxBitrate` 2.5 Mbps、`maxFramerate` 30。文字／動態模式切換仍是 M1 `e3-t06`。
 - **鏡頭**：`maxBitrate` 800 kbps、`maxFramerate` 30（沒有 simulcast 前每個接收端都收整條，8 人時每人收 7 條；也讓分享在同一條上行有空間）；degradation 用瀏覽器預設（鏡頭本來就是 `balanced`）。
 - **起始頻寬**：發布時把 SFU answer 裡 VP8 的 fmtp 加上 `x-google-start-bitrate=1000`（kbps）再 `setRemoteDescription`。**只改本機**：SFU 看不到這個改動（這是瀏覽器 sender 從 remote description 讀的設定），Realtime 的 session 狀態不變；之後頻寬照 SFU 的 transport-cc 回饋調整，只是起點從 Chrome 預設的 300 kbps 改成 1,000 kbps。預期 Chrome 只在這個值改變時重設估計（libwebrtc 的 bitrate 設定比對），所以之後的發布（例如分享）不會把估計拉回 1,000；這點沒有單獨驗證，量到的分享數字已經包含它。非 Chromium 瀏覽器忽略它。上行真的很差的人頭一兩秒可能多掉一點包，之後估計會降下來。
-- 只送 VP8、不做 simulcast（`e2-t11`／H1 再改成每層的 encodings）。
+- 只送 VP8。H1 起鏡頭與分享改成 simulcast 的每層 encodings（下一節）；上面的單層參數留給拒絕 simulcast 的瀏覽器。
+
+## Simulcast（H1，2026-11-03，`e2-t11`、`e2-t12`，#29）
+
+### Realtime 怎麼做（官方文件〈Simulcast〉與 OpenAPI `realtime-api-2024-05-21`，加上 PR 預覽實測）
+
+- **發布**：沒有新端點。transceiver `sendonly`、`sendEncodings` 每層一個 `rid` ＋ `scaleResolutionDownBy`，offer 帶 `a=simulcast:send f;h;q` 與每層的 `a=rid:<id> send`；照常 `tracks/new`（`location: 'local'`、`mid`、`trackName`），answer 回 `a=simulcast:recv f;h;q`。一條 m-section、一組 payload type，所以 #13 的 payload type 問題不會因 simulcast 回來（只送 VP8 照舊）；起始頻寬改寫只碰 VP8 的 fmtp，simulcast 那幾行原封不動，照樣有效（測試與實測都確認）。
+- **訂閱**：`tracks/new` 的 remote 軌可以帶 `simulcast: { preferredRid, priorityOrdering, ridNotAvailable }`。`priorityOrdering`：`none`＝頻寬不夠也照送 preferredRid；`asciibetical`＝頻寬不夠時依 a–z 的優先順序降（a 最想要，所以 `f` > `h` > `q`）。`ridNotAvailable`：`none`＝發布者沒送那層就不換；`asciibetical`＝換成排序後下一個有的層。**兩個預設都是 `none`**，所以我們每次都明寫 `asciibetical`。
+- **換層**：`PUT …/sessions/{接收端 session}/tracks/update`，body `{ tracks: [{ location: 'remote', mid: 接收端的 mid, sessionId, trackName, simulcast: {...} }] }`，不帶 SDP。實測回 `200 { requiresImmediateRenegotiation: false, tracks: [{ mid }] }`；它仍是 session 的一次變更，所以走同一個佇列（一次一個），回應若要重新協商就先回答（`setPreferredLayer`）。
+- **沒有暫停**：API 沒有 `enabled`／`pause` 之類的欄位；要停收只能關掉那條軌（雙方各重新協商一次）。所以看不見的格子是「最低層」，不是暫停；真正的退訂留給 M2 的 `e2-t18`。
+- 文件沒寫：支援哪些 codec、最多幾層、SFU 自己的頻寬估計怎麼算與何時換層。實測看到的行為記在下面。
+
+### 發布（`src/media/encoding.ts` `SIMULCAST`）
+
+**Chrome 依來源大小決定送幾層**（libwebrtc 的 simulcast 層數上限）：本機兩個 PeerConnection 對送、假鏡頭，640×480 的來源只送 `f`、`h`，`q` 一直是 0 bytes；1280×720 的來源三層都送。所以鏡頭改成要 **1280×720**（`devices.ts` `CAMERA_CAPTURE`，`ideal`，做不到的鏡頭照它能的開），也剛好是格子的 16:9。
+
+| | rid | 縮小 | 最高位元率 | 最高 fps | 短邊（給選層比較） |
+| --- | --- | --- | --- | --- | --- |
+| 鏡頭 | `f` | 1 | 1.2 Mbps | 30 | 720 |
+| | `h` | 2 | 400 kbps | 30 | 360 |
+| | `q` | 4 | 120 kbps | 15 | 180 |
+| 分享 | `f` | 1 | 2.5 Mbps | 30 | 1080 |
+| | `h` | 2 | 600 kbps | 15 | 540 |
+
+- 位元率參考 libwebrtc 自己的 simulcast 階梯，最高層略低於它的 720p 2.5 Mbps（只有大格會要 `f`）。分享的優先權 `high`、`balanced` degradation 照舊（套在整個 sender）。
+- 瀏覽器拒絕 simulcast 的 `sendEncodings`（`addTransceiver` 丟錯）時改送一層（上面的單層參數）；訂閱端的 `ridNotAvailable: 'asciibetical'` 會落到那一層。
+- 本月超過低畫質門檻時鏡頭照舊降到 320×180：Chrome 只送一層 `f`，訂閱端落到它。
+- 上行：鏡頭三層合計最多約 1.7 Mbps（原本 800 kbps），分享再加 3.1 Mbps；上行不夠時 Chrome 先停最高層。
+
+### 選層（`src/media/layers.ts`、`src/room/videoDemand.ts`、`src/components/useVideoDemand.ts`）
+
+- 每個顯示別人視訊的 `<video>`（`Tile`、`ShareTile`）用 ResizeObserver 回報畫出的大小（CSS 像素 × `devicePixelRatio`，最多 2 倍）、IntersectionObserver 回報是否在畫面上（翻走的頁、捲出去的條帶都被捲動容器裁掉）、畫面的寬高比；分頁在背景（`visibilitychange`）時全部算看不見。報到 `VideoDemandStore`，以 MediaStreamTrack 為 key，同一條軌在兩處就取最大的那個看得見的。元件不碰 WebRTC（規則 2）：選層在 `RoomMedia`，經 `MediaTransport.setPreferredLayer`。
+- **大小**：鏡頭是 `cover`、分享是 `contain`，算出畫面上實際用到的來源短邊；要「短邊 ≥ 它的 80%」的最小一層。看不見、沒有格子（只顯示首字、隱藏）就最低層（分享沒有低層：`h`）。
+- **遲滯**：已經在的層，只要還「夠用」（80%）就不往上換；往下換要下一層能「完全蓋住」（100%）。所以 360 行的層在 360–450 行之間不會來回跳。另外 `RoomMedia` 在版面變動後等 400 ms 才重算（捲動、動畫、拉視窗是一串事件），只送有變的層。
+- **預算**：每人視訊下行 3.4 Mbps（AC-2.6 的 4 Mbps 扣掉聲音與封包負擔），用各層的最高位元率計算；超過就一次降一步，每步給「降了之後損失最少畫面細節」的那格（面積 × 失去的覆蓋比例）：小格先讓、一樣大的輪流；鏡頭都到最低了才動分享。往上換要留 15% 的餘裕。
+- **起始層**：拉軌時就帶偏好（鏡頭 `h`、分享 `f`），格子回報後再調；不用等一次 `tracks/update`。
+- **不用瀏覽器的 `availableIncomingBitrate`**：第一次預覽實測時把它當上限，Alice 的估計是 398 kbps、實際正收 362 kbps，所有層都被壓在 `q` 且回不來：在 Realtime 的下行它跟著已收到的量走，不是可用的頻寬。頻寬真的不夠時交給 SFU 自己的估計（`priorityOrdering: 'asciibetical'`）；依丟包、凍結主動降層是 H2 的 `e2-t15`。
+
+### 實測（PR 預覽，同一台電腦一個 headless Chrome 裡的 N 個成員，假鏡頭 1280×720）
+
+量法：`candidate-pair.bytesReceived` 10 秒的差＝每人下行；`inbound-rtp.frameHeight` 看收到哪一層（720＝`f`、360＝`h`、180＝`q`）；`outbound-rtp` 每個 rid 的解析度與位元率；記下每個 `tracks/update` 與回應。視窗 1280×800，8 人時格子 381×214。**所有成員在同一台機器**（8 個 720p 三層編碼＋各 7 路解碼），fps 受 CPU 限制（約 20），所以看位元率與層，不看 fps。
+
+@@MEASUREMENTS@@
+
+### 沒有驗證的
+
+- 兩台不同的真實裝置（AC-2.6 要求；`DEPLOY.md` §5 第 19 步）。真鏡頭的畫面比假鏡頭難壓，同一層的位元率會比上面高，接近各層上限。
+- Safari 與 Firefox 的 simulcast 發布（rid 順序、層數）；Safari 拒絕時的退回一層只有單元測試。
+- SFU 在真正頻寬不足時怎麼降層（實測的降層來自同一台機器的 CPU 負載，不是網路）。
 
 ## 後果
 

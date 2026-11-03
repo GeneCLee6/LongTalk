@@ -72,13 +72,16 @@ const TRANSCEIVER_TIMEOUT_MS = 3_000
 const LAYER_RID: Record<Layer, SimulcastRid> = { high: 'f', medium: 'h', low: 'q' }
 
 /**
- * A subscription's layer preference for Realtime: the rid asked for, and when it is not there
- * (the publisher sends fewer layers: a small camera, a single layer, a screen's two) or the link
- * cannot carry it, the next one in `asciibetical` order (`f` before `h` before `q`)
+ * A subscription's layer preference for Realtime: the rid asked for, kept whatever the SFU's own
+ * estimate says (`priorityOrdering: none`), and when the publisher does not send it (a small
+ * camera, a single layer, a screen's two) the next one in `asciibetical` order (`f`, `h`, `q`).
+ * Measured on the PR preview (ADR-001 「Simulcast」): with `asciibetical` ordering the SFU moved
+ * grid tiles up to `f` and kept a pinned tile from reaching it for 35 s; with `none` it sends
+ * what is asked for within seconds. The layer choice keeps to a budget itself (media/layers.ts).
  */
 const simulcastPreference = (layer: Layer) => ({
   preferredRid: LAYER_RID[layer],
-  priorityOrdering: 'asciibetical' as const,
+  priorityOrdering: 'none' as const,
   ridNotAvailable: 'asciibetical' as const,
 })
 

@@ -79,8 +79,8 @@ E2 只管「媒體怎麼送到」；聲音好不好聽、畫面好不好看（�
 
 ### M1
 
-- [ ] `e2-t11` simulcast 發布：cam 三層、screen 兩層、編碼參數 · AC-2.6 · M · ← e2-t10
-- [ ] `e2-t12` 接收端選層：依格子像素尺寸與頻寬估計 `setPreferredLayer`，版面變動時重算 · AC-2.6 · M · ← e2-t11, e4-t04
+- [x] `e2-t11` simulcast 發布：cam 三層、screen 兩層、編碼參數（VP8；鏡頭改要 1280×720，Chrome 從 640×480 只送兩層；cam `f` 720p 1.2 Mbps／`h` 360p 400 kbps／`q` 180p 120 kbps 15 fps，screen `f` 原尺寸 2.5 Mbps／`h` 一半 600 kbps 15 fps；`src/media/encoding.ts` `SIMULCAST`；瀏覽器拒絕 simulcast 時送一層；起始頻寬與只送 VP8 照舊，三人以上 payload type 問題沒有回來） · AC-2.6 · #29
+- [x] `e2-t12` 接收端選層：依格子像素尺寸與頻寬估計 `setPreferredLayer`，版面變動時重算（`src/media/layers.ts` 純函式：格子畫出的像素（×devicePixelRatio，最多 2 倍）、看不見（翻頁、捲出條帶、只顯示首字、分頁在背景）就最低層、每人視訊下行預算 3.4 Mbps（小格先讓）、遲滯；`useVideoDemand` 用 ResizeObserver／IntersectionObserver 回報，`RoomMedia` 400 ms 去抖動後只送有變的層；拉軌時就帶起始層（鏡頭 medium、分享 high）；頻寬不夠交給 Realtime 自己的估計（`priorityOrdering: asciibetical`），瀏覽器的 `availableIncomingBitrate` 跟著已收到的量走、當上限會把層鎖在最低，所以不用；Realtime 沒有暫停訂閱的 API，看不見就最低層） · AC-2.6 · #29
 - [ ] `e2-t13` `getStats()` 收集與名牌訊號格 · AC-2.7 · S · ← e2-t10
 - [ ] `e2-t14` 統計面板（自己的連線、每條訂閱）、匯出 JSON 給除錯 · AC-2.7 · S · ← e2-t13
 - [ ] `e2-t15` 頻寬自適應策略：下行降層→停收非講話者→純音訊提示；上行降最高層 · AC-2.7 · M · ← e2-t12, e2-t13

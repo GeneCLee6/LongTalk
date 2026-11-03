@@ -53,8 +53,8 @@ import type { VideoDemandStore } from './videoDemand.ts'
 // they draw each track (`demand`, videoDemand.ts); a change (a resize, a page turned, a strip
 // scrolled, a tile hidden) or a new subscription recomputes every layer after LAYER_DEBOUNCE_MS
 // (media/layers.ts: size, visibility, budget, hysteresis), and only the ones that changed go to
-// the SFU. A camera starts at medium and a
-// screen at high until its tile reports. Without a demand store nothing is recomputed.
+// the SFU. A camera starts at medium and a screen at high until its tile reports. Without a
+// demand store nothing is recomputed.
 //
 // Rebuilding (e2-t08): when the transport fails, or stays `reconnecting` (ICE disconnected) for
 // DISCONNECT_GRACE_MS, the session is thrown away and a new one built from the factory: new ICE
@@ -472,6 +472,8 @@ export class RoomMedia {
       if (this.state.status === 'reconnecting') {
         this.update({ status: 'connected' })
         this.reconcile()
+        // Layout changes while the connection was down were not sent
+        this.scheduleLayers()
       }
     } else if (status === 'reconnecting') {
       if (this.disconnectTimer !== null) return
