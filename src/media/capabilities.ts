@@ -139,9 +139,7 @@ export function canShareAudio(env: CapabilityEnv = browser()): boolean {
  */
 export function audioProcessingSupport(env: CapabilityEnv = browser()): ProcessingKey[] {
   const devices = env.navigator?.mediaDevices as
-    | { getSupportedConstraints?: () => Record<string, boolean | undefined> }
-    | null
-    | undefined
+    { getSupportedConstraints?: () => Record<string, boolean | undefined> } | null | undefined
   if (typeof devices?.getSupportedConstraints !== 'function') return []
   try {
     const supported = devices.getSupportedConstraints()

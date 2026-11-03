@@ -52,6 +52,8 @@
 
 **Simulcast（H1）**：鏡頭以 1280×720 擷取、發三層（`f`／`h`／`q`），分享兩層，都是 VP8（`src/media/encoding.ts`）。每個接收端自己選層：格子把畫出的大小與是否看得見報給 `VideoDemandStore`（`src/components/useVideoDemand.ts`），`RoomMedia` 用 `src/media/layers.ts` 的純函式（大小、可見、每人 3.4 Mbps 的視訊下行預算、遲滯）決定，經 `MediaTransport.setPreferredLayer` 對 SFU 的 `tracks/update` 送出；SFU 照要的層送（`priorityOrdering: none`），頻寬比預算少時的降層是 H2 的 `e2-t15`。層是接收端與 SFU 之間的事，RoomDO 不參與。細節與實測在 ADR-001「Simulcast」。
 
+**發送端的品質設定（H3）**：麥克風的噪音抑制、回音消除、自動增益是 `getUserMedia` 約束（`src/media/audioProcessing.ts`），通話中先 `applyConstraints`、瀏覽器不肯改就重開麥克風再 `replaceTrack`（不重新協商）。HD 是鏡頭的最高層：`MediaTransport.setTopLayer` 用 `setParameters` 開關 `f` 層（關＝最高 360p），HD 開著時 `RoomMedia` 每 5 秒經 `MediaTransport.getUplink` 讀 `qualityLimitationReason` 與 `availableOutgoingBitrate`，上行不夠就暫停 HD 並稍後再試（`src/media/uplink.ts`）。純音訊模式（`RoomMedia.setAudioOnly`）退訂所有別人的視訊、自己的鏡頭送 null；聲音照常。靜音中講話提醒用麥克風的 `clone()` 在本機分析，什麼都不送。都只在瀏覽器裡，RoomDO 不參與（`muted` 照常回報）。
+
 ## 4. 資料流：一個人進房
 
 1. 瀏覽器 `GET /r/abc123` → Worker 的靜態資產回 SPA。

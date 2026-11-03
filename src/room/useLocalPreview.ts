@@ -110,19 +110,17 @@ export function useLocalPreview(
     let cancelled = false
     let stream: MediaStream | null = null
     const processing = latestProcessing.current
-    void openLocalMedia(
-      mediaDevices,
-      { mic, cam, micId, camId, processing },
-      createStream,
-    ).then((media) => {
-      if (cancelled) {
-        stopStream(media.stream)
-        return
-      }
-      stream = media.stream
-      setOpened({ key, media })
-      void refreshDevices()
-    })
+    void openLocalMedia(mediaDevices, { mic, cam, micId, camId, processing }, createStream).then(
+      (media) => {
+        if (cancelled) {
+          stopStream(media.stream)
+          return
+        }
+        stream = media.stream
+        setOpened({ key, media })
+        void refreshDevices()
+      },
+    )
     return () => {
       cancelled = true
       stopStream(stream)

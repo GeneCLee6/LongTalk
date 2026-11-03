@@ -447,49 +447,49 @@ function PreJoinScreen({
       <PreJoin
         onSettings={() => setSettingsOpen(true)}
         audioOnly={audioOnly}
-      roomId={roomId}
-      memberCount={summary.memberCount}
-      roomNotice={summary.status === 'error' ? strings.prejoin.loadFailed : null}
-      waitingRoom={summary.waitingRoom}
-      speakerTest={
-        speakerSupported ? { playing: speakerTest.playing, onToggle: speakerTest.toggle } : null
-      }
-      micSilent={micSilent}
-      permissionGuide={permissionGuide}
-      name={name}
-      onNameChange={setName}
-      mic={mic}
-      cam={cam}
-      onToggleMic={() => setMic((on) => !on)}
-      onToggleCam={() => setCam((on) => !on)}
-      stream={preview.stream}
-      opening={preview.opening}
-      level={level}
-      devices={preview.devices}
-      selected={selected}
-      onSelect={onSelect}
-      speakerSupported={speakerSupported}
-      micProblem={preview.micProblem}
-      camProblem={preview.camProblem}
-      onRetry={preview.retry}
-      password={passwordField}
-      onJoin={() => {
-        const normalized = normalizeName(name)
-        const password = passwordField ? normalizePassword(passwordField.value) : null
-        if (!normalized || (passwordField && password === null)) return
-        // Kept in this tab (sessionStorage) for 「複製含密碼的連結」; the room confirms it
-        if (password !== null) saveKnownPassword(roomId, { password, setAt: null })
-        // Devices found under a new id are remembered by it from now on
-        const devices = { ...picked }
-        for (const kind of ['mic', 'cam', 'speaker'] as const) {
-          const now = resolved[kind]
-          if (now === null || now === picked[kind]) continue
-          saveDevice(kind, now, labels[kind] ?? '')
-          devices[kind] = now
+        roomId={roomId}
+        memberCount={summary.memberCount}
+        roomNotice={summary.status === 'error' ? strings.prejoin.loadFailed : null}
+        waitingRoom={summary.waitingRoom}
+        speakerTest={
+          speakerSupported ? { playing: speakerTest.playing, onToggle: speakerTest.toggle } : null
         }
-        onJoin({ name: normalized, mic, cam, devices, password, audioOnly })
-      }}
-    />
+        micSilent={micSilent}
+        permissionGuide={permissionGuide}
+        name={name}
+        onNameChange={setName}
+        mic={mic}
+        cam={cam}
+        onToggleMic={() => setMic((on) => !on)}
+        onToggleCam={() => setCam((on) => !on)}
+        stream={preview.stream}
+        opening={preview.opening}
+        level={level}
+        devices={preview.devices}
+        selected={selected}
+        onSelect={onSelect}
+        speakerSupported={speakerSupported}
+        micProblem={preview.micProblem}
+        camProblem={preview.camProblem}
+        onRetry={preview.retry}
+        password={passwordField}
+        onJoin={() => {
+          const normalized = normalizeName(name)
+          const password = passwordField ? normalizePassword(passwordField.value) : null
+          if (!normalized || (passwordField && password === null)) return
+          // Kept in this tab (sessionStorage) for 「複製含密碼的連結」; the room confirms it
+          if (password !== null) saveKnownPassword(roomId, { password, setAt: null })
+          // Devices found under a new id are remembered by it from now on
+          const devices = { ...picked }
+          for (const kind of ['mic', 'cam', 'speaker'] as const) {
+            const now = resolved[kind]
+            if (now === null || now === picked[kind]) continue
+            saveDevice(kind, now, labels[kind] ?? '')
+            devices[kind] = now
+          }
+          onJoin({ name: normalized, mic, cam, devices, password, audioOnly })
+        }}
+      />
     </>
   )
 }

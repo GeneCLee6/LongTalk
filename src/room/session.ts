@@ -240,8 +240,9 @@ export function loadMediaPrefs(): MediaPrefs {
     const saved: unknown = JSON.parse(read('localStorage', MEDIA_KEY) ?? 'null')
     if (typeof saved !== 'object' || saved === null) return DEFAULT_MEDIA
     const { processing, hd } = saved as Record<string, unknown>
-    const switches = (typeof processing === 'object' && processing !== null ? processing : {}) as
-      Record<string, unknown>
+    const switches = (
+      typeof processing === 'object' && processing !== null ? processing : {}
+    ) as Record<string, unknown>
     const loaded = { ...DEFAULT_PROCESSING }
     for (const key of PROCESSING_KEYS) {
       if (typeof switches[key] === 'boolean') loaded[key] = switches[key]

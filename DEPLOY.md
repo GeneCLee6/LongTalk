@@ -247,6 +247,13 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
     - **分頁在背景**：在 `chrome://webrtc-internals` 分頁上停 15 秒（會議室分頁在背景）：所有 `frameHeight` 降到 180、接收量大降；切回會議室：幾秒內恢復。
     - **分享**：電腦分享，手機看：手機的分享 `frameHeight` 是 540（一半那層，手機的分享框小），電腦另一個接收者是 1080。
     - 把裝置、系統、瀏覽器版本、8 人時的接收量與上面幾項的結果寫進 PR；**兩台不同裝置都對上才勾 AC-2.6**。
+21. **聲音處理、靜音中講話提醒、HD 與純音訊模式（H3，AC-6.1、AC-6.3、AC-6.4 的一部分）**：兩台不同裝置（一台電腦 Chrome 或 Edge、一支手機；Safari 或 Firefox 能多試一台更好），對方戴耳機聽。電腦另開 `chrome://webrtc-internals`。
+    - **設定面板**：電腦「更多 › 設定…」是對話框、手機是全螢幕抽屜，三個分頁「音訊／視訊／效能」；預先加入頁的「設定」也打得開。音訊頁有麥克風與喇叭選單、視訊頁有鏡頭選單，換裝置和工具列的選單一樣。**瀏覽器不認得的開關不顯示**（記下每個瀏覽器顯示了哪幾個）。
+    - **三個開關即時生效（AC-6.1）**：預設三個都開。通話中在電腦旁邊開風扇或敲鍵盤：關「噪音抑制」→ 對方明顯聽到更多背景聲、再開回來 → 變小；用喇叭（不戴耳機）講話、對方也用喇叭：關「回音消除」→ 對方聽到自己的回音；關「自動調整音量」→ 小聲講話時對方聽到的音量變小。每次切換通話**不斷**、對方的畫面不閃；`webrtc-internals` 的 `outbound-rtp`（audio）不會多出一條（換軌不重新協商）。重新整理後開關還是剛剛的樣子。把每個瀏覽器是「即時改」還是「重開麥克風」寫進結果（後者麥克風的 `track` id 會換）。
+    - **靜音中講話（AC-6.3）**：按靜音，對著麥克風講 2 秒以上：舞台上方出現「你目前是靜音」與「取消靜音」；按「取消靜音」→ 麥克風打開、對方聽得到。再靜音、再講：30 秒內不會再出現。按住空白鍵說話（按住說話）時與剛放開時不出現。**靜音時對方完全聽不到**（對方 `inbound-rtp` audio 的 `bytesReceived` 不增加）。
+    - **HD（AC-6.4 的一半）**：電腦預設開、手機預設關（設定的視訊頁）。電腦關 HD：`outbound-rtp` 的 `f` 層停止（`active` 變 false、位元率 0），對方釘選你時 `frameHeight` 最高 360；開回來幾秒內回到 720。用 Chrome DevTools › Network › Throttling 自訂上傳 1 Mbps（或手機熱點），HD 開著約 30 秒後跳出「上傳網路不夠快，先暫停 HD 視訊」，設定頁寫「暫時不送 HD」，`f` 層停止；拿掉限速約 1 分鐘後自己恢復。
+    - **純音訊模式**：「更多 › 純音訊模式」（或設定的效能頁）：你看不到任何人的畫面（格子是首字）、鏡頭燈熄，別人看到你的首字；聲音兩邊照常；`webrtc-internals` 的 video `inbound-rtp` 消失、candidate-pair 接收量大降。按舞台上方的「恢復視訊」→ 畫面回來、鏡頭打開（原本是開的話）。預先加入頁的設定開純音訊模式再加入：進房就是純音訊、鏡頭不開。
+    - 結果（裝置、系統、瀏覽器版本、每項通過與否）寫進 PR 或 issue；**AC-6.1、AC-6.3 兩台不同裝置都對上才勾**；AC-6.4 還要省電模式（H4，`e6-t05`）與 E2 統計面板（H2）反映這些變化，那時才勾。
 
 常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「媒體伺服器不認得這個分頁」＝ session token 過期（房間把成員移除了），重新整理；一直沒有對方的畫面 ＝ 網路擋 UDP，檢查 TURN secret 有沒有設（`/api/turn` 的 `turn` 要是 `true`）。
 
@@ -282,6 +289,7 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
 - **聊天（D3）**：媒體檢查之前，Alice 打開聊天、送一則帶連結的中文訊息；Bob、Carol 的「聊天」鈕出現「1 則未讀」，打開後看到同一則訊息、連結是 `rel="noopener noreferrer"`，再關上（讓舞台回到全寬）。
 - **等候室與鎖房（F2）**：Carol 被移出後，Alice（主持人）在參與者面板打開「等候室」；第四個 context Dave 加入：他看到等候畫面（「你是下一位」），Alice 看到「Dave 在等候室，等你放行」與琥珀色徽章，Bob 的舞台上沒有 Dave；Alice 按「放行」→ Dave 同一頁進房，Alice 與 Dave 互相收得到畫面與聲音、Dave 收得到 Bob 的畫面（Bob 前面靜音了）。Alice 打開「鎖定會議室」：三人都看到鎖頭；第五個 context 開連結直接是「這間會議室已鎖定」（沒有名字欄）。
 - **離開後畫面（D4）**：最後 Carol 按「離開」：她看到「你已經離開會議室」與「重新加入」，按「5 分：很好」後出現「謝謝你的回饋！」，而且這個評分真的送到 `POST /api/events`（請求內容有 `{ "type": "rating", "score": 5 }`、回 202）；Alice、Bob 的舞台上 Carol 的格子消失。
+- **純音訊模式（H3）**：Carol 隱藏自己之後，Bob 從「更多」打開「純音訊模式」：他看到「純音訊模式：不接收也不送出視訊」，收不到 Alice、Carol 的畫面，她們也收不到他的；Bob 還聽得到 Alice。按「恢復視訊」：Bob 又收到兩人的畫面與聲音、她們又看到 Bob。
 - 結束時每個人按「離開」，SFU session 立刻關閉（省額度）。
 
 **在哪裡跑**：`preview.yml` 的 `e2e` job，在預覽部署與 smoke test 之後，`BASE_URL` 是這個 PR 的預覽網址。沒有預覽（fork、沒有 Cloudflare secret）或預覽沒有 `REALTIME_APP_ID`／`REALTIME_APP_SECRET` 時，job 留 notice 並略過（顯示成功）。每次約用數十 MB 的 SFU 流量（`longtalk-dev` app）。
@@ -304,7 +312,7 @@ PW_CHANNEL=chrome BASE_URL=… npm run test:e2e   # 用已安裝的 Chrome，不
 
 `.github/workflows/ui.yml`（`UI checks`）在每個 PR 與 `main` 上跑，**不用 Cloudflare 帳號**：`npm run build` 之後用 `vite preview` 在 workerd 裡跑整個 Worker（API、Durable Objects、靜態資產），房間照常運作，只是沒有 Realtime SFU（會議室顯示「媒體伺服器尚未設定」）。兩個 job 都在 **Playwright 的 Docker image**（`mcr.microsoft.com/playwright:v1.64.0-noble`，版本要和 `package.json` 的 `@playwright/test` 一樣；升級 Playwright 時兩處一起改，並重做基準截圖）裡跑，字型與繪製每次一樣。設定在 `playwright.local.config.ts`，測試在 `e2e/local/`。
 
-- **`a11y`**：`e2e/local/a11y.spec.ts` 用 axe-core（`@axe-core/playwright`，WCAG 2.2 A／AA＋best practice）掃首頁（深淺色、錯誤訊息）、預先加入、`/admin`、會議室（兩人）、聊天側欄、參與者面板與對某人的選單、反應選擇器、「更多」、快捷鍵清單、離開確認、手機的會議室與抽屜、等候室（等候者與主持人的名單）、離開後畫面、密碼與改名對話框、英文介面；**一個違規就失敗**。另外用鍵盤走一遍：名字欄先有焦點、Enter 進房、Tab 到格子的「釘選」、反應選擇器、參與者選單（Esc 後焦點回原處）、每個可聚焦的元素都有 2 px 外框。接著 `scripts/lighthouse.ts`（`npm run lighthouse`）用 Lighthouse 13 量首頁、預先加入（navigation）與會議室（加入後 snapshot）在桌機與手機的無障礙分數，**任何一個 < 0.95 就失敗**；分數表在這次 run 的 Summary，HTML 報告在 `a11y` artifact。2026-11-03（#30）CI：六個都是 1.00。
+- **`a11y`**：`e2e/local/a11y.spec.ts` 用 axe-core（`@axe-core/playwright`，WCAG 2.2 A／AA＋best practice）掃首頁（深淺色、錯誤訊息）、預先加入、`/admin`、會議室（兩人）、聊天側欄、參與者面板與對某人的選單、反應選擇器、「更多」、快捷鍵清單、離開確認、設定面板的三個分頁（會議室與預先加入頁，H3）、手機的會議室與抽屜（含設定抽屜）、等候室（等候者與主持人的名單）、離開後畫面、密碼與改名對話框、英文介面；**一個違規就失敗**。另外用鍵盤走一遍：名字欄先有焦點、Enter 進房、Tab 到格子的「釘選」、反應選擇器、參與者選單（Esc 後焦點回原處）、每個可聚焦的元素都有 2 px 外框。接著 `scripts/lighthouse.ts`（`npm run lighthouse`）用 Lighthouse 13 量首頁、預先加入（navigation）與會議室（加入後 snapshot）在桌機與手機的無障礙分數，**任何一個 < 0.95 就失敗**；分數表在這次 run 的 Summary，HTML 報告在 `a11y` artifact。2026-11-03（#30）CI：六個都是 1.00。
 - **`visual`**：`e2e/local/visual.spec.ts` 截首頁、預先加入、會議室 × 淺色／深色 × 桌機（1280×800）／手機（390×844）共 12 張，和 `e2e/local/__screenshots__/` 的基準比（差異超過 0.1% 像素就失敗）。為了每次都一樣：假鏡頭換成一張靜止畫面、假麥克風是靜音（`e2e/local/fakeMedia.ts` 產生的 Y4M 與 WAV，`--use-file-for-fake-*-capture`），名字固定（Ada），`reducedMotion: reduce`＋截圖時停掉動畫、藏游標，會變的東西蓋掉（房間代碼、會議時鐘、以檔案路徑命名的鏡頭選單），預先加入頁等「沒有偵測到聲音」出現後才截（固定 6 秒後）。會議室一律深色，所以它的淺色截圖是在確認「系統是淺色時會議室仍是深色」。
 - **不是必過的檢查**：`main` 的保護仍只要求 `CI / verify`。這兩個 job 沒有外部依賴、跑過幾次都很穩，觀察幾個 PR 後可以在分支保護加上 `UI checks / a11y` 與 `UI checks / visual`。
 

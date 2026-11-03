@@ -41,7 +41,9 @@ export const startUplinkCheck = (now: number): UplinkCheck => ({ since: now, low
 /** Whether one sample says the uplink is too short for HD */
 export function uplinkShort(sample: UplinkStats): boolean {
   if (sample.limitation === 'bandwidth') return true
-  return sample.availableOutgoingBitrate !== null && sample.availableOutgoingBitrate < HD_MIN_UPLINK_BPS
+  return (
+    sample.availableOutgoingBitrate !== null && sample.availableOutgoingBitrate < HD_MIN_UPLINK_BPS
+  )
 }
 
 /** The next check after a sample at `now`, and whether HD must be held back now */

@@ -281,7 +281,8 @@ export const en: Strings = {
     audioOnlyHint: 'Receive and send no video, only sound, to save data',
     audioOnlyNote: 'Audio-only mode: no video sent or received',
     audioOnlyExit: 'Turn video back on',
-    audioOnlyCam: 'Audio-only mode is on, so your camera isn’t sent. Turn it off first to use your camera.',
+    audioOnlyCam:
+      'Audio-only mode is on, so your camera isn’t sent. Turn it off first to use your camera.',
     audioOnlyJoin: 'You’ll only have sound in the room. Turn it off in More › Settings.',
   },
   // Speaking while muted (e6-t03, AC-6.3)
