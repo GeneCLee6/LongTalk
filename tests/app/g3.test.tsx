@@ -123,8 +123,7 @@ async function enter(members: Member[]) {
   RoomSocket.onJoin = (socket) => queueMicrotask(() => socket.receive(welcome(members)))
   window.history.replaceState(null, '', `/r/${ROOM_ID}`)
   render(<App />)
-  // The room page is a lazy chunk: the first test of a busy run waits for it to load
-  await screen.findByText(`目前 ${members.length} 人在線`, {}, { timeout: 10_000 })
+  await screen.findByText(`目前 ${members.length} 人在線`)
   return RoomSocket.instances.at(-1)!
 }
 
