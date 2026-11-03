@@ -248,7 +248,7 @@ interface MediaTransport {
 - 已驗證：分幀、延遲、wasm 在 Node 裡真的壓低白雜訊而保留穩定的音（`tests/app/media/rnnoise.test.ts`）；管線接線、失敗與暫停（假的 Web Audio，`tests/app/h4.test.tsx`）；房間頁送出的軌、瀏覽器噪音抑制暫停、CPU 超標自動關、省電模式擋住它（`tests/app/h4Room.test.tsx`）；省電模式的選層、HD、幀率（`FakeTransport`）；headless Chromium 裡 worklet 與 wasm 從自己的 `/assets/` lazy 載入並在跑（`e2e/local/noise.spec.ts`，CI 的 `UI checks`）；經真的 SFU 打開後對方仍聽得到（`e2e/interop.spec.ts`，PR 預覽）。
 - **沒有驗證的**：鍵盤、風扇聲在接收端是否明顯降低（AC-6.2 要兩台裝置錄音比對，`DEPLOY.md` §5 第 23 步）；低階筆電與手機上的實際 CPU 與門檻是否合適；Safari／Firefox 上 worklet 是否正常（Firefox 麥克風非 48 kHz 時預期會失敗並提示）；省電模式的實際省電量。
 
-## 分享模式與多人分享（H5，2026-11-03，`e3-t06`–`e3-t09`，#H5PR）
+## 分享模式與多人分享（H5，2026-11-03，`e3-t06`–`e3-t09`，#34）
 
 ### 文字／動態（`src/media/shareMode.ts`）
 

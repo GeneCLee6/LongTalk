@@ -71,10 +71,10 @@ M2 的畫筆標註（E7）疊在分享畫面上，所以 E3 要在 M0 就把「�
 
 ### M1
 
-- [x] `e3-t06` 文字／動態模式：`contentHint`、幀率與解析度約束、切換 UI、動態內容提示 · AC-3.4 · #H5PR（`src/media/shareMode.ts`、`MediaTransport.setShareMode`；提示條的「文字｜動態」；每秒比對一張小縮圖，8 秒裡 6 秒在動就提示；AC-3.4 等兩台裝置實測）
-- [x] `e3-t07` 多人同時分享與觀看者選擇主區 · AC-3.5 · #H5PR（協定 v15 `RoomInfo.shares`，最多 3 人、`share_full`；主區預設最新的分享、觀看者在主區右上或側列選，記在這個分頁；主區要 `f` 層、側列 `h` 層；AC-3.5 等兩台裝置實測）
-- [x] `e3-t08` 簡報者檢視（分享者自己的版面） · AC-3.6 · #H5PR（提示條上的本機縮圖，每秒一張；整個螢幕時只寫原因）
-- [x] `e3-t09` 防止分享自己的會議分頁（`selfBrowserSurface`）與鏡像遞迴提示 · AC-3.3 · #H5PR（`selfBrowserSurface: 'exclude'`、`surfaceSwitching` 從 D1 就有；Capture Handle 認出會議分頁、Firefox 的視窗標題、整個螢幕時會議室在前面 3 秒；提醒與「換一個畫面」（同一條軌換來源，分享不中斷））
+- [x] `e3-t06` 文字／動態模式：`contentHint`、幀率與解析度約束、切換 UI、動態內容提示 · AC-3.4 · #34（`src/media/shareMode.ts`、`MediaTransport.setShareMode`；提示條的「文字｜動態」；每秒比對一張小縮圖，8 秒裡 6 秒在動就提示；AC-3.4 等兩台裝置實測）
+- [x] `e3-t07` 多人同時分享與觀看者選擇主區 · AC-3.5 · #34（協定 v15 `RoomInfo.shares`，最多 3 人、`share_full`；主區預設最新的分享、觀看者在主區右上或側列選，記在這個分頁；主區要 `f` 層、側列 `h` 層；AC-3.5 等兩台裝置實測）
+- [x] `e3-t08` 簡報者檢視（分享者自己的版面） · AC-3.6 · #34（提示條上的本機縮圖，每秒一張；整個螢幕時只寫原因）
+- [x] `e3-t09` 防止分享自己的會議分頁（`selfBrowserSurface`）與鏡像遞迴提示 · AC-3.3 · #34（`selfBrowserSurface: 'exclude'`、`surfaceSwitching` 從 D1 就有；Capture Handle 認出會議分頁、Firefox 的視窗標題、整個螢幕時會議室在前面 3 秒；提醒與「換一個畫面」（同一條軌換來源，分享不中斷））
 - [x] `e3-t10` 手機與不支援瀏覽器：隱藏按鈕與說明文字（能力偵測工具 `e11-t04`） · AC-3.6 · #17（說明在「更多」第一項；AC-3.6 還差簡報者檢視 `e3-t08`）
 
 ### M2
