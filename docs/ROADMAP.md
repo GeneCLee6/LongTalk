@@ -95,7 +95,7 @@ worktree 開分支、只讀需要的段落、lint+typecheck+test+build 只看最
 
 | 批 | Task | 內容 | 前提 |
 | --- | --- | --- | --- |
-| [ ] I1 | `e11-t05` `e11-t06` | 濫用防護（建房速率、Turnstile、訊息速率、IP 黑名單）、安全標頭與 CSP、secrets lint | F1 |
+| [x] I1 #36 | `e11-t05` `e11-t06` | 濫用防護（建房速率、Turnstile、訊息速率、IP 黑名單）、安全標頭與 CSP、secrets lint | F1 |
 | [ ] I2 | `e1-t12` `e1-t13` | 帳號（passkey／magic link、D1、`/me` 骨架）、個人固定房間 | I1 |
 | [ ] I3 | `e1-t14` | 預定會議、`.ics`、Google／Outlook 日曆連結 | I2 |
 | [ ] I4 | `e8-t01` `e8-t02` `e8-t03` | 本機錄影（版面合成＋混音＋分段）、錄影狀態與紅燈與告知、格式與設定 | G2 |
