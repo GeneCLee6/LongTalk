@@ -1136,21 +1136,24 @@ function Room({
   })
   const speaker = useHeldSpeaker(pickSpeaker(shown.ids, state.you, lastHeard), shown.ids)
   const focus = stageFocus(shown.ids, pinnedId, spotlight, speaker)
-  // The cameras that stay when the downlink has to stop receiving cameras (e2-t15): a pin, a
-  // spotlight, whoever the stage shows big, the speaker
-  const keepIds = [pinnedId, spotlight, focus?.id ?? null, speaker]
-  const keepKeys = [...new Set(keepIds)]
-    .filter((id): id is string => id !== null && id !== state.you)
-    .flatMap((id) => {
-      const member = state.view?.members[id]
-      const key = member ? camKey(member) : null
-      return key ? [key] : []
-    })
-  const keepJoined = keepKeys.join(' ')
+  // The cameras that stay when the downlink has to stop receiving cameras (e2-t15): the ones
+  // chosen (a pin, a spotlight), then whoever the stage shows big and the speaker
+  const camKeysOf = (ids: readonly (string | null)[]) =>
+    [...new Set(ids)]
+      .filter((id): id is string => id !== null && id !== state.you)
+      .flatMap((id) => {
+        const member = state.view?.members[id]
+        const key = member ? camKey(member) : null
+        return key ? [key] : []
+      })
+      .join(' ')
+  const chosenKeys = camKeysOf([pinnedId, spotlight])
+  const speakerKeys = camKeysOf([focus?.id ?? null, speaker])
   const { setVideoPriority } = media
   useEffect(() => {
-    setVideoPriority(keepJoined === '' ? [] : keepJoined.split(' '))
-  }, [setVideoPriority, keepJoined])
+    const split = (keys: string) => (keys === '' ? [] : keys.split(' '))
+    setVideoPriority(split(chosenKeys), split(speakerKeys))
+  }, [setVideoPriority, chosenKeys, speakerKeys])
   // Who could take over from us: connected members in the meeting, the room's own pick first
   const successors = members
     .filter((member) => member.id !== state.you && !member.reconnecting)

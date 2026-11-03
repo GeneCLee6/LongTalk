@@ -18,7 +18,7 @@ import { chooseLayers, DOWNLINK_BUDGET_BPS, ladder, type LayerInput } from '../m
 import {
   connectionVerdict,
   downlinkVerdict,
-  encoderLimited,
+  encoderLimit,
   SignalMeter,
   uplinkVerdict,
 } from '../media/quality.ts'
@@ -213,6 +213,8 @@ export const LAYER_DEBOUNCE_MS = 400
 export const STATS_POLL_MS = 2_000
 /** How many cameras stay when the downlink cuts them: the first ones setVideoPriority lists */
 export const KEEP_WHEN_CUT = 2
+/** A kept camera stays this long after it was last listed (the speaker changes often) */
+export const KEEP_HOLD_MS = 15_000
 /** The layer a received video starts with, before its tile reports (e2-t12) */
 export const INITIAL_LAYER: Record<'cam' | 'screen', Layer> = { cam: 'medium', screen: 'high' }
 
@@ -321,8 +323,10 @@ export class RoomMedia {
   private readonly meter = new SignalMeter()
   private readonly downlink = new DownlinkAdaptation()
   private readonly uplink = new UplinkAdaptation()
-  /** Cameras to keep when the downlink cuts them, by trackKey, most important first */
-  private priority: readonly string[] = []
+  /** The cameras kept when the downlink cuts them, by trackKey (setVideoPriority) */
+  private kept: string[] = []
+  /** When each camera was last among the first KEEP_WHEN_CUT listed */
+  private readonly listedAt = new Map<string, number>()
   /** The level last sent to the room, and when; a report waiting for SIGNAL_REPORT_MS */
   private signalSent: { level: SignalLevel; at: number } | null = null
   private signalTimer: Timer | null = null
@@ -439,15 +443,39 @@ export class RoomMedia {
   }
 
   /**
-   * The cameras that stay when the downlink cuts video (e2-t15), most important first (the
-   * speaker, a pin, a spotlight): the first KEEP_WHEN_CUT of them. Reconciles at once.
+   * The cameras that matter most now (e2-t15): `chosen` ones (a pin, a spotlight) and the
+   * `speakers` (the big tile, whoever speaks), most important first. While the downlink cuts
+   * video, KEEP_WHEN_CUT of them stay: the chosen ones always, a speaker in a free place. The
+   * speaker changes every few seconds, and each change would be an unsubscribe and a subscribe
+   * (a renegotiation each; measured on the PR preview, #31: one every 3 s), so a camera keeps its
+   * place for KEEP_HOLD_MS after it was last listed, unless a chosen one needs it.
    */
-  setVideoPriority(keys: readonly string[]): void {
-    const next = keys.slice(0, KEEP_WHEN_CUT)
-    if (next.length === this.priority.length && next.every((key, i) => key === this.priority[i])) {
-      return
+  setVideoPriority(chosen: readonly string[], speakers: readonly string[] = []): void {
+    const now = Date.now()
+    const listed = [...new Set([...chosen, ...speakers])].slice(0, KEEP_WHEN_CUT)
+    for (const key of listed) this.listedAt.set(key, now)
+    const kept = this.kept.filter((key) => this.desired.has(key))
+    for (const key of listed) {
+      if (kept.includes(key)) continue
+      if (kept.length < KEEP_WHEN_CUT) {
+        kept.push(key)
+        continue
+      }
+      // The kept camera listed longest ago gives its place: once its hold is over, or at once to
+      // a chosen one
+      const out = kept
+        .filter((k) => !listed.includes(k))
+        .sort((a, b) => (this.listedAt.get(a) ?? 0) - (this.listedAt.get(b) ?? 0))[0]
+      if (!out) continue
+      const held = now - (this.listedAt.get(out) ?? 0) < KEEP_HOLD_MS
+      if (held && !chosen.includes(key)) continue
+      kept[kept.indexOf(out)] = key
     }
-    this.priority = next
+    for (const [key, at] of this.listedAt) {
+      if (!kept.includes(key) && now - at >= KEEP_HOLD_MS) this.listedAt.delete(key)
+    }
+    if (kept.length === this.kept.length && kept.every((key, i) => key === this.kept[i])) return
+    this.kept = kept
     this.reconcile()
   }
 
@@ -474,7 +502,7 @@ export class RoomMedia {
     if (this.state.audioOnly) return false
     if (track.kind === 'screen') return true
     const cut = this.state.downlink === 'videoCut' || this.state.downlink === 'audioOnly'
-    return !cut || this.priority.includes(key)
+    return !cut || this.kept.includes(key)
   }
 
   /** Subscribes to what is desired and missing, unsubscribes what is received and not desired */
@@ -1137,12 +1165,12 @@ export class RoomMedia {
   /** One step of the uplink's adaptation: the top layers we send off, or on again */
   private adaptUplink(transport: MediaTransport, sample: StatsSample): void {
     const sends = (kind: TrackKind) => this.state.published.some((t) => t.kind === kind && !t.muted)
-    const limited = encoderLimited(sample)
+    const limit = encoderLimit(sample)
     const verdict = uplinkVerdict(sample)
     const before = this.uplink.state
     const after = this.uplink.step({
-      pressure: limited || verdict === 'poor',
-      clear: !limited && verdict === 'good',
+      pressure: verdict === 'poor' ? 'bandwidth' : limit,
+      clear: limit === null && verdict === 'good',
       cam: sends('cam'),
       screen: sends('screen'),
       availableBps: sample.availableOutgoingBitrate,

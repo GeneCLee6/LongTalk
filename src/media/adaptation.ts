@@ -18,11 +18,14 @@
 // relapse soon after a step up doubles the wait for the next one (up to MAX_RECOVER_TICKS), and
 // a long stretch of `normal` resets it.
 //
-// Uplink: when the encoder of our camera or screen is held back (bandwidth, cpu) or the SFU
-// reports heavy loss for LIMIT_TICKS intervals in a row, stop sending the top layer (camera,
-// then screen, then the camera's middle one: limitSendLayers); after RESTORE_TICKS clear ones
-// (and, when the browser estimates the uplink, room for the layer), send it again. A restore
-// that is followed by pressure within RELAPSE_TICKS doubles the next wait.
+// Uplink: when the encoder of our camera or screen is held back by bandwidth or the SFU reports
+// heavy loss for LIMIT_TICKS intervals in a row, stop sending the top layer (camera, then screen,
+// then the camera's middle one: limitSendLayers); after RESTORE_TICKS clear ones (and, when the
+// browser estimates the uplink, room for the layer), send it again. A restore that is followed
+// by pressure within RELAPSE_TICKS doubles the next wait. A busy CPU only ever turns off the
+// camera's top layer: the 720p encode is what costs, the small layers save little and a screen
+// at half size loses its text (measured on CI, #31: a starved runner reports `cpu` for minutes,
+// and going further left everyone at 180p).
 import { SIMULCAST } from './encoding.ts'
 import { DOWNLINK_BUDGET_BPS } from './layers.ts'
 import type { Layer } from './MediaTransport.ts'
@@ -55,8 +58,8 @@ export const RELAPSE_TICKS = 10
 /** This long in `normal` without trouble forgets earlier relapses */
 export const CALM_TICKS = 30
 export const DECREASE = 0.6
-export const INCREASE = 1.4
-export const INCREASE_BPS = 150_000
+export const INCREASE = 1.6
+export const INCREASE_BPS = 200_000
 
 export class DownlinkAdaptation {
   readonly fullBudgetBps: number
@@ -170,8 +173,11 @@ export interface UplinkState {
 }
 
 export interface UplinkInput {
-  /** The encoder is held back, or the SFU reports heavy loss (quality.ts) */
-  pressure: boolean
+  /**
+   * What holds the uplink back now: the encoder by bandwidth or the SFU's heavy loss reports
+   * (`bandwidth`), the encoder by the CPU (`cpu`); null: nothing (quality.ts)
+   */
+  pressure: 'bandwidth' | 'cpu' | null
   /** Nothing holds the encoder back and loss is low */
   clear: boolean
   /** Which videos we send now (simulcast) */
@@ -206,6 +212,8 @@ export class UplinkAdaptation {
   /** How many of UPLINK_STEPS are applied */
   #steps = 0
   #pressure = 0
+  /** Some interval of the current run of pressure was bandwidth, not only the CPU */
+  #bandwidth = false
   #clear = 0
   #restoreTicks = RESTORE_TICKS
   #sinceRestore: number | null = null
@@ -219,16 +227,26 @@ export class UplinkAdaptation {
     if (input.pressure) {
       this.#clear = 0
       this.#pressure += 1
+      if (input.pressure === 'bandwidth') this.#bandwidth = true
       if (this.#sinceRestore !== null && this.#sinceRestore <= RELAPSE_TICKS) {
         this.#restoreTicks = Math.min(MAX_RESTORE_TICKS, this.#restoreTicks * 2)
         this.#sinceRestore = null
       }
     } else {
       this.#pressure = 0
+      this.#bandwidth = false
       this.#clear = input.clear ? this.#clear + 1 : 0
     }
     if (this.#pressure >= LIMIT_TICKS) {
       this.#pressure = 0
+      const bandwidth = this.#bandwidth
+      this.#bandwidth = false
+      // The CPU: the camera's top layer and nothing else
+      if (!bandwidth) {
+        if (this.#steps > 0 || !input.cam) return this.#state
+        this.#steps = 1
+        return this.#apply()
+      }
       // The next step that applies to a video we send
       for (let i = this.#steps; i < UPLINK_STEPS.length; i++) {
         const step = UPLINK_STEPS[i]
@@ -256,6 +274,7 @@ export class UplinkAdaptation {
   reset(): void {
     this.#state = FULL_UPLINK
     this.#steps = this.#pressure = this.#clear = 0
+    this.#bandwidth = false
     this.#restoreTicks = RESTORE_TICKS
     this.#sinceRestore = null
   }

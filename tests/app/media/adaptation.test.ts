@@ -109,10 +109,23 @@ describe('downlinkVerdict (e2-t15)', () => {
     const audio = (over: Partial<InboundSample>) => sample({ inbound: [inbound('audio', over)] })
     expect(downlinkVerdict(audio({ packets: 94, lost: 6 }))).toBe('poor')
     expect(downlinkVerdict(audio({ concealedRatio: 0.04 }))).toBe('fair')
-    expect(downlinkVerdict(audio({ concealedRatio: 0.1 }))).toBe('poor')
     expect(downlinkVerdict(audio({ jitterBufferMs: 250 }))).toBe('fair')
-    expect(downlinkVerdict(audio({ jitterBufferMs: 450 }))).toBe('poor')
     expect(downlinkVerdict(audio({ jitterMs: 45 }))).toBe('fair')
+    // Heavy concealment or a deep buffer with some loss: poor
+    const lossyAudio = (over: Partial<InboundSample>) =>
+      sample({ inbound: [inbound('audio', { packets: 99, lost: 1, ...over }), lossy(0.012)] })
+    expect(downlinkVerdict(lossyAudio({ concealedRatio: 0.1 }))).toBe('poor')
+    expect(downlinkVerdict(lossyAudio({ jitterBufferMs: 450 }))).toBe('poor')
+  })
+
+  it('is only fair, never poor, on symptoms without loss: a starved CPU, not the network', () => {
+    const starved = sample({
+      inbound: [
+        inbound('audio', { concealedRatio: 0.2, jitterBufferMs: 600 }),
+        inbound('video', { freezes: 3, freezeMs: 1500, fps: 5 }),
+      ],
+    })
+    expect(downlinkVerdict(starved, () => 30)).toBe('fair')
   })
 
   it('counts freezes only with some loss: without it the sender is to blame', () => {
@@ -305,7 +318,7 @@ describe('DownlinkAdaptation (e2-t15)', () => {
 // ── The uplink's ─────────────────────────────────────────────────────────────────────────────
 
 const up = (over: Partial<UplinkInput> = {}): UplinkInput => ({
-  pressure: false,
+  pressure: null,
   clear: true,
   cam: true,
   screen: false,
@@ -316,25 +329,44 @@ const up = (over: Partial<UplinkInput> = {}): UplinkInput => ({
 describe('UplinkAdaptation (e2-t15)', () => {
   it('turns the camera’s top layer off after a run of pressure, then the middle one', () => {
     const machine = new UplinkAdaptation()
-    for (let i = 0; i < LIMIT_TICKS - 1; i++) machine.step(up({ pressure: true, clear: false }))
+    for (let i = 0; i < LIMIT_TICKS - 1; i++)
+      machine.step(up({ pressure: 'bandwidth', clear: false }))
     expect(machine.state).toEqual({ cam: 'high', screen: 'high' })
-    machine.step(up({ pressure: true, clear: false }))
+    machine.step(up({ pressure: 'bandwidth', clear: false }))
     expect(machine.state).toEqual({ cam: 'medium', screen: 'high' })
-    for (let i = 0; i < LIMIT_TICKS; i++) machine.step(up({ pressure: true, clear: false }))
+    for (let i = 0; i < LIMIT_TICKS; i++) machine.step(up({ pressure: 'bandwidth', clear: false }))
     // No screen to lower: the camera's middle layer goes next
     expect(machine.state).toEqual({ cam: 'low', screen: 'medium' })
   })
 
+  it('turns only the camera’s top layer off for a busy CPU, however long it lasts', () => {
+    const machine = new UplinkAdaptation()
+    const busy = up({ pressure: 'cpu', clear: false, screen: true })
+    for (let i = 0; i < LIMIT_TICKS * 6; i++) machine.step(busy)
+    expect(machine.state).toEqual({ cam: 'medium', screen: 'high' })
+    // A screen alone is left as it is
+    const screenOnly = new UplinkAdaptation()
+    for (let i = 0; i < LIMIT_TICKS * 2; i++) {
+      screenOnly.step(up({ pressure: 'cpu', clear: false, cam: false, screen: true }))
+    }
+    expect(screenOnly.state).toEqual({ cam: 'high', screen: 'high' })
+    // Bandwidth goes on from there
+    for (let i = 0; i < LIMIT_TICKS; i++) {
+      machine.step(up({ pressure: 'bandwidth', clear: false, screen: true }))
+    }
+    expect(machine.state).toEqual({ cam: 'medium', screen: 'medium' })
+  })
+
   it('lowers the screen before the camera’s middle layer while sharing', () => {
     const machine = new UplinkAdaptation()
-    const pressed = up({ pressure: true, clear: false, screen: true })
+    const pressed = up({ pressure: 'bandwidth', clear: false, screen: true })
     for (let i = 0; i < LIMIT_TICKS * 2; i++) machine.step(pressed)
     expect(machine.state).toEqual({ cam: 'medium', screen: 'medium' })
   })
 
   it('sends the layers again after a clear stretch, one at a time', () => {
     const machine = new UplinkAdaptation()
-    for (let i = 0; i < LIMIT_TICKS; i++) machine.step(up({ pressure: true, clear: false }))
+    for (let i = 0; i < LIMIT_TICKS; i++) machine.step(up({ pressure: 'bandwidth', clear: false }))
     for (let i = 0; i < RESTORE_TICKS - 1; i++) machine.step(up())
     expect(machine.state.cam).toBe('medium')
     machine.step(up())
@@ -343,7 +375,7 @@ describe('UplinkAdaptation (e2-t15)', () => {
 
   it('waits for room on the uplink when the browser estimates it', () => {
     const machine = new UplinkAdaptation()
-    for (let i = 0; i < LIMIT_TICKS; i++) machine.step(up({ pressure: true, clear: false }))
+    for (let i = 0; i < LIMIT_TICKS; i++) machine.step(up({ pressure: 'bandwidth', clear: false }))
     for (let i = 0; i < RESTORE_TICKS * 3; i++) machine.step(up({ availableBps: 600_000 }))
     expect(machine.state.cam).toBe('medium')
     for (let i = 0; i < RESTORE_TICKS; i++) machine.step(up({ availableBps: 3_000_000 }))
@@ -352,7 +384,7 @@ describe('UplinkAdaptation (e2-t15)', () => {
 
   it('doubles the wait when the restored layer brings the pressure back', () => {
     const machine = new UplinkAdaptation()
-    const pressed = up({ pressure: true, clear: false })
+    const pressed = up({ pressure: 'bandwidth', clear: false })
     for (let i = 0; i < LIMIT_TICKS; i++) machine.step(pressed)
     for (let i = 0; i < RESTORE_TICKS; i++) machine.step(up())
     expect(machine.state.cam).toBe('high')
@@ -366,7 +398,7 @@ describe('UplinkAdaptation (e2-t15)', () => {
 
   it('needs every interval clear: one that is neither pressed nor clear starts the count again', () => {
     const machine = new UplinkAdaptation()
-    for (let i = 0; i < LIMIT_TICKS; i++) machine.step(up({ pressure: true, clear: false }))
+    for (let i = 0; i < LIMIT_TICKS; i++) machine.step(up({ pressure: 'bandwidth', clear: false }))
     for (let i = 0; i < RESTORE_TICKS - 1; i++) machine.step(up())
     machine.step(up({ clear: false }))
     for (let i = 0; i < RESTORE_TICKS - 1; i++) machine.step(up())

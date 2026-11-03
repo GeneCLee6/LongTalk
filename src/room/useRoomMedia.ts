@@ -53,9 +53,10 @@ export interface RoomMediaHandle extends RoomMediaState {
   stats: StatsStore
   /**
    * The cameras to keep, by trackKey, most important first, should the downlink have to stop
-   * receiving cameras (e2-t15): a pin, a spotlight, the speaker
+   * receiving cameras (e2-t15): the ones chosen (a pin, a spotlight), then the speakers (the big
+   * tile, whoever speaks)
    */
-  setVideoPriority: (keys: readonly string[]) => void
+  setVideoPriority: (chosen: readonly string[], speakers: readonly string[]) => void
 }
 
 const NO_KEYS: readonly string[] = []
@@ -139,16 +140,19 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
 
   // The cameras to keep through a cut (e2-t15): the page knows them only after the tiles are
   // placed, so it hands them over, and a new run gets the latest
-  const priority = useRef<readonly string[]>(NO_KEYS)
+  const priority = useRef<{ chosen: readonly string[]; speakers: readonly string[] }>({
+    chosen: NO_KEYS,
+    speakers: NO_KEYS,
+  })
   const setVideoPriority = useCallback(
-    (keys: readonly string[]) => {
-      priority.current = keys
-      media?.setVideoPriority(keys)
+    (chosen: readonly string[], speakers: readonly string[]) => {
+      priority.current = { chosen, speakers }
+      media?.setVideoPriority(chosen, speakers)
     },
     [media],
   )
   useEffect(() => {
-    media?.setVideoPriority(priority.current)
+    media?.setVideoPriority(priority.current.chosen, priority.current.speakers)
   }, [media])
 
   useEffect(() => {

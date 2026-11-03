@@ -4,9 +4,13 @@
 //
 // Downlink: packet loss over the interval (video and audio apart, weighted by packets), audio
 // concealment (samples the decoder made up), the audio jitter buffer, video freezes and decoded
-// frame rate. Freezes and a low frame rate count only together with some loss: without loss the
-// publisher (its camera, CPU or uplink) is the cause, and lowering what we receive would not help.
-// RTT is left to the signal level: a long path is not congestion.
+// frame rate. Only loss makes the downlink poor on its own. The other symptoms make it fair, and
+// poor only together with some loss (SYMPTOMS_NEED_LOSS): without loss the cause is elsewhere,
+// and lowering what we receive would not help. Measured on CI (three browsers on a two-core
+// runner, #31): a starved CPU conceals audio, deepens the jitter buffer and freezes video with no
+// packet lost, and the first version cut everyone's video there. Freezes and a low frame rate also
+// come from the publisher (its camera, CPU or uplink). RTT is left to the signal level: a long
+// path is not congestion.
 // Uplink: the encoder's qualityLimitationReason (bandwidth, cpu) and the loss the SFU reports back.
 import type { SignalLevel } from '../../shared/protocol.ts'
 import type { InboundSample, StatsSample } from './stats.ts'
@@ -39,6 +43,8 @@ export const DOWNLINK = {
   /** A video decoding fewer frames than this share of its layer's rate, with loss: fair */
   lowFpsShare: 0.5,
   lowFpsNeedsLoss: 0.01,
+  /** Concealment, the jitter buffer and freezes make it poor only with this much loss too */
+  symptomsNeedLoss: 0.01,
 } as const
 
 export const UPLINK = {
@@ -66,49 +72,61 @@ export function downlinkVerdict(
 ): SignalLevel {
   const video = sample.inbound.filter((t) => t.media === 'video')
   const audio = sample.inbound.filter((t) => t.media === 'audio')
-  let level: SignalLevel = 'good'
+  // Loss alone
+  let loss: SignalLevel = 'good'
   const v = sumLoss(video)
   if (v.packets >= MIN_PACKETS) {
-    if (v.rate >= DOWNLINK.videoLossPoor) level = 'poor'
-    else if (v.rate >= DOWNLINK.videoLossFair) level = worse(level, 'fair')
+    if (v.rate >= DOWNLINK.videoLossPoor) loss = 'poor'
+    else if (v.rate >= DOWNLINK.videoLossFair) loss = worse(loss, 'fair')
   }
   const a = sumLoss(audio)
   if (a.packets >= MIN_PACKETS) {
-    if (a.rate >= DOWNLINK.audioLossPoor) level = 'poor'
-    else if (a.rate >= DOWNLINK.audioLossFair) level = worse(level, 'fair')
+    if (a.rate >= DOWNLINK.audioLossPoor) loss = 'poor'
+    else if (a.rate >= DOWNLINK.audioLossFair) loss = worse(loss, 'fair')
   }
+  // The other symptoms
+  let symptoms: SignalLevel = 'good'
   for (const track of audio) {
     const concealed = track.concealedRatio ?? 0
-    if (concealed >= DOWNLINK.concealedPoor) level = 'poor'
-    else if (concealed >= DOWNLINK.concealedFair) level = worse(level, 'fair')
+    if (concealed >= DOWNLINK.concealedPoor) symptoms = 'poor'
+    else if (concealed >= DOWNLINK.concealedFair) symptoms = worse(symptoms, 'fair')
     const buffer = track.jitterBufferMs ?? 0
-    if (buffer >= DOWNLINK.jitterBufferPoorMs) level = 'poor'
-    else if (buffer >= DOWNLINK.jitterBufferFairMs) level = worse(level, 'fair')
-    if ((track.jitterMs ?? 0) >= DOWNLINK.audioJitterFairMs) level = worse(level, 'fair')
+    if (buffer >= DOWNLINK.jitterBufferPoorMs) symptoms = 'poor'
+    else if (buffer >= DOWNLINK.jitterBufferFairMs) symptoms = worse(symptoms, 'fair')
+    if ((track.jitterMs ?? 0) >= DOWNLINK.audioJitterFairMs) symptoms = worse(symptoms, 'fair')
   }
   if (v.packets > 0 && v.rate >= DOWNLINK.freezeNeedsLoss) {
     const frozenMs = video.reduce((sum, t) => sum + t.freezeMs, 0)
-    if (frozenMs >= DOWNLINK.freezePoorMs) level = 'poor'
-    else if (video.some((t) => t.freezes > 0)) level = worse(level, 'fair')
+    if (frozenMs >= DOWNLINK.freezePoorMs) symptoms = 'poor'
+    else if (video.some((t) => t.freezes > 0)) symptoms = worse(symptoms, 'fair')
   }
   for (const track of video) {
     const expected = expectedFps(`${track.sessionId}/${track.trackName}`)
     if (!expected || track.fps === null || (track.lossRate ?? 0) < DOWNLINK.lowFpsNeedsLoss) {
       continue
     }
-    if (track.fps < expected * DOWNLINK.lowFpsShare) level = worse(level, 'fair')
+    if (track.fps < expected * DOWNLINK.lowFpsShare) symptoms = worse(symptoms, 'fair')
   }
-  return level
+  const lossy = Math.max(v.rate, a.rate) >= DOWNLINK.symptomsNeedLoss
+  if (symptoms === 'poor' && !lossy) symptoms = 'fair'
+  return worse(loss, symptoms)
+}
+
+/**
+ * What holds back the encoder of a sent camera or screen: bandwidth before cpu (the stronger
+ * reason to send less), null when nothing does
+ */
+export function encoderLimit(sample: StatsSample): 'bandwidth' | 'cpu' | null {
+  const reasons = sample.outbound
+    .filter((t) => t.kind === 'cam' || t.kind === 'screen')
+    .map((t) => t.qualityLimitationReason)
+  if (reasons.includes('bandwidth')) return 'bandwidth'
+  if (reasons.includes('cpu')) return 'cpu'
+  return null
 }
 
 /** True when the encoder of a sent camera or screen is held back by bandwidth or CPU */
-export function encoderLimited(sample: StatsSample): boolean {
-  return sample.outbound.some(
-    (t) =>
-      (t.kind === 'cam' || t.kind === 'screen') &&
-      (t.qualityLimitationReason === 'bandwidth' || t.qualityLimitationReason === 'cpu'),
-  )
-}
+export const encoderLimited = (sample: StatsSample): boolean => encoderLimit(sample) !== null
 
 /** The uplink's verdict for one interval: the SFU's loss reports, and a held-back encoder */
 export function uplinkVerdict(sample: StatsSample): SignalLevel {

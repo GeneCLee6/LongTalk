@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClientMessage, MemberTrack } from '../../shared/protocol.ts'
 import { FakeSfu, type FakeTransport } from '../../src/media/FakeTransport.ts'
 import type { InboundTrackStats, OutboundTrackStats } from '../../src/media/MediaTransport.ts'
-import { RoomMedia, STATS_POLL_MS } from '../../src/room/RoomMedia.ts'
+import { KEEP_HOLD_MS, RoomMedia, STATS_POLL_MS } from '../../src/room/RoomMedia.ts'
 import { StatsStore } from '../../src/room/statsStore.ts'
 import { VideoDemandStore } from '../../src/room/videoDemand.ts'
 
@@ -184,7 +184,7 @@ describe('RoomMedia: downlink adaptation (e2-t15)', () => {
     const { bob, bobTransport, camKeys } = await room()
     const link = { loss: 0 }
     simulateDownlink(bobTransport, link)
-    bob.setVideoPriority([camKeys[0]])
+    bob.setVideoPriority([camKeys[0]], [])
     await until(() => bob.getState().signal === 'good')
     expect(Object.values(bob.getState().layers)).toEqual(['medium', 'medium', 'medium'])
 
@@ -216,6 +216,42 @@ describe('RoomMedia: downlink adaptation (e2-t15)', () => {
     await until(() => bob.getState().downlink === 'normal', 400)
     await vi.advanceTimersByTimeAsync(50)
     expect(Object.values(bob.getState().layers)).toEqual(['medium', 'medium', 'medium'])
+    await bob.close()
+  })
+
+  it('keeps a camera through the cut while the speaker changes, for KEEP_HOLD_MS', async () => {
+    vi.useFakeTimers()
+    const { bob, bobTransport, camKeys } = await room()
+    simulateDownlink(bobTransport, { loss: 0.08 })
+    bob.setVideoPriority([], [camKeys[0]])
+    await until(() => bob.getState().downlink === 'videoCut')
+    await vi.advanceTimersByTimeAsync(0)
+    const cams = () =>
+      Object.keys(bob.getState().received)
+        .filter((k) => k.includes('/cam-'))
+        .sort()
+    expect(cams()).toEqual([camKeys[0]])
+    const pulls = () =>
+      [...bobTransport.subscriptions.keys()].filter((k) => k.includes('/cam-')).sort()
+    // The speaker moves to the second camera: the free place takes it
+    bob.setVideoPriority([], [camKeys[1]])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(cams()).toEqual([camKeys[0], camKeys[1]].sort())
+    // Back to the first, on to the third: the third waits, nothing is dropped and taken again
+    bob.setVideoPriority([], [camKeys[0]])
+    bob.setVideoPriority([], [camKeys[2]])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(cams()).toEqual([camKeys[0], camKeys[1]].sort())
+    expect(pulls()).toEqual(cams())
+    // Once the hold is over, the third takes the place listed longest ago (the second)
+    await vi.advanceTimersByTimeAsync(KEEP_HOLD_MS)
+    bob.setVideoPriority([], [camKeys[2]])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(cams()).toEqual([camKeys[0], camKeys[2]].sort())
+    // A pin gets a place at once
+    bob.setVideoPriority([camKeys[1]], [camKeys[2]])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(cams()).toEqual([camKeys[1], camKeys[2]].sort())
     await bob.close()
   })
 
