@@ -225,21 +225,30 @@ export function savePrefs(prefs: RoomPrefs): void {
 /**
  * The settings panel's media choices, remembered between meetings (H3: e6-t01, e6-t04): the
  * microphone's processing switches, and HD (null: never chosen, so the device's default, see
- * defaultHd). 純音訊模式 is not remembered: it is for this meeting (the next one would otherwise
+ * defaultHd); H4 adds the advanced noise suppression and 省電模式. 純音訊模式 is not remembered: it is for this meeting (the next one would otherwise
  * show nobody's video with no sign why).
  */
 export interface MediaPrefs {
   processing: AudioProcessing
   hd: boolean | null
+  /** 進階噪音抑制 (H4, e6-t02): off unless turned on (PRD: 預設關) */
+  advancedNoise: boolean
+  /** 省電模式 (H4, e6-t05): a choice for this device, kept like HD */
+  powerSaving: boolean
 }
 
-export const DEFAULT_MEDIA: MediaPrefs = { processing: DEFAULT_PROCESSING, hd: null }
+export const DEFAULT_MEDIA: MediaPrefs = {
+  processing: DEFAULT_PROCESSING,
+  hd: null,
+  advancedNoise: false,
+  powerSaving: false,
+}
 
 export function loadMediaPrefs(): MediaPrefs {
   try {
     const saved: unknown = JSON.parse(read('localStorage', MEDIA_KEY) ?? 'null')
     if (typeof saved !== 'object' || saved === null) return DEFAULT_MEDIA
-    const { processing, hd } = saved as Record<string, unknown>
+    const { processing, hd, advancedNoise, powerSaving } = saved as Record<string, unknown>
     const switches = (
       typeof processing === 'object' && processing !== null ? processing : {}
     ) as Record<string, unknown>
@@ -247,7 +256,12 @@ export function loadMediaPrefs(): MediaPrefs {
     for (const key of PROCESSING_KEYS) {
       if (typeof switches[key] === 'boolean') loaded[key] = switches[key]
     }
-    return { processing: loaded, hd: typeof hd === 'boolean' ? hd : null }
+    return {
+      processing: loaded,
+      hd: typeof hd === 'boolean' ? hd : null,
+      advancedNoise: advancedNoise === true,
+      powerSaving: powerSaving === true,
+    }
   } catch {
     return DEFAULT_MEDIA
   }

@@ -5,6 +5,7 @@ import {
   canChooseSpeaker,
   canCopy,
   canMeasureLevel,
+  canSuppressNoise,
   canShareAudio,
   canShareScreen,
   canWebShare,
@@ -42,7 +43,15 @@ function fullBrowser(): CapabilityEnv {
     RTCPeerConnection: class {},
     RTCRtpSender,
     HTMLMediaElement,
-    AudioContext: class {},
+    AudioContext: class {
+      // On the prototype, as in a browser (a secure page)
+      get audioWorklet() {
+        return {}
+      }
+      createMediaStreamDestination() {}
+    },
+    AudioWorkletNode: class {},
+    WebAssembly: { instantiate() {} },
     onbeforeinstallprompt: null,
     navigator: {
       serviceWorker: {},
@@ -51,6 +60,7 @@ function fullBrowser(): CapabilityEnv {
       clipboard: { writeText() {} },
       share() {},
       permissions: { query() {} },
+      getBattery() {},
     },
   }
 }
@@ -60,6 +70,16 @@ describe('capabilities (e11-t04)', () => {
     const found = detectCapabilities(fullBrowser())
     expect(Object.keys(found)).toEqual([...CAPABILITIES])
     expect(Object.values(found).every(Boolean)).toBe(true)
+  })
+
+  it('advanced noise suppression needs AudioWorklet, a stream destination and WebAssembly (e6-t02)', () => {
+    expect(canSuppressNoise(fullBrowser())).toBe(true)
+    // An insecure page has no audioWorklet on AudioContext
+    expect(canSuppressNoise({ ...fullBrowser(), AudioContext: class {} })).toBe(false)
+    expect(canSuppressNoise({ ...fullBrowser(), AudioWorkletNode: undefined })).toBe(false)
+    expect(canSuppressNoise({ ...fullBrowser(), WebAssembly: undefined })).toBe(false)
+    // SharedArrayBuffer (cross-origin isolation) is not asked for
+    expect('SharedArrayBuffer' in fullBrowser()).toBe(false)
   })
 
   it('finds nothing in an environment without browser APIs', () => {

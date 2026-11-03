@@ -14,6 +14,11 @@ export interface StatsSnapshot {
   /** Cameras not received to save the downlink (or in audio-only), by trackKey */
   paused: readonly string[]
   audioOnly: boolean
+  /** HD wanted (e6-t04), and held back by the uplink */
+  hd: boolean
+  hdLimited: boolean
+  /** 省電模式 (e6-t05) */
+  powerSaving: boolean
 }
 
 /**

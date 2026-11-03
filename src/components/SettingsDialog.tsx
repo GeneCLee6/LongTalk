@@ -36,6 +36,18 @@ export interface SettingsDialogProps {
   /** 純音訊模式 (e6-t04) */
   audioOnly: boolean
   onAudioOnly: (on: boolean) => void
+  /**
+   * 進階噪音抑制 (e6-t02): shown only where it can run (capabilities.ts canSuppressNoise). While
+   * it is on (and not paused by 省電模式) the browser's own noise suppression is paused.
+   */
+  advancedNoiseSupported?: boolean
+  advancedNoise?: boolean
+  /** Where it stands now, when worth saying (loading, waiting for a tap) */
+  advancedNoiseNote?: string | null
+  onAdvancedNoise?: (on: boolean) => void
+  /** 省電模式 (e6-t05) */
+  powerSaving?: boolean
+  onPowerSaving?: (on: boolean) => void
 }
 
 const FOCUSABLE =
@@ -43,7 +55,7 @@ const FOCUSABLE =
 
 /**
  * 設定 (H3, e6-t01): three tabs, 音訊 (devices and the microphone's processing), 視訊 (camera
- * and HD) and 效能 (純音訊模式; H4 adds 省電模式 and the advanced noise suppression). A modal
+ * and HD) and 效能 (純音訊模式, 省電模式); H4 puts 進階噪音抑制 in 音訊. A modal
  * dialog on a computer (Escape, the close button or a click outside closes it, Tab stays inside,
  * focus goes back), the full-screen drawer on a phone. Every change applies at once: there is no
  * save button.
@@ -100,6 +112,9 @@ const processingHint = (key: ProcessingKey): string =>
 
 function AudioTab(props: SettingsDialogProps) {
   const { devices, selected, onSelect, processing, processingSupported } = props
+  const advanced = props.advancedNoiseSupported === true && props.onAdvancedNoise !== undefined
+  // Running now: on, and 省電模式 does not hold it off
+  const advancedActive = advanced && props.advancedNoise === true && !props.powerSaving
   return (
     <>
       <Fields>
@@ -123,15 +138,35 @@ function AudioTab(props: SettingsDialogProps) {
         {processingSupported.length === 0 ? (
           <Hint>{strings.settings.processingNone}</Hint>
         ) : (
-          processingSupported.map((key) => (
-            <Toggle
-              key={key}
-              label={strings.settings[key]}
-              hint={processingHint(key)}
-              checked={processing[key]}
-              onChange={(on) => props.onProcessing({ ...processing, [key]: on })}
-            />
-          ))
+          processingSupported.map((key) => {
+            const handled = key === 'noiseSuppression' && advancedActive
+            return (
+              <Toggle
+                key={key}
+                label={strings.settings[key]}
+                hint={processingHint(key)}
+                checked={processing[key]}
+                disabled={handled}
+                note={handled ? strings.settings.advancedNoiseHandles : null}
+                onChange={(on) => props.onProcessing({ ...processing, [key]: on })}
+              />
+            )
+          })
+        )}
+        {advanced && (
+          <Toggle
+            label={strings.settings.advancedNoise}
+            hint={strings.settings.advancedNoiseHint}
+            checked={props.advancedNoise === true}
+            onChange={(on) => props.onAdvancedNoise?.(on)}
+            note={
+              props.advancedNoise && props.powerSaving
+                ? strings.settings.advancedNoisePowerSaving
+                : props.advancedNoise
+                  ? (props.advancedNoiseNote ?? null)
+                  : null
+            }
+          />
         )}
       </Group>
     </>
@@ -155,7 +190,13 @@ function VideoTab(props: SettingsDialogProps) {
           hint={strings.settings.hdHint}
           checked={props.hd}
           onChange={props.onHd}
-          note={props.hd && props.hdLimited ? strings.settings.hdLimited : null}
+          note={
+            props.hd && props.powerSaving
+              ? strings.settings.powerSavingHd
+              : props.hd && props.hdLimited
+                ? strings.settings.hdLimited
+                : null
+          }
         />
       </Group>
     </>
@@ -171,6 +212,14 @@ function PerformanceTab(props: SettingsDialogProps) {
         checked={props.audioOnly}
         onChange={props.onAudioOnly}
       />
+      {props.onPowerSaving && (
+        <Toggle
+          label={strings.settings.powerSaving}
+          hint={strings.settings.powerSavingHint}
+          checked={props.powerSaving === true}
+          onChange={props.onPowerSaving}
+        />
+      )}
     </Group>
   )
 }
@@ -182,10 +231,12 @@ function Toggle({
   checked,
   onChange,
   note,
+  disabled = false,
 }: {
   label: string
   hint: string
   checked: boolean
+  disabled?: boolean
   onChange: (on: boolean) => void
   /** Something about its state now (HD held back), read as a status */
   note?: string | null
@@ -198,13 +249,18 @@ function Toggle({
         type="checkbox"
         role="switch"
         checked={checked}
-        aria-describedby={`${id}-hint`}
+        disabled={disabled}
+        aria-describedby={note ? `${id}-hint ${id}-note` : `${id}-hint`}
         onChange={(event) => onChange(event.target.checked)}
       />
       <div>
         <label htmlFor={id}>{label}</label>
         <Hint id={`${id}-hint`}>{hint}</Hint>
-        {note && <Note role="status">{note}</Note>}
+        {note && (
+          <Note id={`${id}-note`} role="status">
+            {note}
+          </Note>
+        )}
       </div>
     </ToggleRow>
   )
@@ -331,6 +387,10 @@ const ToggleRow = styled.div`
     margin: ${space(0.5)} 0 0;
     accent-color: ${color.primary};
     cursor: pointer;
+  }
+  input:disabled,
+  input:disabled + div label {
+    cursor: not-allowed;
   }
   input:focus-visible {
     outline: 2px solid ${color.focus};
