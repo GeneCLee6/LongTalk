@@ -46,6 +46,7 @@ const INFO = {
   waitingRoom: false,
   passwordSetAt: null,
   spotlight: null,
+  recordings: {},
 }
 
 /** A browser as the room sees it: keeps its own copy of the view from what it receives */
@@ -176,6 +177,7 @@ const member = (
   tracks: [],
   hand: null,
   signal: null,
+  mayRecord: false,
 })
 
 describe('RoomHost', () => {

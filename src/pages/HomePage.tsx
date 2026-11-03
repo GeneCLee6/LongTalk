@@ -7,6 +7,7 @@ import { Button } from '../components/Button.tsx'
 import { TextInput } from '../components/Field.tsx'
 import { OfflineIcon } from '../components/icons.tsx'
 import { InstallPrompt } from '../components/InstallPrompt.tsx'
+import { RecordingRecovery } from '../components/RecordingRecovery.tsx'
 import { LanguageSelect } from '../components/LanguageSelect.tsx'
 import { ThemeSelect } from '../components/ThemeSelect.tsx'
 import { Logo } from '../components/Logo.tsx'
@@ -153,6 +154,8 @@ export function HomePage() {
         )}
         {/* Install LongTalk (e4-t12): on the home page only, until used or dismissed */}
         <InstallPrompt />
+        {/* A local recording left unsaved (I4, e8-t01): offered here and in the room */}
+        <RecordingRecovery />
       </Hero>
       <Perks>
         {strings.home.perks.map((perk) => (

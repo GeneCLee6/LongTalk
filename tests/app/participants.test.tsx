@@ -22,7 +22,7 @@ const person = (
   joinedAt: number,
   tracks: MemberTrack[] = [track('mic'), track('cam')],
   reconnecting = false,
-): Member => ({ id, name, role, joinedAt, reconnecting, tracks, hand: null, signal: null })
+): Member => ({ id, name, role, joinedAt, reconnecting, tracks, hand: null, signal: null, mayRecord: false })
 
 const MEMBERS = [
   person('w', 'Wei', 'participant', 3, [track('mic', true)], true),
@@ -75,6 +75,8 @@ describe('ParticipantsPanel (e1-t08)', () => {
       '靜音',
       '關閉鏡頭',
       '停止分享',
+      // I4 (e8-t02): the host may let them record
+      '允許錄影',
       // F3 (e1-t16): the host names co-hosts and hands over
       '設為共同主持人',
       '設為主持人',
@@ -82,9 +84,10 @@ describe('ParticipantsPanel (e1-t08)', () => {
     ])
     fireEvent.click(screen.getByRole('menuitem', { name: '停止分享' }))
     expect(p.onAction).toHaveBeenCalledWith('stopShare', 'x')
-    // Wei is muted with no camera and reconnecting: only the co-host role and removing apply
+    // Wei is muted with no camera and reconnecting: only recording, the co-host role and removing
     fireEvent.click(screen.getByRole('button', { name: '對 Wei 的動作' }))
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      '允許錄影',
       '設為共同主持人',
       '移出會議室',
     ])

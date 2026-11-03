@@ -17,6 +17,11 @@ export interface TopBarProps {
   warn: boolean
   /** The room is locked (F2, e1-t09): a padlock after the name, for everyone */
   locked?: boolean
+  /**
+   * Someone records the meeting (I4, e8-t02, CLAUDE.md rule 4): the red light for everyone, with
+   * who records in words. `onStop` when we record: the light is the 停止錄影 button
+   */
+  recording?: { label: string; onStop?: () => void; saving?: boolean } | null
   onCopyLink: () => void
   /** Leave the room: the button sits here on phones (e4-t07), in the toolbar elsewhere */
   onLeave?: () => void
@@ -52,6 +57,7 @@ export function TopBar({
   status,
   warn,
   locked = false,
+  recording = null,
   onCopyLink,
   onLeave,
   now = Date.now,
@@ -67,6 +73,28 @@ export function TopBar({
         </Locked>
       )}
       {startedAt !== null && <Elapsed startedAt={startedAt} now={now} />}
+      {recording &&
+        (recording.onStop ? (
+          <Recording
+            as="button"
+            type="button"
+            aria-label={strings.record.stopLabel(recording.label)}
+            disabled={recording.saving}
+            onClick={recording.onStop}
+            $button
+          >
+            <Dot aria-hidden="true" />
+            <span aria-hidden="true">
+              {recording.saving ? strings.record.saving : strings.record.stop}
+            </span>
+          </Recording>
+        ) : (
+          <Recording role="img" aria-label={recording.label} title={recording.label}>
+            <Dot aria-hidden="true" />
+            <Long aria-hidden="true">{recording.label}</Long>
+            <Short aria-hidden="true">{strings.record.indicator}</Short>
+          </Recording>
+        ))}
       <Copy type="button" aria-label={strings.topBar.copyLink} onClick={onCopyLink}>
         <LinkIcon />
         <span aria-hidden="true">{strings.topBar.copyLink}</span>
@@ -133,6 +161,55 @@ const Locked = styled.span`
     span {
       display: none;
     }
+  }
+`
+
+/** The red light (DESIGN.md §1 「錄影＝紅點」): a dot and words, never the colour alone */
+const Recording = styled.span<{ $button?: boolean }>`
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: ${space(1)};
+  min-height: 28px;
+  padding: 0 ${space(2)};
+  border: 1px solid ${color.danger};
+  border-radius: ${radius.pill};
+  background: transparent;
+  color: ${color.danger};
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: ${({ $button }) => ($button ? 'pointer' : 'default')};
+
+  &:hover:not(:disabled) {
+    background: ${({ $button }) => ($button ? color.hover : 'transparent')};
+  }
+
+  @media ${media.phone} {
+    min-height: ${({ $button }) => ($button ? size.toolbarButton : '28px')};
+  }
+`
+
+const Dot = styled.span`
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: ${color.danger};
+`
+
+/** Who records, in full on a desktop; 「錄影中」 on a phone (the name is in the label) */
+const Long = styled.span`
+  @media ${media.phone} {
+    display: none;
+  }
+`
+
+const Short = styled.span`
+  display: none;
+
+  @media ${media.phone} {
+    display: inline;
   }
 `
 

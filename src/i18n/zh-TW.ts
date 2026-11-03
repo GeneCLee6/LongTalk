@@ -486,6 +486,11 @@ export const zhTW = {
     madeHost: (actor: string) => `${actor} 把主持人交給你了，你現在是主持人。`,
     // G3 (e5-t04)
     handLowered: (actor: string) => `${actor} 放下了你的手。`,
+    // I4 (e8-t02)
+    recordingStopped: (actor: string) => `${actor} 停止了你的錄影，檔案已下載。`,
+    recordAllowed: (actor: string) =>
+      `${actor} 允許你錄影。從「更多 › 開始錄影」開始，所有人都會看到「錄影中」。`,
+    recordRevoked: (actor: string) => `${actor} 取消了你的錄影權限。`,
   },
   // Screen sharing (D1: e3-t01 – e3-t03, e3-t05)
   screenShare: {
@@ -571,7 +576,8 @@ export const zhTW = {
   admin: {
     title: 'LongTalk 管理',
     lockedTitle: '管理頁',
-    lockedBody: '這一頁只給 LongTalk 的擁有者。輸入管理密碼（Worker 的管理密碼 secret，DEPLOY.md §8）才能查看。',
+    lockedBody:
+      '這一頁只給 LongTalk 的擁有者。輸入管理密碼（Worker 的管理密碼 secret，DEPLOY.md §8）才能查看。',
     tokenLabel: '管理密碼',
     unlock: '查看',
     unlocking: '讀取中…',
@@ -637,7 +643,9 @@ export const zhTW = {
       turnstile: (on: boolean) =>
         on ? '開房需要 Turnstile 真人驗證。' : 'Turnstile 未設定，開房不驗證（DEPLOY.md §11）。',
       pepper: (on: boolean) =>
-        on ? '網路位址用秘密金鑰（pepper）雜湊。' : '沒有設定秘密金鑰（pepper），位址只做一般雜湊（DEPLOY.md §11）。',
+        on
+          ? '網路位址用秘密金鑰（pepper）雜湊。'
+          : '沒有設定秘密金鑰（pepper），位址只做一般雜湊（DEPLOY.md §11）。',
       ipLabel: 'IP 位址（IPv6 會封整個 /64）',
       durationLabel: '封鎖多久',
       duration: (hours: number) =>
@@ -645,7 +653,8 @@ export const zhTW = {
       noteLabel: '備註（選填）',
       block: '封鎖',
       failed: '沒有成功：請確認位址格式，或重新整理後再試。',
-      hashNote: '只存位址的雜湊值，不存位址本身；被封鎖的網路不能開房、不能加入會議室，已經在會議裡的人不受影響。',
+      hashNote:
+        '只存位址的雜湊值，不存位址本身；被封鎖的網路不能開房、不能加入會議室，已經在會議裡的人不受影響。',
       blocksTitle: '封鎖中',
       noBlocks: '目前沒有封鎖。',
       until: (time: string) => `到 ${time}`,
@@ -900,6 +909,70 @@ export const zhTW = {
     region: '通知',
     joined: (name: string) => `${name} 加入了`,
     left: (name: string) => `${name} 離開了`,
+  },
+  // Local recording (I4: e8-t01, e8-t02, e8-t03)
+  record: {
+    section: '錄影',
+    start: '開始錄影…',
+    stop: '停止錄影',
+    // 更多 › 開始錄影 is grey where the browser cannot record (e8-t03)
+    unavailable: '這個瀏覽器不能錄影，請改用電腦上的 Chrome、Edge 或 Firefox',
+    dialogTitle: '開始錄影',
+    dialogBody:
+      '錄下你在會議室看到的畫面和所有人的聲音，存在這台裝置上，停止後自動下載。開始後所有人都會看到「錄影中」，也可以選擇離開。',
+    content: '錄影內容',
+    videoAndAudio: '畫面與聲音',
+    audioOnly: '只錄聲音',
+    resolution: '解析度',
+    resolution720: '720p（檔案較小）',
+    resolution1080: '1080p（畫質較好，較耗電）',
+    includeSelf: '包含我的鏡頭',
+    includeSelfHint: '關掉時，你的格子只顯示名字縮寫',
+    format: (type: string) => `檔案格式：${type}`,
+    confirm: '開始錄影',
+    starting: '正在開始錄影…',
+    started: '開始錄影了。所有人都看得到「錄影中」。',
+    saving: '正在存檔…',
+    saved: (fileName: string) => `錄影已停止，已下載「${fileName}」`,
+    empty: '錄影已停止，沒有錄到內容',
+    storageFull: '這台裝置的儲存空間不夠，錄影已停止，已下載目前錄到的部分',
+    failed: '錄影出了問題，已停止，已下載目前錄到的部分',
+    startFailed: '無法開始錄影',
+    lowStorage: '這台裝置的儲存空間不多，長時間錄影可能會中途停止',
+    // The top bar's red light, for everyone (CLAUDE.md rule 4)
+    indicator: '錄影中',
+    byYou: '你正在錄影',
+    byOne: (name: string) => `${name} 正在錄影`,
+    byMany: (count: number) => `${count} 人正在錄影`,
+    stopLabel: (who: string) => `停止錄影（${who}）`,
+    // Several names in one sentence
+    who: (...names: string[]) => names.join('、'),
+    // The notice for everyone else when someone starts (AC-8.2: told, and may leave)
+    consent: (who: string) => `${who} 開始錄影這場會議。留在會議中，表示你知道正在錄影。`,
+    consentJoined: (who: string) => `${who} 正在錄影這場會議。留在會議中，表示你知道正在錄影。`,
+    consentOk: '知道了',
+    consentLeave: '離開會議',
+    othersStopped: (name: string) => `${name} 停止錄影了`,
+    // The pre-join screen (DESIGN.md §4.2)
+    prejoinTitle: '這場會議正在錄影',
+    prejoinBody: '加入表示你知道正在錄影；不想被錄，可以不要加入。',
+    prejoinLeave: '不加入，回首頁',
+    // A recording left behind (the tab closed or crashed): offered on the next visit
+    leftover: (when: string) => `有一段沒有存好的錄影（${when} 開始）。`,
+    leftoverDownload: '下載上次未完成的錄影',
+    leftoverDelete: '刪除',
+    leftoverDownloaded: '已下載上次未完成的錄影',
+    leftoverDeleted: '已刪除上次未完成的錄影',
+    // Drawn on the recording itself
+    shareLabel: (name: string) => `${name} 的分享畫面`,
+    // The participants panel (the host)
+    allow: '允許錄影',
+    revoke: '取消錄影權限',
+    stopTheirs: '停止錄影',
+    tag: '錄影中',
+    allowedNow: (name: string) => `已允許 ${name} 錄影`,
+    revokedNow: (name: string) => `已取消 ${name} 的錄影權限`,
+    stoppedTheirs: (name: string) => `已停止 ${name} 的錄影`,
   },
   errors: {
     sfuNotConfigured: '媒體伺服器尚未設定（缺少 Realtime 的 App ID 或 App Secret）。',

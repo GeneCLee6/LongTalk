@@ -52,6 +52,7 @@ const room = {
   waitingRoom: false,
   passwordSetAt: null,
   spotlight: null,
+  recordings: {},
 }
 const member = (id: string) => ({
   id,
@@ -62,6 +63,7 @@ const member = (id: string) => ({
   tracks: [],
   hand: null,
   signal: null,
+  mayRecord: false,
 })
 const TOKEN = 'T'.repeat(43)
 const welcome = (rev: number, members: Record<string, ReturnType<typeof member>> = {}) =>

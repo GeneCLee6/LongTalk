@@ -15,6 +15,7 @@ import {
   HourglassIcon,
   MicIcon,
   MicOffIcon,
+  RecordIcon,
   SettingsIcon,
   SoundIcon,
 } from './icons.tsx'
@@ -78,6 +79,13 @@ export interface PreJoinProps {
   onSettings?: () => void
   /** 純音訊模式 is chosen for joining (H3): a line under the join state says so */
   audioOnly?: boolean
+  /**
+   * The meeting is being recorded (I4, e8-t02, AC-8.2): said before joining, with a way not to
+   * join (CLAUDE.md rule 4)
+   */
+  recording?: boolean
+  /** 不加入，回首頁 in the recording notice */
+  onHome?: () => void
 }
 
 /** The message for what went wrong opening the devices, most actionable first */
@@ -204,6 +212,20 @@ export function PreJoin(props: PreJoinProps) {
           </Muted>
           {roomNotice && <Muted role="status">{roomNotice}</Muted>}
         </div>
+        {props.recording && (
+          <Recorded role="status">
+            <RecordIcon />
+            <div>
+              <strong>{strings.record.prejoinTitle}</strong>
+              <span>{strings.record.prejoinBody}</span>
+              {props.onHome && (
+                <LinkButton type="button" onClick={props.onHome}>
+                  {strings.record.prejoinLeave}
+                </LinkButton>
+              )}
+            </div>
+          </Recorded>
+        )}
         {props.waitingRoom && (
           <Status role="status">
             <HourglassIcon />
@@ -386,6 +408,28 @@ const Status = styled.div`
     display: grid;
     gap: ${space(1)};
   }
+`
+
+/** 這場會議正在錄影 (I4): the red of the recording light, with the words */
+const Recorded = styled(Status)`
+  border: 1px solid ${color.danger};
+  background: ${color.surface};
+
+  svg {
+    color: ${color.danger};
+  }
+`
+
+const LinkButton = styled.button`
+  justify-self: start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: ${color.primary};
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
 `
 
 const Problem = styled.div`

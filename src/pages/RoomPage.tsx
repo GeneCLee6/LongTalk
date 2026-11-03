@@ -19,10 +19,12 @@ import {
   type HostMemberAction,
   type Member,
   type NoticeMessage,
+  type RecordingInfo,
   type RoomInfo,
   type Role,
   type WaitingEntry,
   MAX_SHARES,
+  recordingOrder,
   shareOrder,
 } from '../../shared/protocol.ts'
 import { normalizePassword } from '../../shared/password.ts'
@@ -59,7 +61,12 @@ import { MemberAudio } from '../components/MemberAudio.tsx'
 import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
 import { OfflineScreen } from '../components/OfflineScreen.tsx'
-import { ParticipantsPanel, type RoleChange } from '../components/ParticipantsPanel.tsx'
+import {
+  ParticipantsPanel,
+  type RecordAction,
+  type RoleChange,
+} from '../components/ParticipantsPanel.tsx'
+import { RecordingRecovery } from '../components/RecordingRecovery.tsx'
 import { PreJoin, type PasswordFieldProps } from '../components/PreJoin.tsx'
 import type { PermissionGuideProps } from '../components/PermissionGuide.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
@@ -84,6 +91,7 @@ import { VideoDemandContext } from '../components/useVideoDemand.ts'
 import {
   audioProcessingSupport,
   canChooseSpeaker,
+  canRecordLocally,
   canShareScreen,
   canSuppressNoise,
   canWebShare,
@@ -148,6 +156,14 @@ import {
 } from '../room/roomPassword.ts'
 import { useKnownPassword } from '../room/useKnownPassword.ts'
 import { useSpeaking } from '../room/useSpeaking.ts'
+import {
+  loadRecordingSettings,
+  saveRecordingSettings,
+  useLocalRecording,
+  type RecordingEvent,
+} from '../room/useLocalRecording.ts'
+import { pickMimeType, type RecordingSettings } from '../record/format.ts'
+import { EMPTY_SCENE, type Scene } from '../record/scene.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
 import { telemetry } from '../telemetry.ts'
 import { useAnnouncer } from '../components/LiveAnnouncer.tsx'
@@ -165,6 +181,11 @@ export interface JoinChoices {
   password: string | null
   /** 純音訊模式 from the start (H3, e6-t04): chosen in the pre-join screen's 設定 */
   audioOnly?: boolean
+  /**
+   * The pre-join screen said the meeting is being recorded (I4, AC-8.2): the room does not ask
+   * again about the recordings that were on then
+   */
+  recordingSeen?: boolean
 }
 
 /**
@@ -296,10 +317,18 @@ type Summary =
       memberCount: null
       waitingRoom: false
       password: false
+      recording: false
     }
-  | { status: 'ok'; memberCount: number; waitingRoom: boolean; password: boolean }
+  | {
+      status: 'ok'
+      memberCount: number
+      waitingRoom: boolean
+      password: boolean
+      /** Someone records the meeting (I4): the pre-join screen says so */
+      recording: boolean
+    }
 
-const NONE = { memberCount: null, waitingRoom: false, password: false } as const
+const NONE = { memberCount: null, waitingRoom: false, password: false, recording: false } as const
 const LOADING: Summary = { status: 'loading', ...NONE }
 
 /**
@@ -349,6 +378,8 @@ function PreJoinGate({
                   waitingRoom: !!room.waitingRoom,
                   // A room from before v11 has no password time: none
                   password: room.passwordSetAt != null,
+                  // ... before v17 no recordings
+                  recording: Object.keys(room.recordings ?? {}).length > 0,
                 },
         )
       },
@@ -380,7 +411,15 @@ function PreJoinGate({
         />
       )
     default:
-      return <PreJoinScreen roomId={roomId} summary={summary} problem={problem} onJoin={onJoin} />
+      return (
+        <PreJoinScreen
+          roomId={roomId}
+          summary={summary}
+          problem={problem}
+          onJoin={onJoin}
+          onHome={onHome}
+        />
+      )
   }
 }
 
@@ -389,11 +428,13 @@ function PreJoinScreen({
   summary,
   problem,
   onJoin,
+  onHome,
 }: {
   roomId: string
   summary: Summary
   problem: PasswordProblem | null
   onJoin: (choices: JoinChoices) => void
+  onHome: () => void
 }) {
   const [name, setName] = useState(loadName)
   const [mic, setMic] = useState(true)
@@ -409,8 +450,7 @@ function PreJoinScreen({
   const [audioOnly, setAudioOnly] = useState(false)
   const [processingSupported] = useState(audioProcessingSupport)
   const [noiseSupported] = useState(canSuppressNoise)
-  const advancedNoise =
-    noiseSupported && mediaSettings.advancedNoise && !mediaSettings.powerSaving
+  const advancedNoise = noiseSupported && mediaSettings.advancedNoise && !mediaSettings.powerSaving
   const previewProcessing = useMemo(
     () => micProcessing(mediaSettings.processing, advancedNoise),
     [mediaSettings.processing, advancedNoise],
@@ -482,6 +522,8 @@ function PreJoinScreen({
         memberCount={summary.memberCount}
         roomNotice={summary.status === 'error' ? strings.prejoin.loadFailed : null}
         waitingRoom={summary.waitingRoom}
+        recording={summary.recording}
+        onHome={onHome}
         speakerTest={
           speakerSupported ? { playing: speakerTest.playing, onToggle: speakerTest.toggle } : null
         }
@@ -518,7 +560,15 @@ function PreJoinScreen({
             saveDevice(kind, now, labels[kind] ?? '')
             devices[kind] = now
           }
-          onJoin({ name: normalized, mic, cam, devices, password, audioOnly })
+          onJoin({
+            name: normalized,
+            mic,
+            cam,
+            devices,
+            password,
+            audioOnly,
+            recordingSeen: summary.recording,
+          })
         }}
       />
     </>
@@ -846,6 +896,70 @@ function Room({
         ]
       : []),
   ]
+  // Local recording (I4: e8-t01 – e8-t03). RoomDO decides who records and everyone sees it
+  // (CLAUDE.md rules 1 and 4); the recorder itself is lazy (src/record/). It reads the scene the
+  // page keeps up to date below, on every frame.
+  const roomRecordings = state.view?.room.recordings
+  const recorders = recordingOrder(roomRecordings)
+  const recordingScene = useRef<Scene>(EMPTY_SCENE)
+  const onRecordingEvent = (event: RecordingEvent) => {
+    switch (event.type) {
+      case 'started':
+        show(strings.record.started)
+        return
+      case 'saved':
+        if (event.saved.bytes === 0) show(strings.record.empty, 'warn')
+        else if (event.problem === 'storage') show(strings.record.storageFull, 'warn')
+        else if (event.problem === 'failed') show(strings.record.failed, 'warn')
+        else show(strings.record.saved(event.saved.fileName))
+        return
+      case 'startFailed':
+        show(strings.record.startFailed, 'warn')
+        return
+      case 'forbidden':
+        // The room's refusal is already said (onError: strings.participants.forbidden)
+        return
+    }
+  }
+  const recording = useLocalRecording({
+    roomId,
+    roomName: title,
+    you: state.you,
+    recordings: state.view ? (roomRecordings ?? {}) : undefined,
+    send,
+    onError,
+    getScene: () => recordingScene.current,
+    powerSaving,
+    notify: onRecordingEvent,
+  })
+  const [recordSupported] = useState(canRecordLocally)
+  const [recordDialog, setRecordDialog] = useState(false)
+  const [recordSettings, setRecordSettings] = useState<RecordingSettings>(loadRecordingSettings)
+  const onStartRecording = (settings: RecordingSettings) => {
+    setRecordDialog(false)
+    setRecordSettings(settings)
+    saveRecordingSettings(settings)
+    recording.start(settings)
+    // A long recording needs room: say so when the device is nearly full (it still starts)
+    void navigator.storage
+      ?.estimate?.()
+      .then(({ quota, usage: used }) => {
+        if (quota !== undefined && used !== undefined && quota - used < LOW_STORAGE_BYTES) {
+          show(strings.record.lowStorage, 'warn')
+        }
+      })
+      .catch(() => {})
+  }
+  const weRecord =
+    recording.phase === 'starting' ||
+    recording.phase === 'recording' ||
+    recording.phase === 'saving'
+  const consent = useRecordingConsent(
+    recorders,
+    state.you,
+    choices.recordingSeen ?? false,
+    !!state.view,
+  )
   const [webShare] = useState(canWebShare)
   const [screenShareSupported] = useState(canShareScreen)
   const link = roomUrl(roomId)
@@ -887,6 +1001,30 @@ function Room({
     ...(can(role, 'renameRoom')
       ? [{ id: 'rename-room', label: strings.rename.room, onSelect: () => setRenaming('room') }]
       : []),
+    // 開始錄影 for who may record (the host, or someone the host allowed; RoomDO checks again);
+    // grey where the browser cannot (e8-t03). 停止錄影 while we record.
+    ...(weRecord || recording.phase === 'claiming'
+      ? [
+          {
+            id: 'record-stop',
+            label: strings.record.stop,
+            section: strings.record.section,
+            disabled: recording.phase === 'saving',
+            onSelect: recording.stop,
+          },
+        ]
+      : can(role, 'record') || self?.mayRecord === true
+        ? [
+            {
+              id: 'record',
+              label: strings.record.start,
+              section: strings.record.section,
+              disabled: !recordSupported,
+              hint: recordSupported ? undefined : strings.record.unavailable,
+              onSelect: () => setRecordDialog(true),
+            },
+          ]
+        : []),
     ...viewItems,
     {
       id: 'sounds',
@@ -1068,6 +1206,7 @@ function Room({
   })
   const usage = state.view?.usage ?? 'normal'
   useUsageNotices(usage, media.videoRefused, show)
+  useRecordingStoppedNotice(recorders, state.you, memberName, show)
   // 純音訊模式 (e6-t04), whoever turns it on (the settings, H2's adaptation): the camera device
   // goes off with it (its light too) and comes back when it ends, if it was on
   const audioOnly = media.audioOnly
@@ -1137,6 +1276,16 @@ function Room({
       case 'handLowered':
         show(strings.hostNotice.handLowered(who))
         return
+      // I4 (e8-t02): the recorder's browser stops and saves on its own (useLocalRecording)
+      case 'recordingStopped':
+        show(strings.hostNotice.recordingStopped(who), 'warn')
+        return
+      case 'recordAllowed':
+        show(strings.hostNotice.recordAllowed(who))
+        return
+      case 'recordRevoked':
+        show(strings.hostNotice.recordRevoked(who))
+        return
     }
   })
   useEffect(() => onHostControl((notice) => onHostNotice(notice)), [onHostControl])
@@ -1149,6 +1298,17 @@ function Room({
     if (action === 'lowerHand') {
       show(strings.reactions.lowered(viewMembers?.[memberId]?.name ?? ''))
     }
+  }
+  // Recording (I4): the host stops someone's, or allows them to record; RoomDO decides
+  const onRecordAction = (action: RecordAction, memberId: string) => {
+    const name = viewMembers?.[memberId]?.name ?? ''
+    if (action === 'stop') {
+      send({ t: 'host', action: 'stopRecording', memberId })
+      show(strings.record.stoppedTheirs(name))
+      return
+    }
+    send({ t: 'host', action: 'allowRecord', memberId, on: action === 'allow' })
+    show(action === 'allow' ? strings.record.allowedNow(name) : strings.record.revokedNow(name))
   }
   const onMuteAll = () => {
     send({ t: 'host', action: 'muteAll' })
@@ -1402,6 +1562,64 @@ function Room({
     },
   ]
 
+  // What a recording made here shows (I4, e8-t01): our stage's people and layout, the share in
+  // our main area (ours too: the others see it), and every sound we hear plus our microphone.
+  // The recorder reads it on each frame; it is only built while we record.
+  const buildScene = (): Scene => {
+    const received = (track: { sessionId: string; trackName: string } | undefined) =>
+      (track && media.received[trackKey(track)]?.track) || null
+    const byId = new Map(members.map((member) => [member.id, member]))
+    const mainShare = shareSlots(sharerIds, null, chosenShare).main
+    const sharer = mainShare === null ? undefined : byId.get(mainShare)
+    const ids = sharer ? focusFirst(shown.ids, focus) : shown.ids
+    return {
+      tiles: ids.flatMap((id) => {
+        const member = byId.get(id)
+        if (!member) return []
+        const you = member.id === state.you
+        const mic = member.tracks.find((t) => t.kind === 'mic')
+        return [
+          {
+            id: member.id,
+            name: member.name,
+            video: videoOf(member),
+            micMuted: you ? micSending === null : (mic?.muted ?? true),
+            you,
+          },
+        ]
+      }),
+      share: sharer
+        ? {
+            id: sharer.id,
+            name: sharer.name,
+            video:
+              sharer.id === state.you
+                ? sharingScreen
+                : received(sharer.tracks.find((t) => t.kind === 'screen')),
+          }
+        : null,
+      layout: stageLayout(view.layout, null, focus) === 'speaker' ? 'speaker' : 'grid',
+      focus: focus?.id ?? null,
+      audio: [
+        ...members.flatMap((member) => {
+          if (member.id === state.you) return []
+          const mic = member.tracks.find((t) => t.kind === 'mic' && !t.muted)
+          const screenAudio = sharerIds.includes(member.id)
+            ? member.tracks.find((t) => t.kind === 'screenAudio')
+            : undefined
+          return [received(mic), received(screenAudio)].filter(
+            (track): track is MediaStreamTrack => track !== null,
+          )
+        }),
+        ...(micSending ? [micSending] : []),
+        ...(sharingAudio ? [sharingAudio] : []),
+      ],
+    }
+  }
+  useEffect(() => {
+    if (weRecord) recordingScene.current = buildScene()
+  })
+
   if (gone || outcome) {
     return (
       <Centered>
@@ -1501,6 +1719,8 @@ function Room({
       passwordSet={roomHasPassword}
       onPassword={() => setPasswordDialog(true)}
       onRole={onRole}
+      recorderIds={recorders.map((entry) => entry.memberId)}
+      onRecordAction={onRecordAction}
     />
   )
   // Whose a received track is, for the stats panel (e2-t14)
@@ -1555,6 +1775,23 @@ function Room({
   const stageMembers = (shareTile ? focusFirst(shown.ids, focus) : shown.ids).flatMap(
     (id) => byId.get(id) ?? [],
   )
+  // The red light (CLAUDE.md rule 4): who records, in words; while we record it is 停止錄影
+  const otherRecorders = recorders.filter((entry) => entry.memberId !== state.you)
+  const recordingLabel =
+    otherRecorders.length === 0
+      ? strings.record.byYou
+      : recorders.length > 1
+        ? strings.record.byMany(recorders.length)
+        : strings.record.byOne(viewMembers?.[otherRecorders[0].memberId]?.name ?? '')
+  const recordingLight =
+    recorders.length > 0 || weRecord
+      ? {
+          label: recordingLabel,
+          onStop: weRecord ? recording.stop : undefined,
+          saving: recording.phase === 'saving',
+        }
+      : null
+  const consentNames = consent.pending.map((entry) => viewMembers?.[entry.memberId]?.name ?? '')
   return (
     <RoomContexts phone={phone} demand={media.demand} motionOff={powerSaving}>
       <TopBar
@@ -1563,6 +1800,7 @@ function Room({
         status={statusText(state)}
         warn={state.status !== 'open'}
         locked={roomInfo?.locked ?? false}
+        recording={recordingLight}
         onCopyLink={() => void copyRoomLink(link, title, strings.share.text).then(onLinkOutcome)}
         onLeave={onLeave}
       />
@@ -1690,6 +1928,23 @@ function Room({
                   </AlertActions>
                 </Alert>
               )}
+              {/* Someone started recording (AC-8.2): told, with a way out (CLAUDE.md rule 4) */}
+              {consent.pending.length > 0 && (
+                <Alert role="alert">
+                  <span>
+                    {consent.joined
+                      ? strings.record.consentJoined(strings.record.who(...consentNames))
+                      : strings.record.consent(strings.record.who(...consentNames))}
+                  </span>
+                  <AlertActions>
+                    <Button variant="secondary" onClick={onLeave}>
+                      {strings.record.consentLeave}
+                    </Button>
+                    <Button onClick={consent.dismiss}>{strings.record.consentOk}</Button>
+                  </AlertActions>
+                </Alert>
+              )}
+              {inRoom && <RecordingRecovery onDone={(text) => show(text)} />}
               {mediaLost && (
                 <Alert role="alert">
                   <span>{strings.room.mediaLost}</span>
@@ -1845,6 +2100,16 @@ function Room({
         />
       )}
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+      {recordDialog && (
+        <Suspense fallback={null}>
+          <RecordDialog
+            initial={recordSettings}
+            formats={recordFormats()}
+            onStart={onStartRecording}
+            onCancel={() => setRecordDialog(false)}
+          />
+        </Suspense>
+      )}
       {settingsOpen && (
         <SettingsDialog
           phone={phone !== null}
@@ -2234,6 +2499,74 @@ function mediaErrorText(error: MediaTransportErrorCode | null): string | null {
  */
 /** 連線統計 (e2-t14): its own chunk, loaded when the panel first opens */
 const StatsPanel = lazy(() => import('../components/StatsPanel.tsx'))
+
+/** 錄影設定 (I4, e8-t03): its own chunk, like the recorder */
+const RecordDialog = lazy(() => import('../components/RecordDialog.tsx'))
+
+/** Below this much free storage a long recording may not fit: said when it starts (it still does) */
+const LOW_STORAGE_BYTES = 1024 ** 3
+
+/** The formats this browser would record in, for the hint in 錄影設定 */
+function recordFormats(): { video: string | null; audio: string | null } {
+  const isTypeSupported = (type: string) =>
+    typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)
+  return { video: pickMimeType(isTypeSupported, false), audio: pickMimeType(isTypeSupported, true) }
+}
+
+/**
+ * The recording notice (I4, e8-t02, AC-8.2): for everyone but the recorder, whenever someone
+ * starts recording, until they press 知道了 (or 離開會議). Who was already recording when we
+ * joined is not asked about again if the pre-join screen said so (`seenAtJoin`); if not (a
+ * reload, the waiting room), the notice says they are recording rather than that they started.
+ */
+function useRecordingConsent(
+  recorders: readonly RecordingInfo[],
+  you: string | null,
+  seenAtJoin: boolean,
+  ready: boolean,
+): { pending: RecordingInfo[]; joined: boolean; dismiss: () => void } {
+  const key = (entry: RecordingInfo) => `${entry.memberId} ${entry.since}`
+  const [acked, setAcked] = useState<ReadonlySet<string>>(() => new Set())
+  // Who recorded when the room first welcomed us (state: set once, on that render)
+  const [atJoin, setAtJoin] = useState<ReadonlySet<string> | null>(null)
+  if (ready && you !== null && atJoin === null) setAtJoin(new Set(recorders.map(key)))
+  const pending =
+    atJoin === null
+      ? []
+      : recorders.filter(
+          (entry) =>
+            entry.memberId !== you &&
+            !acked.has(key(entry)) &&
+            !(seenAtJoin && atJoin.has(key(entry))),
+        )
+  return {
+    pending,
+    joined: pending.every((entry) => atJoin?.has(key(entry))),
+    dismiss: () => setAcked((current) => new Set([...current, ...pending.map(key)])),
+  }
+}
+
+/** 「<名字> 停止錄影了」 when someone else's recording ends */
+function useRecordingStoppedNotice(
+  recorders: readonly RecordingInfo[],
+  you: string | null,
+  name: { current: (id: string) => string },
+  show: (text: string) => void,
+) {
+  const ids = recorders.map((entry) => entry.memberId).join(' ')
+  const previous = useRef<string | null>(null)
+  useEffect(() => {
+    const before = previous.current
+    previous.current = ids
+    if (before === null) return
+    const now = ids.split(' ')
+    for (const id of before.split(' ')) {
+      if (id !== '' && id !== you && !now.includes(id)) {
+        show(strings.record.othersStopped(name.current(id)))
+      }
+    }
+  }, [ids, you, name, show])
+}
 
 /**
  * What the bandwidth adaptation did, as toasts (e2-t15, PRD 「網路不穩，已降低畫質」): a step

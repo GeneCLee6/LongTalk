@@ -142,6 +142,9 @@ const HOST_RULE: Readonly<Record<HostMessage['action'], Action>> = {
   setCohost: 'setCohost',
   makeHost: 'makeHost',
   lowerHand: 'lowerHand',
+  // I4 (e8-t02): stopping someone's recording is the host's `record`; allowing it is its own
+  stopRecording: 'record',
+  allowRecord: 'allowRecord',
 }
 
 const NO_CONNS: ReadonlySet<string> = new Set()
@@ -222,6 +225,8 @@ function restoredInfo(info: StoredRoomInfo): RoomInfo {
     waitingRoom: false,
     passwordSetAt: null,
     spotlight: null,
+    // Rooms stored before v17 record nothing (I4)
+    recordings: {},
     ...rest,
     shares: storedShares(info),
   }
@@ -405,7 +410,16 @@ export class RoomHost {
       const role = record.member.role ?? 'participant'
       const hand = typeof record.member.hand === 'number' ? record.member.hand : null
       const signal = isSignalLevel(record.member.signal) ? record.member.signal : null
-      this.members.set(record.member.id, { ...record.member, role, tracks, hand, signal })
+      // ... by v16 no permission to record (I4)
+      const mayRecord = record.member.mayRecord === true
+      this.members.set(record.member.id, {
+        ...record.member,
+        role,
+        tracks,
+        hand,
+        signal,
+        mayRecord,
+      })
       this.sessions.set(record.member.id, {
         token: record.token,
         conn: record.conn,
@@ -427,6 +441,14 @@ export class RoomHost {
     const spotlight = this.info?.spotlight ?? null
     if (spotlight !== null && !this.inRoomMember(spotlight)) {
       this.info = { ...this.info!, spotlight: null }
+    }
+    // And for recorders (I4)
+    const recordings = this.info?.recordings ?? {}
+    const recording = Object.fromEntries(
+      Object.entries(recordings).filter(([memberId]) => this.inRoomMember(memberId)),
+    )
+    if (Object.keys(recording).length !== Object.keys(recordings).length) {
+      this.info = { ...this.info!, recordings: recording }
     }
     this.sent = info ? this.view() : null
     if (!info) {
@@ -483,6 +505,7 @@ export class RoomHost {
       waitingRoom: false,
       passwordSetAt: null,
       spotlight: null,
+      recordings: {},
     }
     this.deps.storage.saveRoom(this.info)
     this.usageAt = this.deps.now()
@@ -676,7 +699,71 @@ export class RoomHost {
       case 'signal':
         this.setSignal(conn.member!, message.level)
         return
+      case 'record':
+        this.record(connId, conn.member!, message.on)
+        return
     }
+  }
+
+  /**
+   * `record` (I4, e8-t02; CLAUDE.md rule 4): the member starts (`on`) or stops their own local
+   * recording. Starting needs the host's `record` (worker/roles.ts) or the host's permission
+   * (`Member.mayRecord`), and someone in the meeting (not waiting); refused with `forbidden`.
+   * Everyone sees who records in `RoomInfo.recordings`; the recorder's browser starts when it
+   * sees itself there. Stopping is always allowed (it only ends one's own).
+   */
+  private record(connId: string, memberId: string, on: boolean): void {
+    const recordings = this.info!.recordings
+    if (!on) {
+      this.endRecording(memberId)
+      return
+    }
+    if (!this.mayRecord(memberId)) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    if (recordings[memberId]) return
+    this.info = {
+      ...this.info!,
+      recordings: { ...recordings, [memberId]: { memberId, since: this.deps.now() } },
+    }
+    this.deps.storage.saveRoom(this.info)
+    this.publish()
+  }
+
+  /** Whether the member may start recording: the host's role, or the host's permission (I4) */
+  private mayRecord(memberId: string): boolean {
+    const member = this.members.get(memberId)
+    if (!member || member.role === 'waiting') return false
+    return this.allowed(memberId, 'record') || member.mayRecord
+  }
+
+  /** `memberId` no longer records (I4); everyone sees it. A no-op if it did not */
+  private endRecording(memberId: string): boolean {
+    const recordings = this.info?.recordings
+    if (!recordings?.[memberId]) return false
+    const { [memberId]: _ended, ...rest } = recordings
+    this.info = { ...this.info!, recordings: rest }
+    this.deps.storage.saveRoom(this.info)
+    this.publish()
+    return true
+  }
+
+  /**
+   * `allowRecord` (I4): the host lets a member record (`on`) or takes it back; the member is
+   * told first. Taking it back from someone who records stops that recording (they are told
+   * `recordingStopped` too) unless they may record anyway (they are the host).
+   */
+  private allowRecord(by: string, memberId: string, on: boolean): void {
+    const member = this.members.get(memberId)
+    if (!member || member.role === 'waiting' || member.mayRecord === on) return
+    this.notify(memberId, { t: 'notice', notice: on ? 'recordAllowed' : 'recordRevoked', by })
+    this.setMember(memberId, { mayRecord: on })
+    if (!on && this.info!.recordings[memberId] && !this.mayRecord(memberId)) {
+      this.notify(memberId, { t: 'notice', notice: 'recordingStopped', by })
+      if (this.endRecording(memberId)) return
+    }
+    this.publish()
   }
 
   /**
@@ -769,6 +856,16 @@ export class RoomHost {
         return this.setPassword(message.password)
       case 'setCohost':
         this.setCohost(memberId, message.memberId, message.on)
+        return
+      case 'allowRecord':
+        this.allowRecord(memberId, message.memberId, message.on)
+        return
+      case 'stopRecording':
+        // Only a recording that is on: the recorder's browser stops and saves it on the notice
+        // (or on seeing itself gone from the list, whichever comes first)
+        if (!this.info!.recordings[message.memberId]) return
+        this.notify(message.memberId, { t: 'notice', notice: 'recordingStopped', by: memberId })
+        this.endRecording(message.memberId)
         return
       case 'makeHost':
         if (!this.handOver(memberId, message.memberId)) {
@@ -1535,6 +1632,7 @@ export class RoomHost {
         tracks: [],
         hand: null,
         signal: null,
+        mayRecord: false,
       }
       this.members.set(memberId, member)
       this.sessions.set(memberId, {
@@ -1600,6 +1698,12 @@ export class RoomHost {
     // So does someone spotlighted (G2)
     if (this.info?.spotlight === memberId) {
       this.info = { ...this.info, spotlight: null }
+      this.deps.storage.saveRoom(this.info)
+    }
+    // And a recorder its recording (I4): the red light goes out with them
+    if (this.info?.recordings[memberId]) {
+      const { [memberId]: _left, ...rest } = this.info.recordings
+      this.info = { ...this.info, recordings: rest }
       this.deps.storage.saveRoom(this.info)
     }
     this.baselines.delete(memberId)
