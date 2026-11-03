@@ -69,7 +69,7 @@ depends_on: [E2]
 - [ ] AC-4.7 — PWA 可安裝、全螢幕、殼離線可開（進房需網路）、新版本提示。（G4 #28 做完全部項目：殼離線可開、新版本提示、離線時說「你目前離線」由單元測試與 e2e 驗證；**可安裝與安裝後全螢幕（standalone）要在 Android Chrome、iPhone Safari、桌機 Chrome 實機安裝**，等 `DEPLOY.md` §5 第 18 步）
 - [x] AC-4.8 — 繁中／英文切換；深淺色跟隨系統可手動；文字只來自 `strings.ts`、顏色只來自 `tokens.ts`（lint 擋）。（G1 #27 繁中／英文切換；G5 #30 首頁與預先加入頁的「外觀」（跟隨系統／淺色／深色，記住、開頁前套用；會議室一律深色），`npm run lint` 加上 `scripts/literals.ts`：`src/` 程式碼裡的中文字、全形標點、顏色字面值、JSX 文字與 `aria-label` 等屬性的字面文字都會失敗。單元測試與 CI 驗證）
 - [ ] AC-4.9 — 快捷鍵清單可用（含按住說話）；全部操作可鍵盤；名牌 aria 名稱；Lighthouse 無障礙 ≥ 0.95。（G4 #28 快捷鍵清單與按住說話；G5 #30 做完其餘：Lighthouse 首頁、預先加入、會議室 × 桌機／手機都 1.00（CI 的 `UI checks / a11y` 擋 ≥ 0.95）、axe 掃每個畫面與打開的狀態沒有違規、鍵盤走過釘選、反應、參與者選單；格子的名字＋狀態描述。**不勾**：螢幕閱讀器念得對不對、只用鍵盤開完一場會要在真的裝置上用 VoiceOver 與 NVDA 試，等 `DEPLOY.md` §5 第 19 步）
-- [ ] AC-4.10 — Playwright 視覺回歸：三畫面 × 深淺 × 桌機／手機，進 CI。
+- [x] AC-4.10 — Playwright 視覺回歸：三畫面 × 深淺 × 桌機／手機，進 CI。（G5 #30：`e2e/local/visual.spec.ts` 12 張基準截圖，`UI checks / visual` 在每個 PR 與 `main` 上比對；基準由 CI 的 Playwright Docker image 產生，第二次起連續通過）
 
 ## Task 拆分
 
