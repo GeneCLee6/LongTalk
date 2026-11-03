@@ -46,7 +46,7 @@ class RoomSocket {
     this.sent.push(message)
     if (message.t !== 'join') return
     const state = {
-      room: { id: ROOM_ID, createdAt: 1, share: null, spotlight: null },
+      room: { id: ROOM_ID, createdAt: 1, shares: {}, spotlight: null },
       members: {
         w: { id: 'w', name: 'Wei', joinedAt: 1, reconnecting: false, tracks: weiTracks },
         m: { id: 'm', name: '阿明', joinedAt: 2, reconnecting: false, tracks: amingTracks },

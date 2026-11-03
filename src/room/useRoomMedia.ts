@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ClientMessage, MemberTrack, RoomView } from '../../shared/protocol.ts'
 import type { MediaTransport } from '../media/MediaTransport.ts'
+import type { ShareMode } from '../media/shareMode.ts'
 import { watchNetwork } from './network.ts'
 import {
   idleRoomMedia,
@@ -31,6 +32,8 @@ export interface UseRoomMediaOptions {
   screen?: MediaStreamTrack | null
   /** The screen's sound to send (D2): null when there is none or the sharer turned it off */
   screenAudio?: MediaStreamTrack | null
+  /** How the screen is encoded (e3-t06): 文字 (the default) or 動態 */
+  screenMode?: ShareMode
   send: (message: ClientMessage) => void
   /** This member's id, so its own tracks are never subscribed; a new id is a new run */
   you: string | null
@@ -79,7 +82,16 @@ const idle = () => idleRoomMedia
  * publishing.
  */
 export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
-  const { enabled, local, you, view, welcomes = 0, screen = null, screenAudio = null } = options
+  const {
+    enabled,
+    local,
+    you,
+    view,
+    welcomes = 0,
+    screen = null,
+    screenAudio = null,
+    screenMode = 'text',
+  } = options
   const hd = options.hd ?? true
   const [media, setMedia] = useState<RoomMedia | null>(null)
   // 純音訊模式 outlives a session (rebuilds, a new member id): kept here, handed to each run
@@ -141,6 +153,10 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
   useEffect(() => {
     void media?.setScreen(screen, screenAudio)
   }, [media, screen, screenAudio])
+
+  useEffect(() => {
+    void media?.setScreenMode(screenMode)
+  }, [media, screenMode])
 
   useEffect(() => {
     void media?.setAudioOnly(audioOnly)

@@ -34,7 +34,7 @@ function panel(you: string, overrides: Partial<Parameters<typeof ParticipantsPan
   const props = {
     members: MEMBERS,
     you,
-    sharerId: 'x',
+    sharerIds: ['x'],
     onAction: vi.fn(),
     onMuteAll: vi.fn(),
     onEndMeeting: vi.fn(),
@@ -134,7 +134,7 @@ describe('ParticipantsPanel (e1-t08)', () => {
           <ParticipantsPanel
             members={MEMBERS}
             you="g"
-            sharerId={null}
+            sharerIds={[]}
             onAction={() => {}}
             onMuteAll={() => {}}
             onEndMeeting={() => {}}

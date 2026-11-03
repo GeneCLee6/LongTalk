@@ -22,8 +22,8 @@ export interface ParticipantsPanelProps {
   members: Member[]
   /** Our own member id */
   you: string | null
-  /** Who shares the screen now, if anyone */
-  sharerId: string | null
+  /** Who shares the screen now (several at once from H5) */
+  sharerIds: readonly string[]
   /** A host control on one member (the room decides whether it is allowed, worker/roles.ts) */
   onAction: (action: HostMemberAction, memberId: string) => void
   onMuteAll: () => void
@@ -88,7 +88,7 @@ const memberActions = (): readonly {
 export function ParticipantsPanel({
   members,
   you,
-  sharerId,
+  sharerIds,
   onAction,
   onMuteAll,
   onEndMeeting,
@@ -142,7 +142,7 @@ export function ParticipantsPanel({
     const applies: Record<HostMemberAction, boolean> = {
       muteMember: !!mic && !mic.muted,
       camOff: !!cam && !cam.muted,
-      stopShare: member.id === sharerId,
+      stopShare: sharerIds.includes(member.id),
       remove: true,
       lowerHand: member.hand != null,
     }
@@ -309,7 +309,7 @@ export function ParticipantsPanel({
                 </Tags>
               </Who>
               <States>
-                {member.id === sharerId && (
+                {sharerIds.includes(member.id) && (
                   <State
                     role="img"
                     aria-label={strings.participants.sharing}

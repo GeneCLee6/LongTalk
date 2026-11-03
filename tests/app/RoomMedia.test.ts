@@ -701,7 +701,7 @@ describe('RoomMedia: sharing the screen (e3-t01)', () => {
     expect(kinds(a)).toEqual(['screen'])
   })
 
-  it('replaces a screen picked again: the old one is unpublished, the new one published', async () => {
+  it('sends a screen picked again on the same track (換一個畫面: subscriptions stay)', async () => {
     const sfu = new FakeSfu()
     const a = member(sfu)
     await a.media.start({ mic: null, cam: null })
@@ -710,8 +710,28 @@ describe('RoomMedia: sharing the screen (e3-t01)', () => {
     const again = fakeTrack('video')
     await a.media.setScreen(again)
     expect(listed(a)).toHaveLength(1)
-    expect(listed(a)[0].trackName).not.toBe(first)
-    expect(a.transport.sending.get(listed(a)[0].trackName)).toBe(again)
+    expect(listed(a)[0].trackName).toBe(first)
+    expect(a.transport.sending.get(first)).toBe(again)
+  })
+
+  it('applies the share mode to the published screen, live and again after a new screen (e3-t06)', async () => {
+    const sfu = new FakeSfu()
+    const a = member(sfu)
+    await a.media.start({ mic: null, cam: null })
+    // Before anything is published: remembered
+    await a.media.setScreenMode('motion')
+    expect(a.transport.shareModes).toEqual([])
+    await a.media.setScreen(fakeTrack('video'))
+    const name = listed(a)[0].trackName
+    expect(a.transport.shareModes).toEqual([{ trackName: name, mode: 'motion' }])
+    await a.media.setScreenMode('text')
+    expect(a.transport.shareModes.at(-1)).toEqual({ trackName: name, mode: 'text' })
+    // The same mode again changes nothing; a new screen gets it again (its contentHint)
+    await a.media.setScreenMode('text')
+    expect(a.transport.shareModes).toHaveLength(2)
+    await a.media.setScreen(fakeTrack('video'))
+    expect(a.transport.shareModes).toHaveLength(3)
+    expect(a.transport.shareModes.at(-1)).toEqual({ trackName: name, mode: 'text' })
   })
 
   it('unpublishes a screen whose share stopped while it was being published', async () => {
@@ -842,18 +862,22 @@ describe("RoomMedia: the screen's sound (e3-t04)", () => {
     expect(kinds(a)).toEqual(['screen', 'screenAudio'])
   })
 
-  it('unpublishes the sound with the screen, and before a screen picked again', async () => {
+  it('unpublishes the sound with the screen; a screen picked again sends its own sound', async () => {
     const sfu = new FakeSfu()
     const a = member(sfu)
     await a.media.start({ mic: null, cam: null })
     await a.media.setScreen(fakeTrack('video'), fakeTrack('audio'))
     const first = own(a, 'screenAudio')!.trackName
-    // Picked again (another source, its own sound)
+    // Picked again (another source, its own sound): the same tracks send the new ones
     const again = fakeTrack('audio')
     await a.media.setScreen(fakeTrack('video'), again)
     expect(kinds(a)).toEqual(['screen', 'screenAudio'])
-    expect(own(a, 'screenAudio')!.trackName).not.toBe(first)
-    expect(a.transport.sending.get(own(a, 'screenAudio')!.trackName)).toBe(again)
+    expect(own(a, 'screenAudio')!.trackName).toBe(first)
+    expect(a.transport.sending.get(first)).toBe(again)
+    // Picked again without sound: the sound track sends nothing, reported muted
+    await a.media.setScreen(fakeTrack('video'), null)
+    expect(a.transport.sending.get(first)).toBeNull()
+    expect(own(a, 'screenAudio')!.muted).toBe(true)
     // Stopped: both go, and the sound never outlives the screen
     await a.media.setScreen(null, again)
     expect(kinds(a)).toEqual([])

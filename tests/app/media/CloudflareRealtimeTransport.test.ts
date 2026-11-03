@@ -13,6 +13,7 @@ class MockPc {
       replaceTrack: ReturnType<typeof vi.fn>
       getParameters: () => Record<string, unknown>
       setParameters: ReturnType<typeof vi.fn>
+      track?: unknown
     }
   }[] = []
   /** What each addTransceiver call asked for */
@@ -602,6 +603,80 @@ describe('CloudflareRealtimeTransport', () => {
     })
     expect(calls.length).toBe(before)
     await expect(transport.setTopLayer('nope', 'high')).rejects.toMatchObject({ code: 'not_found' })
+  })
+
+  it('sets a screen’s share mode live: contentHint, layer ceilings, degradation (e3-t06)', async () => {
+    const { transport, pc, calls } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: 'answer' },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    await transport.connect()
+    const screen = {
+      kind: 'video',
+      contentHint: 'detail',
+      getSettings: () => ({ width: 1920, height: 1080 }),
+    }
+    const { trackName } = await transport.publish(screen as unknown as MediaStreamTrack, {
+      kind: 'screen',
+      simulcast: true,
+    })
+    const sender = pc.transceivers[0].sender!
+    sender.track = screen
+    sender.getParameters = () => ({
+      transactionId: 't3',
+      encodings: [
+        { rid: 'f', active: true, scaleResolutionDownBy: 1 },
+        { rid: 'h', active: true, scaleResolutionDownBy: 2 },
+      ],
+    })
+    sender.setParameters.mockClear()
+    const before = calls.length
+    await transport.setShareMode(trackName, 'motion')
+    expect(screen.contentHint).toBe('motion')
+    expect(sender.setParameters).toHaveBeenCalledWith({
+      transactionId: 't3',
+      degradationPreference: 'maintain-framerate',
+      encodings: [
+        {
+          rid: 'f',
+          active: true,
+          scaleResolutionDownBy: 1.5,
+          maxFramerate: 30,
+          maxBitrate: 2_500_000,
+        },
+        { rid: 'h', active: true, scaleResolutionDownBy: 3, maxFramerate: 30, maxBitrate: 600_000 },
+      ],
+    })
+    await transport.setShareMode(trackName, 'text')
+    expect(screen.contentHint).toBe('detail')
+    expect(sender.setParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ degradationPreference: 'balanced' }),
+    )
+    // No SFU call: nothing is renegotiated
+    expect(calls.length).toBe(before)
+    await expect(transport.setShareMode('nope', 'text')).rejects.toMatchObject({
+      code: 'not_found',
+    })
+  })
+
+  it('leaves a camera alone when asked for a share mode', async () => {
+    const { transport, pc } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: 'answer' },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    await transport.connect()
+    const { trackName } = await transport.publish({ kind: 'video' } as MediaStreamTrack, {
+      kind: 'cam',
+    })
+    pc.transceivers[0].sender!.setParameters.mockClear()
+    await transport.setShareMode(trackName, 'motion')
+    expect(pc.transceivers[0].sender!.setParameters).not.toHaveBeenCalled()
   })
 
   it('summarises the selected candidate pair, including TURN use', async () => {

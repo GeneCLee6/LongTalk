@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import type { ClientMessage, ErrorCode, ShareInfo } from '../../shared/protocol.ts'
 import { canShareAudio } from '../media/capabilities.ts'
 import { captureScreen } from '../media/share.ts'
+import type { ShareMode } from '../media/shareMode.ts'
 import { idleShare, ScreenShare, type ScreenShareState, type ShareNotice } from './ScreenShare.ts'
 
 export interface UseScreenShareOptions {
-  /** Who shares now (the room view's `room.share`) */
-  share: ShareInfo | null
+  /** Who shares now (the room view's `room.shares`) */
+  shares: Readonly<Record<string, ShareInfo>> | undefined
   you: string | null
   send: (message: ClientMessage) => void
   /** The room's refusals (useRoomConnection's onError) */
@@ -17,26 +18,31 @@ export interface UseScreenShareOptions {
 }
 
 export interface ScreenShareHandle extends ScreenShareState {
-  /** Share pressed (asks first when someone else shares) */
+  /** Share pressed */
   request: () => void
-  /** Take over: yes / no */
-  confirm: () => void
-  cancel: () => void
   /** Stop sharing */
   stop: () => void
   /** Send the share's sound, or not (the sharing bar's switch, e3-t04) */
   toggleAudio: () => void
+  /** 文字 or 動態 (e3-t06) */
+  setMode: (mode: ShareMode) => void
+  /** The page's sampler: the screen keeps moving, or not (e3-t06) */
+  noticeMotion: (moving: boolean) => void
+  dismissMotionHint: () => void
+  /** 換一個畫面 (e3-t09): the picker again, the share goes on */
+  repick: () => void
 }
 
 const noSubscribe = () => () => {}
 const idle = () => idleShare
 
 /**
- * This member's screen share (e3-t01 – e3-t04): one ScreenShare per mounted room, closed (the
- * capture stopped) on unmount, so StrictMode's mount / unmount / mount leaves one
+ * This member's screen share (e3-t01 – e3-t04, e3-t06 – e3-t09): one ScreenShare per mounted
+ * room, closed (the capture stopped) on unmount, so StrictMode's mount / unmount / mount leaves
+ * one
  */
 export function useScreenShare(options: UseScreenShareOptions): ScreenShareHandle {
-  const { share, you, onError, welcomes } = options
+  const { shares, you, onError, welcomes } = options
   const latest = useRef(options)
   useEffect(() => {
     latest.current = options
@@ -57,8 +63,8 @@ export function useScreenShare(options: UseScreenShareOptions): ScreenShareHandl
     }
   }, [])
   useEffect(() => {
-    controller?.setRoom(share, you)
-  }, [controller, share, you])
+    controller?.setRoom(shares, you)
+  }, [controller, shares, you])
   useEffect(
     () => (controller ? onError((code) => controller.refused(code)) : undefined),
     [controller, onError],
@@ -74,10 +80,12 @@ export function useScreenShare(options: UseScreenShareOptions): ScreenShareHandl
     () => ({
       ...state,
       request: () => void controller?.request(),
-      confirm: () => void controller?.confirm(),
-      cancel: () => controller?.cancel(),
       stop: () => controller?.stop(),
       toggleAudio: () => controller?.toggleAudio(),
+      setMode: (mode: ShareMode) => controller?.setMode(mode),
+      noticeMotion: (moving: boolean) => controller?.noticeMotion(moving),
+      dismissMotionHint: () => controller?.dismissMotionHint(),
+      repick: () => void controller?.repick(),
     }),
     [state, controller],
   )

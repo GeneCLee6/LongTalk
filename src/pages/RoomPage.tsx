@@ -22,6 +22,8 @@ import {
   type RoomInfo,
   type Role,
   type WaitingEntry,
+  MAX_SHARES,
+  shareOrder,
 } from '../../shared/protocol.ts'
 import { normalizePassword } from '../../shared/password.ts'
 import { handQueue, type Reaction } from '../../shared/reactions.ts'
@@ -29,6 +31,7 @@ import { can } from '../../shared/roles.ts'
 import {
   focusFirst,
   pickSpeaker,
+  shareSlots,
   stageFocus,
   stageLayout,
   visibleTiles,
@@ -61,6 +64,7 @@ import type { PermissionGuideProps } from '../components/PermissionGuide.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
 import { ShortcutsDialog } from '../components/ShortcutsDialog.tsx'
 import { ShareTile } from '../components/ShareTile.tsx'
+import { SharePicker } from '../components/SharePicker.tsx'
 import { SettingsDialog } from '../components/SettingsDialog.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
 import type { DeviceChoice } from '../components/DeviceSelect.tsx'
@@ -128,6 +132,9 @@ import { useRoomShortcuts } from '../room/useRoomShortcuts.ts'
 import { useOnline } from '../pwa/online.ts'
 import type { ShareNotice } from '../room/ScreenShare.ts'
 import { useScreenShare } from '../room/useScreenShare.ts'
+import { useSelfCapture, useSharePreview } from '../room/useSharePreview.ts'
+import { loadMainShare, saveMainShare } from '../room/mainShare.ts'
+import { announceMeetingTab } from '../media/share.ts'
 import { copyRoomLink, roomUrl, shareRoomLink, type LinkOutcome } from '../room/shareLink.ts'
 import {
   linkPassword,
@@ -918,8 +925,13 @@ function Room({
     () => fetchIceConfig(roomId, token.current, relayOnly),
     [roomId, relayOnly],
   )
-  // Screen sharing (D1): RoomDO says who shares; the screen is published once it names us
-  const roomShare = state.view?.room.share ?? null
+  // Screen sharing (D1; several at once from H5): RoomDO says who shares; our screen is
+  // published once it lists our share
+  const roomShares = state.view?.room.shares
+  const sharerKey = shareOrder(roomShares)
+    .map((share) => share.memberId)
+    .join(' ')
+  const sharerIds = useMemo(() => (sharerKey ? sharerKey.split(' ') : []), [sharerKey])
   const viewMembers = state.view?.members
   const memberName = useRef<(id: string) => string>(() => '')
   useEffect(() => {
@@ -931,8 +943,8 @@ function Room({
         case 'problem':
           show(strings.screenShare.problems[notice.problem], 'warn')
           return
-        case 'takenOver':
-          show(strings.screenShare.takenOver(memberName.current(notice.by)))
+        case 'full':
+          show(strings.screenShare.full(MAX_SHARES), 'warn')
           return
         case 'stopped':
           // The host stopped it (F1): the room's notice says so, by name (onHostNotice)
@@ -945,7 +957,7 @@ function Room({
     [show],
   )
   const screenShare = useScreenShare({
-    share: roomShare,
+    shares: roomShares,
     you: state.you,
     send,
     onError,
@@ -956,16 +968,22 @@ function Room({
   const sharingScreen = sharePhase === 'sharing' ? screenShare.track : null
   // The share's sound (e3-t04): sent with the screen while the bar's switch is on
   const sharingAudio = sharePhase === 'sharing' && screenShare.audioOn ? screenShare.audio : null
-  useShareStartedNotice(roomShare?.memberId ?? null, state.you, memberName, show)
-  // The name of whoever shares, for the take-over question (kept if they stop meanwhile)
-  const [sharerName, setSharerName] = useState('')
-  const currentSharerName =
-    roomShare && roomShare.memberId !== state.you
-      ? (viewMembers?.[roomShare.memberId]?.name ?? null)
-      : null
-  // Adjusted while rendering (React's pattern for state that follows a value), not in an effect
-  if (currentSharerName !== null && currentSharerName !== sharerName) {
-    setSharerName(currentSharerName)
+  useShareStartedNotice(sharerIds, state.you, memberName, show)
+  // This tab says it is a meeting tab, so a share of it is recognised (e3-t09, Capture Handle)
+  useEffect(() => announceMeetingTab(roomId), [roomId])
+  // The presenter view's thumbnail and the dynamic-content hint (e3-t06, e3-t08): our own
+  // capture, sampled once a second, never what the SFU sends back
+  const sharePreview = useSharePreview(sharingScreen, screenShare.noticeMotion)
+  // Sharing the meeting itself (e3-t09): the warning, until dismissed for this screen
+  const selfCaptureKind = useSelfCapture(sharingScreen ? screenShare.surface : null)
+  const [selfCaptureDismissed, setSelfCaptureDismissed] = useState<MediaStreamTrack | null>(null)
+  const selfCaptureShown =
+    selfCaptureKind !== null && selfCaptureDismissed !== sharingScreen ? selfCaptureKind : null
+  // Whose share this viewer keeps in the main area (e3-t07): the latest unless they chose one
+  const [chosenShare, setChosenShare] = useState(() => loadMainShare(roomId))
+  const chooseShare = (memberId: string) => {
+    setChosenShare(memberId)
+    saveMainShare(roomId, memberId)
   }
 
   // The room view stays on screen while the socket reconnects; so does the media connection. Not
@@ -978,6 +996,7 @@ function Room({
     local: sending,
     screen: sharingScreen,
     screenAudio: sharingAudio,
+    screenMode: screenShare.mode,
     send,
     you: state.you,
     view: state.view,
@@ -1379,15 +1398,17 @@ function Room({
     const mic = member.tracks.find((t) => t.kind === 'mic')
     return (mic && media.received[trackKey(mic)]?.track) || null
   }
-  // Someone else shares: their screen takes the main area (e3-t05, e4-t08). Our own share is not
-  // shown back to us (it would mirror endlessly; the presenter view is e3-t08): the bar says it.
-  const sharer = roomShare ? state.view?.members[roomShare.memberId] : undefined
-  const sharerScreen = sharer?.tracks.find((t) => t.kind === 'screen')
-  // Its sound (e3-t04) plays apart from the share tile, like everyone's microphone
-  const sharerAudioTrack =
-    sharer && sharer.id !== state.you ? sharer.tracks.find((t) => t.kind === 'screenAudio') : null
-  const sharerAudio =
-    (sharerAudioTrack && media.received[trackKey(sharerAudioTrack)]?.track) || null
+  // Someone else shares: their screen takes the main area (e3-t05, e4-t08); with several, the one
+  // this viewer chose, else the latest, and the others go first in the strip (e3-t07). Our own
+  // share is never shown back to us big (it would mirror endlessly): the presenter view is the
+  // bar's thumbnail (e3-t08).
+  const sharers = sharerIds.flatMap((id) => state.view?.members[id] ?? [])
+  const otherSharers = sharers.filter((sharer) => sharer.id !== state.you)
+  const slots = shareSlots(sharerIds, state.you, chosenShare)
+  const receivedOf = (member: Member, kind: 'screen' | 'screenAudio') => {
+    const track = member.tracks.find((t) => t.kind === kind)
+    return (track && media.received[trackKey(track)]?.track) || null
+  }
   const panelTabs = (
     <PanelTabs
       label={strings.participants.tabs}
@@ -1403,7 +1424,7 @@ function Room({
     <ParticipantsPanel
       members={members}
       you={state.you}
-      sharerId={roomShare?.memberId ?? null}
+      sharerIds={sharerIds}
       onAction={onMemberAction}
       onMuteAll={onMuteAll}
       onEndMeeting={onEndMeeting}
@@ -1437,15 +1458,36 @@ function Room({
       />
     </Suspense>
   )
-  const shareTile =
-    sharer && sharer.id !== state.you ? (
+  const mainSharer = otherSharers.find((sharer) => sharer.id === slots.main)
+  const shareTile = mainSharer ? (
+    <ShareTile
+      key={`${mainSharer.id}-share`}
+      name={mainSharer.name}
+      video={receivedOf(mainSharer, 'screen')}
+      picker={
+        otherSharers.length > 1 ? (
+          <SharePicker
+            shares={otherSharers.map(({ id, name }) => ({ id, name }))}
+            main={mainSharer.id}
+            onPick={chooseShare}
+          />
+        ) : undefined
+      }
+    />
+  ) : undefined
+  // The other shares, first in the strip; each brings itself to the main area (e3-t07)
+  const stripShares = otherSharers
+    .filter((sharer) => slots.strip.includes(sharer.id))
+    .map((sharer) => (
       <ShareTile
+        key={`${sharer.id}-share`}
         name={sharer.name}
-        video={(sharerScreen && media.received[trackKey(sharerScreen)]?.track) || null}
+        video={receivedOf(sharer, 'screen')}
+        onShowMain={() => chooseShare(sharer.id)}
       />
-    ) : undefined
+    ))
   // The tiles in the stage's order; in the share's strip the pinned or spotlighted one first
-  // (the share keeps the main area: choosing between shares and people is H5's)
+  // (a share keeps the main area)
   const byId = new Map(members.map((member) => [member.id, member]))
   const stageMembers = (shareTile ? focusFirst(shown.ids, focus) : shown.ids).flatMap(
     (id) => byId.get(id) ?? [],
@@ -1471,6 +1513,29 @@ function Room({
                   ? { on: screenShare.audioOn, onToggle: screenShare.toggleAudio }
                   : null
               }
+              mode={{ value: screenShare.mode, onChange: screenShare.setMode }}
+              motionHint={
+                screenShare.motionHint
+                  ? {
+                      onSwitch: () => screenShare.setMode('motion'),
+                      onDismiss: screenShare.dismissMotionHint,
+                    }
+                  : null
+              }
+              preview={{
+                sample: sharePreview,
+                // A whole screen (or the meeting itself) would show the preview inside itself
+                off: screenShare.surface?.surface === 'monitor' || selfCaptureKind !== null,
+              }}
+              selfCapture={
+                selfCaptureShown
+                  ? {
+                      kind: selfCaptureShown,
+                      onRepick: screenShare.repick,
+                      onDismiss: () => setSelfCaptureDismissed(sharingScreen),
+                    }
+                  : null
+              }
             />
           )}
           <StageBox>
@@ -1485,6 +1550,7 @@ function Room({
                   stageMembers.findIndex((member) => member.id === focus?.id),
                 )}
               >
+                {stripShares}
                 {stageMembers.map((member) => {
                   const you = member.id === state.you
                   const mic = member.tracks.find((t) => t.kind === 'mic')
@@ -1694,15 +1760,6 @@ function Room({
           onDismiss={chat.dismissPreview}
         />
       )}
-      {sharePhase === 'confirm' && (
-        <ConfirmDialog
-          title={strings.screenShare.takeOverTitle}
-          body={strings.screenShare.takeOverBody(sharerName)}
-          confirmLabel={strings.screenShare.takeOver}
-          onConfirm={screenShare.confirm}
-          onCancel={screenShare.cancel}
-        />
-      )}
       {passwordDialog && (
         <PasswordDialog
           hasPassword={roomHasPassword}
@@ -1800,15 +1857,16 @@ function Room({
             />
           ),
         )}
-        {sharer && (
+        {/* Every share's sound (e3-t04), whichever share is in the main area */}
+        {otherSharers.map((sharer) => (
           <MemberAudio
             key={`${sharer.id}-share`}
             name={sharer.name}
-            track={sharerAudio}
+            track={receivedOf(sharer, 'screenAudio')}
             speaker={local.chosen.speaker}
             source="share"
           />
-        )}
+        ))}
       </div>
       <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
       {announcer.region}
@@ -1914,20 +1972,22 @@ function useMemberEvents(
   }, [members, you, welcomes])
 }
 
-/** 「<名字> 開始分享畫面」 when someone else starts sharing (not when we do) */
+/** 「<名字> 開始分享畫面」 for everyone else who starts sharing (not when we do) */
 function useShareStartedNotice(
-  sharerId: string | null,
+  sharerIds: readonly string[],
   you: string | null,
   name: { current: (id: string) => string },
   show: (text: string) => void,
 ) {
-  const previous = useRef(sharerId)
+  const previous = useRef(sharerIds)
   useEffect(() => {
-    if (sharerId !== null && sharerId !== previous.current && sharerId !== you) {
-      show(strings.screenShare.started(name.current(sharerId)))
+    for (const id of sharerIds) {
+      if (id !== you && !previous.current.includes(id)) {
+        show(strings.screenShare.started(name.current(id)))
+      }
     }
-    previous.current = sharerId
-  }, [sharerId, you, name, show])
+    previous.current = sharerIds
+  }, [sharerIds, you, name, show])
 }
 
 /**

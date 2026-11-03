@@ -238,7 +238,7 @@ export class RoomConnection {
   getState = (): RoomConnectionState => this.state
 
   /**
-   * The room refused something this member sent (`error`: `share_busy`, `forbidden`, …); returns
+   * The room refused something this member sent (`error`: `share_full`, `forbidden`, …); returns
    * a function that removes the listener
    */
   onError = (listener: (code: ErrorCode) => void): (() => void) => {

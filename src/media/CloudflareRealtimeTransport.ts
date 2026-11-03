@@ -34,6 +34,7 @@ import {
   type TransportStats,
   type Unsubscribe,
 } from './MediaTransport.ts'
+import { SHARE_MODE_PARAMETERS, withShareMode, type ShareMode } from './shareMode.ts'
 import { readStatsReport } from './stats.ts'
 
 // MediaTransport over Cloudflare Realtime SFU (docs/adr-001-media-layer.md). One SFU session and
@@ -350,6 +351,47 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     const params = sender.getParameters()
     if (!params.encodings || params.encodings.length === 0) return
     await sender.setParameters({ ...params, encodings: withTopLayer(params.encodings, kind, top) })
+  }
+
+  async setShareMode(trackName: string, mode: ShareMode): Promise<void> {
+    this.#require()
+    const transceiver = this.#published.get(trackName)
+    if (!transceiver) throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    if (this.#publishedKinds.get(trackName) !== 'screen') return
+    const sender = transceiver.sender
+    const params = SHARE_MODE_PARAMETERS[mode]
+    const track = sender.track
+    if (track) {
+      try {
+        track.contentHint = params.contentHint
+      } catch {
+        // Read-only here: the encoder picks for itself
+      }
+    }
+    if (typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') {
+      return
+    }
+    const settings = track?.getSettings?.() ?? {}
+    const shortSide =
+      settings.width && settings.height ? Math.min(settings.width, settings.height) : null
+    const current = sender.getParameters()
+    if (!current.encodings || current.encodings.length === 0) return
+    try {
+      // No SDP exchange: the encoder takes the new ceilings from its next frame
+      await sender.setParameters({
+        ...current,
+        encodings: withShareMode(current.encodings, mode, shortSide),
+        degradationPreference: params.degradationPreference,
+      } as RTCRtpSendParameters)
+    } catch {
+      // A browser that refuses the degradation preference (older Safari): the layers alone
+      await sender
+        .setParameters({
+          ...sender.getParameters(),
+          encodings: withShareMode(current.encodings, mode, shortSide),
+        })
+        .catch(() => undefined)
+    }
   }
 
   async getStats(): Promise<TransportStats> {

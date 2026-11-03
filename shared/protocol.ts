@@ -37,17 +37,18 @@
 //    name (`RoomInfo.name`; null shows a default made from `createdBy`), host only for now
 //    (worker/roles.ts arrives with e1-t06). A refused `renameRoom` is answered with `error`
 //    code `forbidden`.
-// 10. Screen sharing (D1): one member shares at a time (`RoomInfo.share`). A member who picked
-//    what to share sends `share`; the room grants it when nobody shares (or the member already
-//    does), and answers `error` code `share_busy` when someone else does, unless `takeOver` is
-//    set: then the share moves to the new member at once and the previous sharer's screen track
-//    is dropped from its list (its browser sees the change and stops capturing). Once granted, the
-//    sharer publishes its screen like any track and lists it in `tracks` (kind `screen`); a
-//    `screen` track from a member who does not hold the share is dropped from its list. `unshare`
-//    ends the member's own share; leaving, or being removed after RECONNECT_GRACE_MS, ends it too.
-//    A host stopping someone else's share is RoomHost.stopShare, put on the wire with F1
-//    (e1-t06, worker/roles.ts). In an audio-only month (shared/usage.ts) `share` is refused with
-//    `audio_only`: the SFU proxy would refuse the screen's video anyway.
+// 10. Screen sharing (D1; several at once from H5, e3-t07): up to MAX_SHARES members share at the
+//    same time (`RoomInfo.shares`, by member id). A member who picked what to share sends
+//    `share`; the room grants it when fewer than MAX_SHARES share (or the member already does)
+//    and answers `error` code `share_full` otherwise: nobody's share is taken away. Once granted,
+//    the sharer publishes its screen like any track and lists it in `tracks` (kind `screen`); a
+//    `screen` track from a member who does not share is dropped from its list. `unshare` ends the
+//    member's own share; leaving, or being removed after RECONNECT_GRACE_MS, ends it too. A host
+//    or co-host stops anyone's share with `host` `stopShare` (12. below). Every browser decides
+//    for itself which share is in its main area (shared/layout.ts mainShare: the latest unless
+//    the viewer chose another); the others go in the strip. In an audio-only month
+//    (shared/usage.ts) `share` is refused with `audio_only`: the SFU proxy would refuse the
+//    screen's video anyway.
 // 11. Chat (D3, shared/chat.ts): `chat` sends a message (≤ MAX_CHAT_CHARS, normalizeChatText on
 //    both ends). The room keeps the latest CHAT_HISTORY messages in storage, apart from the view
 //    (no patch carries chat): right after every `welcome` it sends the whole history as `chat`
@@ -139,6 +140,8 @@
 // v12 → v13 (G3): `react`, `reaction`, `Member.hand`, `hand`, `host` action `lowerHand`, notice
 //   `handLowered`.
 // v13 → v14 (H2): `signal`, `Member.signal`.
+// v14 → v15 (H5): `RoomInfo.shares` (up to MAX_SHARES) replaces `RoomInfo.share`; `share` has no
+//   `takeOver`; error code `share_full` replaces `share_busy`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -151,7 +154,7 @@ import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 14
+export const PROTOCOL_VERSION = 15
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -242,8 +245,8 @@ export type RoomInfo = RoomInit & {
   createdBy: string | null
   /** When the first member joined: the top bar's elapsed time counts from it */
   startedAt: number | null
-  /** Who shares the screen now (D1, one at a time); null when nobody does */
-  share: ShareInfo | null
+  /** Who shares the screen now, by member id (D1; up to MAX_SHARES at once from H5, e3-t07) */
+  shares: Record<string, ShareInfo>
   /** Nobody new may join, not even into the waiting room (F2, e1-t09) */
   locked: boolean
   /** Someone new waits until a host or co-host admits them (F2, e1-t10) */
@@ -257,11 +260,21 @@ export type RoomInfo = RoomInit & {
   passwordSetAt: number | null
 }
 
-/** The room's one screen share (D1, e3-t02) */
+/** One member's screen share (D1, e3-t02; several at once from H5, e3-t07) */
 export type ShareInfo = {
   memberId: string
   /** When the member was granted the share */
   since: number
+}
+
+/** How many members may share their screens at the same time (H5, e3-t07) */
+export const MAX_SHARES = 3
+
+/** The shares in the order they started, oldest first (ties by member id, so every end agrees) */
+export function shareOrder(shares: Readonly<Record<string, ShareInfo>> | undefined): ShareInfo[] {
+  return Object.values(shares ?? {}).sort(
+    (a, b) => a.since - b.since || (a.memberId < b.memberId ? -1 : a.memberId > b.memberId ? 1 : 0),
+  )
 }
 
 /** Someone in the waiting room (F2), as the members in the room see them */
@@ -377,11 +390,11 @@ export type PatchMessage = { t: 'patch'; rev: number; ops: PatchOp[] }
 
 /**
  * - `forbidden`: the member may not do that (`renameRoom` from someone who is not the host)
- * - `share_busy`: `share` without `takeOver` while someone else shares (ask, then take over)
+ * - `share_full`: `share` while MAX_SHARES members already share (H5, e3-t07)
  * - `audio_only`: `share` in a month that is audio-only (shared/usage.ts)
  * - `rate_limited`: `chat` faster than CHAT_RATE (D3); the message was not kept
  */
-export type ErrorCode = 'bad_message' | 'forbidden' | 'share_busy' | 'audio_only' | 'rate_limited'
+export type ErrorCode = 'bad_message' | 'forbidden' | 'share_full' | 'audio_only' | 'rate_limited'
 
 /**
  * What a host (or co-host) did to this member (F1): `muted` (the microphone; `all` when it was
@@ -488,11 +501,8 @@ export type RenameMessage = { t: 'rename'; name: string }
 /** The room's name (host only, C2, e1-t05) */
 export type RenameRoomMessage = { t: 'renameRoom'; name: string }
 
-/**
- * Start sharing the screen (D1): sent once the member picked what to share. `takeOver`: the
- * member confirmed taking the share from whoever has it.
- */
-export type ShareMessage = { t: 'share'; takeOver: boolean }
+/** Start sharing the screen (D1): sent once the member picked what to share */
+export type ShareMessage = { t: 'share' }
 
 /** Stop sharing (the member's own share) */
 export type UnshareMessage = { t: 'unshare' }
@@ -678,7 +688,7 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return name === null ? null : { t: 'renameRoom', name }
     }
     case 'share':
-      return typeof value.takeOver === 'boolean' ? { t: 'share', takeOver: value.takeOver } : null
+      return { t: 'share' }
     case 'unshare':
       return { t: 'unshare' }
     case 'spotlight':

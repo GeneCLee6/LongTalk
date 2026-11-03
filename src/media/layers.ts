@@ -19,6 +19,11 @@
 //    follows what is already being received (398 kbps while receiving 362, PR preview), so as a
 //    cap it holds every layer low for good. A link that carries less than the budget is H2's to
 //    notice from loss and freezes and lower the budget (e2-t15).
+//    Several shares (H5, e3-t07): the one in the main area (the biggest screen drawn) keeps its
+//    top layer at the full DOWNLINK_BUDGET_BPS even when the caps add up to more: screens rarely
+//    send near their caps (a still screen sends almost nothing) and it is what the viewer reads,
+//    while the strip's shares and cameras are already at their lowest. Once H2 lowers the budget
+//    (the link really struggles) it steps down like anything else.
 // 4. Hysteresis: a layer already asked for stays while the tile is between "good enough" and
 //    "fully covered" (so a tile resized around a boundary does not flip), and stepping up needs
 //    headroom in the budget (UPGRADE_HEADROOM). Callers debounce layout changes on top.
@@ -156,12 +161,15 @@ export function chooseLayers(inputs: readonly LayerInput[], budgetBps: number): 
   }
   const stepDown = (input: LayerInput) =>
     chosen.set(input.key, lower(input.kind, chosen.get(input.key)!)!)
-  for (let next = nextDown(inputs); next && total() > budgetBps; next = nextDown(inputs)) {
+  // The main share keeps its layer at the full budget (above)
+  const main = budgetBps >= DOWNLINK_BUDGET_BPS ? mainScreen(inputs) : null
+  const reducible = inputs.filter((input) => input !== main)
+  for (let next = nextDown(reducible); next && total() > budgetBps; next = nextDown(reducible)) {
     stepDown(next)
   }
   // Upgrades must leave headroom: take them back, no lower than the layer asked for now
   const upgraded = () =>
-    inputs.filter(
+    reducible.filter(
       (i) => i.current !== null && ORDER[chosen.get(i.key)!] > ORDER[clampLayer(i.kind, i.current)],
     )
   for (
@@ -172,6 +180,21 @@ export function chooseLayers(inputs: readonly LayerInput[], budgetBps: number): 
     stepDown(next)
   }
   return chosen
+}
+
+/** The biggest visible screen (the share in the main area); null when no screen is drawn */
+function mainScreen(inputs: readonly LayerInput[]): LayerInput | null {
+  let best: LayerInput | null = null
+  let bestArea = 0
+  for (const input of inputs) {
+    if (input.kind !== 'screen' || !input.demand?.visible) continue
+    const area = input.demand.width * input.demand.height
+    if (area > bestArea || (area === bestArea && best && input.key < best.key)) {
+      best = input
+      bestArea = area
+    }
+  }
+  return best
 }
 
 /** A tile's drawn size in device pixels: CSS pixels times the pixel ratio (at most MAX_PIXEL_RATIO) */

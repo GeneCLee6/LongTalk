@@ -476,14 +476,33 @@ export const zhTW = {
     label: (name: string) => `${name} 的畫面`,
     region: (name: string) => `${name} 分享的畫面`,
     waiting: (name: string) => `${name} 開始分享畫面，馬上就來…`,
-    // Taking the share over from someone (e3-t02)
-    takeOverTitle: '接手分享？',
-    takeOverBody: (name: string) =>
-      `${name} 正在分享畫面。接手後，${name} 的分享會停止，改成分享你的畫面。`,
-    takeOver: '接手分享',
-    takenOver: (name: string) => `${name} 接手了分享，你的分享已停止。`,
     stopped: '你的分享已被停止。',
     started: (name: string) => `${name} 開始分享畫面`,
+    // Several shares at once (H5, e3-t07): the room's cap, the main area's picker, the strip
+    full: (max: number) => `已經有 ${max} 個人在分享畫面，等其中一人停止後再試一次。`,
+    picker: '選擇主畫面要看誰的分享',
+    showMain: (name: string) => `在主畫面看 ${name} 的畫面`,
+    // 文字／動態 (e3-t06): the sharing bar's switch and the hint for moving content
+    mode: '分享模式',
+    modeText: '文字',
+    modeMotion: '動態',
+    modeTextHint: '清楚優先，適合文件、程式碼、投影片',
+    modeMotionHint: '流暢優先，適合影片、動畫',
+    motionHint: '分享的畫面一直在動，切到「動態」會比較流暢。',
+    motionSwitch: '切到動態',
+    motionDismiss: '不用',
+    // The presenter view (e3-t08): the sharer's own small preview
+    preview: '你分享的畫面（預覽）',
+    previewOff: '分享整個螢幕時不顯示預覽，以免畫面一直重複',
+    // Sharing the meeting itself (e3-t09)
+    selfCapture: {
+      meetingTab: '你分享的是會議室的分頁，大家會看到畫面一直重複。',
+      meetingWindow: '你分享的是會議室所在的視窗，大家會看到畫面一直重複。',
+      screenWithMeeting:
+        '會議室就在你分享的螢幕上，大家會看到畫面一直重複。切到要給大家看的視窗，或換一個畫面。',
+    },
+    repick: '換一個畫面',
+    selfCaptureDismiss: '知道了',
     problems: {
       denied:
         '系統不允許瀏覽器分享螢幕。Mac 請到「系統設定 › 隱私權與安全性 › 螢幕與系統錄音」允許這個瀏覽器，重新開啟瀏覽器後再試一次。',

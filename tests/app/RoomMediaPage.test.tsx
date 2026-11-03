@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PROTOCOL_VERSION, type ClientMessage, type MemberTrack } from '../../shared/protocol.ts'
@@ -28,7 +28,10 @@ let weiTracks: MemberTrack[]
 let weiSignal: 'good' | 'fair' | 'poor' | null
 let usage: UsageState
 /** Who shares when we join (D1) */
-let roomShare: { memberId: string; since: number } | null
+/** The room's shares at join, by member id (H5: several at once) */
+let roomShares: Record<string, { memberId: string; since: number }>
+/** Members besides Wei and us at join (a second sharer, H5) */
+let extraMembers: Record<string, unknown>
 const sockets: RoomSocket[] = []
 
 /** The room's WebSocket: welcomes with Wei already in the room, publishing `weiTracks` */
@@ -52,7 +55,7 @@ class RoomSocket {
     this.sent.push(message)
     if (message.t !== 'join') return
     const state = {
-      room: { id: ROOM_ID, createdAt: 1, share: roomShare },
+      room: { id: ROOM_ID, createdAt: 1, shares: roomShares },
       members: {
         w: {
           id: 'w',
@@ -63,6 +66,7 @@ class RoomSocket {
           signal: weiSignal,
         },
         a: { id: 'a', name: 'Gene', joinedAt: 2, reconnecting: false, tracks: [] },
+        ...extraMembers,
       },
       usage,
     }
@@ -128,7 +132,8 @@ beforeEach(() => {
   weiTracks = []
   weiSignal = null
   usage = 'normal'
-  roomShare = null
+  roomShares = {}
+  extraMembers = {}
   sockets.length = 0
   vi.stubGlobal('WebSocket', RoomSocket)
   localStorage.clear()
@@ -337,7 +342,7 @@ describe('room page screen sharing (D1)', () => {
 
   it("shows someone's share in the main area with their name, everyone in the strip", async () => {
     await publishWei(['mic', 'cam', 'screen'])
-    roomShare = { memberId: 'w', since: 5 }
+    roomShares = { w: { memberId: 'w', since: 5 } }
     visitRoom()
     const stage = await screen.findByRole('region', { name: '會議室畫面' }, SLOW)
     await waitFor(() => expect(stage).toHaveAttribute('data-mode', 'share'), SLOW)
@@ -351,7 +356,7 @@ describe('room page screen sharing (D1)', () => {
     expect(within(strip).getByRole('figure', { name: 'Wei' })).toBeInTheDocument()
     expect(within(strip).getByRole('figure', { name: 'Gene（你）' })).toBeInTheDocument()
     // The share ends: back to the gallery
-    sockets.at(-1)!.patch([{ op: 'set', path: ['room', 'share'], value: null }])
+    sockets.at(-1)!.patch([{ op: 'del', path: ['room', 'shares', 'w'] }])
     await waitFor(() =>
       expect(screen.getByRole('region', { name: '會議室畫面' })).toHaveAttribute(
         'data-mode',
@@ -367,13 +372,13 @@ describe('room page screen sharing (D1)', () => {
     const toolbar = screen.getByRole('toolbar', { name: '會議控制' })
     fireEvent.click(within(toolbar).getByRole('button', { name: '分享螢幕' }))
     const room = sockets.at(-1)!
-    await waitFor(() => expect(room.sent).toContainEqual({ t: 'share', takeOver: false }))
+    await waitFor(() => expect(room.sent).toContainEqual({ t: 'share' }))
     expect(display.getDisplayMedia).toHaveBeenCalledTimes(1)
     // Not published before the room grants it
     expect(
       room.sent.some((m) => m.t === 'tracks' && m.tracks.some((t) => t.kind === 'screen')),
     ).toBe(false)
-    room.patch([{ op: 'set', path: ['room', 'share'], value: { memberId: 'a', since: 9 } }])
+    room.patch([{ op: 'set', path: ['room', 'shares', 'a'], value: { memberId: 'a', since: 9 } }])
     const bar = await screen.findByRole('region', { name: '你正在分享畫面' })
     await waitFor(() =>
       expect(
@@ -399,23 +404,106 @@ describe('room page screen sharing (D1)', () => {
     )
   })
 
-  it('asks before taking over the share from someone else', async () => {
+  it('shares while someone else shares: no question, and both stay (H5)', async () => {
     const display = stubDisplayMedia()
     await publishWei(['mic', 'screen'])
-    roomShare = { memberId: 'w', since: 5 }
+    roomShares = { w: { memberId: 'w', since: 5 } }
     visitRoom()
     await screen.findByRole('region', { name: '會議室畫面' }, SLOW)
     fireEvent.click(screen.getByRole('button', { name: '分享螢幕' }))
-    const dialog = await screen.findByRole('alertdialog', { name: '接手分享？' })
-    expect(dialog).toHaveTextContent('Wei 正在分享畫面')
-    expect(display.getDisplayMedia).not.toHaveBeenCalled()
-    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(sockets.at(-1)!.sent).toContainEqual({ t: 'share' }))
+    expect(display.getDisplayMedia).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('alertdialog')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '分享螢幕' }))
-    fireEvent.click(
-      within(await screen.findByRole('alertdialog')).getByRole('button', { name: '接手分享' }),
+    const room = sockets.at(-1)!
+    room.patch([{ op: 'set', path: ['room', 'shares', 'a'], value: { memberId: 'a', since: 9 } }])
+    // We share, and Wei's share stays in our main area; the bar has the 文字／動態 switch
+    const bar = await screen.findByRole('region', { name: '你正在分享畫面' })
+    const modes = within(bar).getByRole('group', { name: '分享模式' })
+    expect(within(modes).getByRole('button', { name: '文字' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
     )
-    await waitFor(() => expect(sockets.at(-1)!.sent).toContainEqual({ t: 'share', takeOver: true }))
+    fireEvent.click(within(modes).getByRole('button', { name: '動態' }))
+    expect(within(modes).getByRole('button', { name: '動態' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    const stage = screen.getByRole('region', { name: '會議室畫面' })
+    expect(stage).toHaveAttribute('data-mode', 'share')
+    expect(within(stage).getByRole('figure', { name: 'Wei 分享的畫面' })).toBeInTheDocument()
+    // The host stopping our share: back to only Wei's, we are told
+    room.patch([{ op: 'del', path: ['room', 'shares', 'a'] }])
+    await waitFor(() => expect(screen.queryByRole('region', { name: '你正在分享畫面' })).toBeNull())
+    expect(display.captured[0].stopped).toBe(true)
+  })
+
+  it('says so when MAX_SHARES already share (share_full)', async () => {
+    stubDisplayMedia()
+    visitRoom()
+    await screen.findByRole('region', { name: '會議室畫面' }, SLOW)
+    fireEvent.click(screen.getByRole('button', { name: '分享螢幕' }))
+    const room = sockets.at(-1)!
+    await waitFor(() => expect(room.sent).toContainEqual({ t: 'share' }))
+    act(() => room.onmessage?.({ data: JSON.stringify({ t: 'error', code: 'share_full' }) }))
+    expect(
+      await screen.findByText('已經有 3 個人在分享畫面，等其中一人停止後再試一次。'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows two shares: the latest big, the other in the strip; the viewer picks (e3-t07)', async () => {
+    await publishWei(['mic', 'screen'])
+    // Lin shares too, after Wei
+    const lin = sfu.createTransport()
+    await lin.connect()
+    const linScreen = await lin.publish({ kind: 'video' } as MediaStreamTrack, { kind: 'screen' })
+    extraMembers = {
+      l: {
+        id: 'l',
+        name: 'Lin',
+        joinedAt: 3,
+        reconnecting: false,
+        tracks: [{ ...linScreen, muted: false }],
+      },
+    }
+    roomShares = { w: { memberId: 'w', since: 5 }, l: { memberId: 'l', since: 7 } }
+    visitRoom()
+    const stage = await screen.findByRole('region', { name: '會議室畫面' }, SLOW)
+    await waitFor(() => expect(stage).toHaveAttribute('data-mode', 'share'), SLOW)
+    const main = () => stage.querySelector('[data-share]') as HTMLElement
+    // The latest share is big
+    expect(within(main()).getByRole('figure', { name: 'Lin 分享的畫面' })).toBeInTheDocument()
+    const picker = within(main()).getByRole('group', { name: '選擇主畫面要看誰的分享' })
+    expect(within(picker).getByRole('button', { name: 'Lin 的畫面' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    // Wei's is first in the strip, and brings itself to the main area
+    const strip = within(stage).getByRole('group', { name: '其他參與者' })
+    const weiShare = within(strip).getByRole('figure', { name: 'Wei 分享的畫面' })
+    fireEvent.click(within(weiShare).getByRole('button', { name: '在主畫面看 Wei 的畫面' }))
+    await waitFor(() =>
+      expect(within(main()).getByRole('figure', { name: 'Wei 分享的畫面' })).toBeInTheDocument(),
+    )
+    expect(
+      within(within(stage).getByRole('group', { name: '其他參與者' })).getByRole('figure', {
+        name: 'Lin 分享的畫面',
+      }),
+    ).toBeInTheDocument()
+    // Remembered for the session
+    expect(sessionStorage.getItem(`longtalk:mainShare:${ROOM_ID}`)).toBe('w')
+    // And from the picker back to Lin
+    fireEvent.click(
+      within(within(main()).getByRole('group', { name: '選擇主畫面要看誰的分享' })).getByRole(
+        'button',
+        { name: 'Lin 的畫面' },
+      ),
+    )
+    await waitFor(() =>
+      expect(within(main()).getByRole('figure', { name: 'Lin 分享的畫面' })).toBeInTheDocument(),
+    )
+    // Both shares are received: the main one asks for the screen's top layer once drawn big
+    const ours = [...sfu.transports].at(-1)!
+    await waitFor(() => expect(ours.subscriptions.size).toBeGreaterThanOrEqual(2), SLOW)
   })
 })
 

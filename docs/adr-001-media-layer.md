@@ -82,6 +82,7 @@ interface MediaTransport {
   unsubscribe(ref: TrackRef): Promise<void>
   setPreferredLayer(ref: TrackRef, layer: 'high' | 'medium' | 'low'): Promise<void>
   setTopLayer(trackName: string, top: 'high' | 'medium' | 'low'): Promise<void> // H3: HD
+  setShareMode(trackName: string, mode: 'text' | 'motion'): Promise<void> // H5: 文字／動態
   getUplink(trackName: string): Promise<UplinkStats> // H3: availableOutgoingBitrate, limitation
   getStats(): Promise<TransportStats> // rttMs, usingRelay, bytesSent, bytesReceived
   on(event: 'state' | 'track' | 'trackEnded', handler): () => void
@@ -96,6 +97,7 @@ interface MediaTransport {
 - 和 ARCHITECTURE §3 原本的清單相比：加了 `unsubscribe`、`on()`（回傳取消函式）與 `trackEnded` 事件；`stats` 事件拿掉，改由呼叫端每 2 秒 `getStats()`（`e2-t13` 決定節奏）。
 - **B2 加上 `replaceTrack`**：換掉已發布的軌實際送出的內容（換裝置），或送 null（靜音、關鏡頭）；`RTCRtpSender.replaceTrack`，不需要 SDP 交換，所以不經過協商佇列，訂閱者的訂閱不受影響。
 - **H3 加上 `setTopLayer` 與 `getUplink`**（`e6-t04`）：`setTopLayer` 用 `RTCRtpSender.setParameters` 開關已發布視訊的 simulcast 層（`medium`＝`f` 層 `active: false`，最低層一定留著；單層 sender 改成縮一半），不需要 SDP 交換，`replaceTrack` 之後照樣有效、重新發布時回到全開，由 `RoomMedia` 再套一次。`getUplink` 讀那條軌 sender 的 `outbound-rtp` `qualityLimitationReason`（送出中的層裡最差的）與選定 candidate-pair 的 `availableOutgoingBitrate`，給 HD 的上行檢查（`src/media/uplink.ts`）。H2 的 `getStats` 擴充若也帶這兩個值，可以合併成一個。
+- **H5 加上 `setShareMode`**（`e3-t06`）：已發布的分享換成文字或動態模式：軌的 `contentHint`、sender 的 `degradationPreference` 與每層的 `maxFramerate`／`maxBitrate`／`scaleResolutionDownBy`（`src/media/shareMode.ts`），一次 `setParameters`，不需要 SDP 交換；`setTopLayer` 的 `active` 照留。`replaceTrack` 換了來源（換一個畫面）之後新軌沒有 `contentHint`，`RoomMedia` 再呼叫一次。
 - `FakeTransport`（`src/media/FakeTransport.ts`）：同一個 `FakeSfu` 建出來的 transport 互相 publish／subscribe，`useRoomMedia`（`e2-t04`）的測試用它跑。
 
 ## 編碼參數（2026-11-03 實測後，`src/media/encoding.ts`）
@@ -223,6 +225,56 @@ interface MediaTransport {
 - **真的網路變差**（AC-2.7 要求兩台不同裝置）：門檻（5 % 丟包、10 秒、30 秒…）是依常見值訂的，`DEPLOY.md` §5 第 22 步用 Network Link Conditioner／clumsy 實測後再調。
 - Safari、Firefox 的統計欄位（`qualityLimitationReason`、`freezeCount`、`mid`、`active` 有的沒有）：沒有就當不知道，不會誤判成差，但也少了訊號。
 - 頻寬一直很低（例如 300 kbps）時下行會停在「建議純音訊」；音訊本身的頻寬（約 32–64 kbps × 人數）不在自適應裡。
+
+## 分享模式與多人分享（H5，2026-11-03，`e3-t06`–`e3-t09`，#H5PR）
+
+### 文字／動態（`src/media/shareMode.ts`）
+
+| | 文字（預設） | 動態 |
+| --- | --- | --- |
+| `contentHint` | `detail` | `motion` |
+| `degradationPreference` | `balanced`（D1 #21 的實測值：`maintain-resolution` 一有壓力就掉到 1–2 fps） | `maintain-framerate` |
+| `f` 層 | 擷取原尺寸（最高 1080p）、30 fps、2.5 Mbps | 最高 720p（`scaleResolutionDownBy` 依擷取的短邊算，不放大）、30 fps、2.5 Mbps |
+| `h` 層 | 一半、15 fps、600 kbps | 最高 360p、30 fps、600 kbps |
+
+- 擷取的約束兩種模式一樣（最高 1920×1080、30 fps）：切換只動編碼器，不重新擷取、不重新選畫面、不重新協商（`MediaTransport.setShareMode`）。
+- 模式在分享者的瀏覽器記到離開房間為止（下一次分享沿用），不送給 RoomDO。
+
+**本機量測**（2026-11-03，headless Chromium 同一頁兩條 RTCPeerConnection、VP8 單層、替身 1920×1080 canvas 30 fps、`maxBitrate` 當頻寬上限、熱身 12 秒後量 4 秒的 `outbound-rtp`；loopback 的頻寬估計從低處爬升，數字是相對比較，不是 Realtime 上的值）：
+
+| 內容 | 上限 | 文字：fps／解析度／QP | 動態：fps／解析度／QP |
+| --- | --- | --- | --- |
+| 影片般的畫面（漸層＋移動的圓） | 2.5 Mbps | 30／1920×1080／41 | 30／1280×720／**11** |
+| 同上 | 1 Mbps | 23／1920×1080／106（糊、方塊） | **30**／853×480／26 |
+| 整頁捲動的密集文字＋方塊（極端） | 1 Mbps | 10.5／1920×1080 | 30／320×180 |
+| 同上 | 500 kbps | 3.8／1920×1080 | 22.5／320×180 |
+| 靜止的文件（每秒一個游標閃爍） | 2.5 Mbps | 30／1920×1080，**73 kbps** | 30／1280×720，**1,314 kbps** |
+
+結論：文字模式守住解析度、壓力下降幀率，影片在 1 Mbps 只剩 23 fps 而且很糊；動態模式守住 30 fps、降解析度，同樣頻寬下畫質好得多（QP 低）。但**動態模式在靜止內容上多花十幾倍頻寬**（`motion` 關掉了 screencast 的靜止畫面最佳化），所以預設文字、只在內容持續在動時提示，不自動切換。
+
+### 動態內容提示
+
+- 分享時每秒從本機擷取一張 160 px 寬的小圖（`src/room/shareSampler.ts`：Chromium 用 `ImageCapture.grabFrame()`，分頁在背景也拿得到；其他瀏覽器用靜音的 `<video>`＋`requestVideoFrameCallback`），同一張也是簡報者檢視的縮圖。
+- 亮度變化超過 24（0–255）的像素超過 4% 算「這一秒在動」；最近 8 秒裡 6 秒在動就提示（`MotionMeter`）。打字、游標、換一張投影片不會觸發；捲動文件只動一兩秒。每個畫面只提示一次（按「不用」、切到動態、或平靜下來都算回答；換一個畫面後可以再提示）。
+- 沒有用 `outbound-rtp` 的統計判斷：Chrome 的螢幕擷取只在畫面變化時送幀，但幀率與 `qualityLimitationReason` 在頻寬受限時也會變，分不出「內容在動」與「網路不好」。
+
+### 多人同時分享（協定 v15）
+
+- `RoomInfo.shares`（以成員 id 為 key），最多 `MAX_SHARES` = 3 人；第四人回 `share_full`（誰的分享都不會被搶走）。權限表的 `shareScreen`、`stopShare` 不變；主持人、共同主持人可以停止任何一個分享，其他分享照常。v14 存的 `share` 讀成只有一筆的 `shares`。
+- 誰在主區是每個觀看者自己決定（`shared/layout.ts` `shareSlots`）：選過的人還在分享就是他，否則最新的分享；自己的分享永遠不在主區。其他分享排在側列最前面，點一下換到主區；兩個以上時主區右上有選擇鈕。選擇記在這個分頁的 sessionStorage。
+- **選層**：主區的分享畫得大，照 H1 的大小規則要 `f`；側列的小格要 `h`。預算（3.4 Mbps，依各層上限加總）在多個分享時常常「超過」：主區 `f` 2.5 Mbps＋側列 `h` 600 kbps×2＋4 個鏡頭的 `q` 就是 4.2 Mbps，照原本的規則會把主區降到 `h`（540p，文件讀不清楚）。H5 起**主區的分享（畫得最大的那個）在完整預算下不降層**：分享很少接近上限（靜止的畫面幾乎不花頻寬），而且那是觀看者正在看的；H2 因為丟包、卡頓降低預算之後才照常降。最壞情況（3 個分享、上限全滿）超過 AC-2.6 的 4 Mbps，那條 AC 是 8 人格狀、沒有分享。
+- 上行：每個分享者只送自己的一個分享，跟 H1 一樣。
+
+### 防鏡像遞迴（`src/media/share.ts` `selfCapture`）
+
+- 選擇器：`selfBrowserSurface: 'exclude'`（Chromium 不列出這個分頁）、`surfaceSwitching: 'include'`（分享中可以換分頁），D1 起就有。
+- 偵測三種：**別的會議分頁**（每個 LongTalk 分頁用 Capture Handle 宣告 `longtalk:<房號>`，只讓本站讀；分享的分頁帶這個 handle 就是）；**會議所在的視窗**（Firefox 的視窗軌 label 是視窗標題，含這頁的標題就是；Chrome 的 label 是 `window:…`，認不出來）；**整個螢幕**（`displaySurface: 'monitor'`，而且會議頁可見又有焦點連續 3 秒：大家看到的是會議室本身）。提醒在提示條下面，「換一個畫面」重新打開選擇器，選好後用同一條已發布的軌換來源（`replaceTrack`，大家的訂閱不變，分享不中斷）；「知道了」對這個畫面不再提醒。
+- 分享整個螢幕或偵測到會議本身時，簡報者縮圖不顯示（避免縮圖裡又有縮圖），改寫一行原因。
+
+### 沒有驗證的
+
+- 都還沒在 Realtime 上量：文字／動態在真實網路的差別、三個分享時每人的下行、動態內容提示在真的影片與投影片上會不會誤判（門檻在 `shareMode.ts`）。PR 預覽的 e2e 只確認兩人同時分享、主區 `f` 比側列 `h` 高、主持人停一個、切動態後畫面照常。
+- Capture Handle 只有 Chromium；Safari、Firefox 分享別的會議分頁時認不出來。
 
 ## 後果
 

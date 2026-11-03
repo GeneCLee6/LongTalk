@@ -273,7 +273,7 @@ describe('raised hands in the room (e5-t04)', () => {
           member('h', 'Gene', 'host'),
         ]}
         you="a"
-        sharerId={null}
+        sharerIds={[]}
         onAction={vi.fn()}
         onMuteAll={vi.fn()}
         onEndMeeting={vi.fn()}

@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_CLIENT_MESSAGE_CHARS,
   MAX_NAME_CHARS,
+  MAX_SHARES,
   PROTOCOL_VERSION,
   isClientId,
   isSessionToken,
   newSessionToken,
   normalizeName,
   parseClientMessage,
+  shareOrder,
   parseServerMessage,
   roomSocketPath,
   waitingQueue,
@@ -21,7 +23,7 @@ const state = {
     name: null,
     createdBy: null,
     startedAt: null,
-    share: null,
+    shares: {},
     locked: false,
     waitingRoom: false,
     passwordSetAt: null,
@@ -64,18 +66,22 @@ describe('protocol', () => {
     expect(parseClientMessage('{"t":"renameRoom"}')).toBeNull()
   })
 
-  it('parses share and unshare (D1)', () => {
-    expect(parseClientMessage('{"t":"share","takeOver":false}')).toEqual({
-      t: 'share',
-      takeOver: false,
-    })
-    expect(parseClientMessage('{"t":"share","takeOver":true}')).toEqual({
-      t: 'share',
-      takeOver: true,
-    })
-    expect(parseClientMessage('{"t":"share"}')).toBeNull()
-    expect(parseClientMessage('{"t":"share","takeOver":"yes"}')).toBeNull()
+  it('parses share and unshare (D1; no takeOver from H5)', () => {
+    expect(parseClientMessage('{"t":"share"}')).toEqual({ t: 'share' })
+    // A v14 browser's take-over flag means nothing now
+    expect(parseClientMessage('{"t":"share","takeOver":true}')).toEqual({ t: 'share' })
     expect(parseClientMessage('{"t":"unshare"}')).toEqual({ t: 'unshare' })
+  })
+
+  it('orders the shares by when they started, ties by member id (H5)', () => {
+    expect(shareOrder(undefined)).toEqual([])
+    const shares = {
+      c: { memberId: 'c', since: 5 },
+      a: { memberId: 'a', since: 9 },
+      b: { memberId: 'b', since: 5 },
+    }
+    expect(shareOrder(shares).map((s) => s.memberId)).toEqual(['b', 'c', 'a'])
+    expect(MAX_SHARES).toBe(3)
   })
 
   it('parses spotlight (G2): a member id, or null to end it', () => {
@@ -196,7 +202,7 @@ describe('protocol', () => {
       { t: 'snapshot', rev: 4, state },
       { t: 'patch', rev: 5, ops: [{ op: 'del', path: ['members', 'm1'] }] },
       { t: 'error', code: 'bad_message' },
-      { t: 'error', code: 'share_busy' },
+      { t: 'error', code: 'share_full' },
     ]
     for (const message of messages)
       expect(parseServerMessage(JSON.stringify(message))).toEqual(message)

@@ -4,6 +4,7 @@
 // Decision record: docs/adr-001-media-layer.md. No React in src/media/.
 
 import type { TrackKind } from '../../shared/protocol.ts'
+import type { ShareMode } from './shareMode.ts'
 
 /** What a published track is, as RoomDO and the UI care about it (defined with the protocol) */
 export type { TrackKind }
@@ -236,6 +237,15 @@ export interface MediaTransport {
    * for a track this transport did not publish.
    */
   setTopLayer(trackName: string, top: Layer): Promise<void>
+
+  /**
+   * How a published screen is encoded (e3-t06): 文字 (`text`: resolution first) or 動態
+   * (`motion`: frame rate first), media/shareMode.ts. Applied live (the track's contentHint and
+   * the sender's parameters, no renegotiation); kept across setTopLayer, and across replaceTrack
+   * except the new track's contentHint (call it again). Does nothing for a track that is not a
+   * screen; rejects with `not_found` for a track this transport did not publish.
+   */
+  setShareMode(trackName: string, mode: ShareMode): Promise<void>
 
   /**
    * Reads the connection's statistics (e2-t13): one call to the PeerConnection's getStats(),

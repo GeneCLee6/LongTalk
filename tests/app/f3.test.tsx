@@ -385,7 +385,7 @@ describe('the host dialogs and panel (e1-t15, e1-t16)', () => {
     ]
     const base = {
       members,
-      sharerId: null,
+      sharerIds: [],
       onAction: vi.fn(),
       onMuteAll: vi.fn(),
       onEndMeeting: vi.fn(),

@@ -24,7 +24,7 @@ class FakeRoom {
       name: null,
       createdBy: null,
       startedAt: null,
-      share: null,
+      shares: {},
       locked: false,
       waitingRoom: false,
       passwordSetAt: null,

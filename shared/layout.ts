@@ -464,3 +464,28 @@ export function holdSpeaker(
   if (elapsed >= holdMs) return { held: { id: wanted, since: now }, wait: 0 }
   return { held, wait: holdMs - elapsed }
 }
+
+/** The shares as one viewer shows them (H5, e3-t07): one in the main area, the rest in the strip */
+export interface ShareSlots {
+  /** The share in the main area; null when nobody else shares */
+  main: string | null
+  /** The other shares, for the strip, in the order they started */
+  strip: string[]
+}
+
+/**
+ * Which share takes the main area (e3-t07, AC-3.5): `sharers` in the order they started
+ * (shared/protocol.ts shareOrder), never our own (the presenter view shows it small, e3-t08).
+ * The viewer's choice while that member still shares; otherwise the latest share, so a new share
+ * comes to the front unless the viewer chose one. The rest go in the strip.
+ */
+export function shareSlots(
+  sharers: readonly string[],
+  you: string | null,
+  chosen: string | null,
+): ShareSlots {
+  const others = sharers.filter((id) => id !== you)
+  const main =
+    chosen !== null && others.includes(chosen) ? chosen : (others[others.length - 1] ?? null)
+  return { main, strip: others.filter((id) => id !== main) }
+}

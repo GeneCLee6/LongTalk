@@ -47,7 +47,7 @@ const room = {
   name: null,
   createdBy: null,
   startedAt: null,
-  share: null,
+  shares: {},
   locked: false,
   waitingRoom: false,
   passwordSetAt: null,
@@ -142,8 +142,8 @@ describe('RoomConnection', () => {
     socket.receive(welcome(1))
     const heard = vi.fn()
     const off = connection.onError(heard)
-    socket.receive({ t: 'error', code: 'share_busy' })
-    expect(heard).toHaveBeenCalledWith('share_busy')
+    socket.receive({ t: 'error', code: 'share_full' })
+    expect(heard).toHaveBeenCalledWith('share_full')
     off()
     socket.receive({ t: 'error', code: 'forbidden' })
     expect(heard).toHaveBeenCalledTimes(1)

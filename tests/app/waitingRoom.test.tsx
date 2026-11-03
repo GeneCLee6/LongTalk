@@ -34,7 +34,7 @@ function panel(you: string, overrides: Partial<Parameters<typeof ParticipantsPan
       person('p', 'Wei', 'participant'),
     ],
     you,
-    sharerId: null,
+    sharerIds: [],
     onAction: vi.fn(),
     onMuteAll: vi.fn(),
     onEndMeeting: vi.fn(),

@@ -11,11 +11,13 @@ import {
   JOIN_TIMEOUT_MS,
   MAX_MEMBERS,
   MAX_PENDING_SOCKETS,
+  MAX_SHARES,
   PROTOCOL_VERSION,
   RECONNECT_GRACE_MS,
   STALE_AFTER_MS,
   SWEEP_INTERVAL_MS,
   WAIT_TIMEOUT_MS,
+  shareOrder,
   viewAsJson,
   type RoomInfo,
   type RoomView,
@@ -39,7 +41,7 @@ const INFO = {
   name: null,
   createdBy: null,
   startedAt: null,
-  share: null,
+  shares: {},
   locked: false,
   waitingRoom: false,
   passwordSetAt: null,
@@ -1010,15 +1012,14 @@ describe('RoomHost names (e1-t05)', () => {
   })
 })
 
-describe('RoomHost screen share (e3-t02): one sharer, take-over, host stop', () => {
+describe('RoomHost screen shares (e3-t02, e3-t07): up to MAX_SHARES at once, host stop', () => {
   let t: ReturnType<typeof setup>
   beforeEach(() => {
     t = setup()
     t.host.create(ROOM)
   })
 
-  const share = (conn: string, takeOver = false) =>
-    t.host.message(conn, JSON.stringify({ t: 'share', takeOver }))
+  const share = (conn: string) => t.host.message(conn, JSON.stringify({ t: 'share' }))
   const tracks = (conn: string, sessionId: string, kinds: string[]) =>
     t.host.message(
       conn,
@@ -1030,6 +1031,7 @@ describe('RoomHost screen share (e3-t02): one sharer, take-over, host stop', () 
     )
   const kinds = (view: RoomView | null, id: string) =>
     view!.members[id].tracks.map((track) => track.kind)
+  const sharers = (view: RoomView | null) => shareOrder(view!.room.shares).map((s) => s.memberId)
   /** Three members with SFU sessions; Gene is the host */
   function three() {
     const a = t.join('Gene')
@@ -1041,13 +1043,13 @@ describe('RoomHost screen share (e3-t02): one sharer, take-over, host stop', () 
     return { a, b, c }
   }
 
-  it('grants the share to the first member who asks, and tells everyone', () => {
+  it('grants the share to a member who asks, and tells everyone', () => {
     const { a, b } = three()
     t.tick(7)
     share(b.conn)
     const granted = { memberId: b.id, since: t.now() }
-    expect(a.client.view!.room.share).toEqual(granted)
-    expect((t.saved.room as RoomInfo).share).toEqual(granted)
+    expect(a.client.view!.room.shares).toEqual({ [b.id]: granted })
+    expect((t.saved.room as RoomInfo).shares).toEqual({ [b.id]: granted })
     tracks(b.conn, 'sb', ['mic', 'cam', 'screen'])
     expect(kinds(a.client.view, b.id)).toEqual(['mic', 'cam', 'screen'])
     // Asking again changes nothing (a resend after a reconnect)
@@ -1056,83 +1058,126 @@ describe('RoomHost screen share (e3-t02): one sharer, take-over, host stop', () 
     expect(a.client.received).toHaveLength(before)
   })
 
-  it('refuses a second sharer with share_busy unless they confirmed taking over', () => {
+  it('lets several members share at once, in the order they started', () => {
     const { a, b, c } = three()
     share(b.conn)
     tracks(b.conn, 'sb', ['mic', 'screen'])
+    t.tick(5)
     share(c.conn)
-    expect(c.client.received.at(-1)).toEqual({ t: 'error', code: 'share_busy' })
-    expect(a.client.view!.room.share?.memberId).toBe(b.id)
-    // Confirmed: the share moves in one patch, and the previous sharer's screen goes with it
-    const rev = a.client.rev
-    share(c.conn, true)
-    expect(a.client.rev).toBe(rev + 1)
-    expect(a.client.view!.room.share?.memberId).toBe(c.id)
-    expect(kinds(a.client.view, b.id)).toEqual(['mic'])
+    tracks(c.conn, 'sc', ['mic', 'screen', 'screenAudio'])
+    expect(sharers(a.client.view)).toEqual([b.id, c.id])
+    // Nobody's screen was taken away
+    expect(kinds(a.client.view, b.id)).toEqual(['mic', 'screen'])
+    expect(kinds(a.client.view, c.id)).toEqual(['mic', 'screen', 'screenAudio'])
+    expect(b.client.received.some((m) => m.t === 'error')).toBe(false)
+    expect(c.client.received.some((m) => m.t === 'error')).toBe(false)
   })
 
-  it('drops a screen listed by a member who does not hold the share', () => {
+  it('refuses a share past MAX_SHARES with share_full, and grants it once one ends', () => {
     const { a, b, c } = three()
+    const d = t.join('小美')
+    t.host.bindSfu(d.token, 'sd')
+    expect(MAX_SHARES).toBe(3)
+    share(a.conn)
+    share(b.conn)
+    share(c.conn)
+    share(d.conn)
+    expect(d.client.received.at(-1)).toEqual({ t: 'error', code: 'share_full' })
+    expect(sharers(a.client.view)).toEqual([a.id, b.id, c.id])
+    t.host.message(b.conn, '{"t":"unshare"}')
+    t.tick(1)
+    share(d.conn)
+    expect(sharers(a.client.view)).toEqual([a.id, c.id, d.id])
+  })
+
+  it('drops a screen listed by a member who does not share', () => {
+    const { a, b } = three()
     tracks(b.conn, 'sb', ['mic', 'screen'])
     expect(kinds(a.client.view, b.id)).toEqual(['mic'])
     share(b.conn)
-    share(c.conn, true)
-    // B's list from before it saw the take-over must not bring its screen back
+    t.host.stopShare(a.id, b.id)
+    // B's list from before it saw the stop must not bring its screen back
     tracks(b.conn, 'sb', ['mic', 'screen', 'screenAudio'])
     expect(kinds(a.client.view, b.id)).toEqual(['mic'])
   })
 
-  it('ends the share on unshare, on leave, and once the sharer is gone for good', () => {
+  it('ends a share on unshare, on leave, and once the sharer is gone for good', () => {
     const { a, b, c } = three()
     share(b.conn)
     tracks(b.conn, 'sb', ['mic', 'screen'])
-    // Someone else's unshare does nothing
-    t.host.message(c.conn, '{"t":"unshare"}')
-    expect(a.client.view!.room.share?.memberId).toBe(b.id)
+    t.tick(1)
+    share(c.conn)
+    // An unshare from someone who does not share does nothing
+    t.host.message(a.conn, '{"t":"unshare"}')
+    expect(sharers(a.client.view)).toEqual([b.id, c.id])
     t.host.message(b.conn, '{"t":"unshare"}')
-    expect(a.client.view!.room.share).toBeNull()
+    expect(sharers(a.client.view)).toEqual([c.id])
     expect(kinds(a.client.view, b.id)).toEqual(['mic'])
 
-    share(c.conn)
     t.host.message(c.conn, '{"t":"leave"}')
-    expect(a.client.view!.room.share).toBeNull()
+    expect(a.client.view!.room.shares).toEqual({})
 
     share(b.conn)
     // Reconnecting keeps the share; gone for RECONNECT_GRACE_MS ends it
     t.host.closed(b.conn)
-    expect(a.client.view!.room.share?.memberId).toBe(b.id)
+    expect(sharers(a.client.view)).toEqual([b.id])
     t.tick(RECONNECT_GRACE_MS + SWEEP_INTERVAL_MS)
     t.host.message(a.conn, 'ping')
     t.host.sweep()
     expect(a.client.view!.members[b.id]).toBeUndefined()
-    expect(a.client.view!.room.share).toBeNull()
+    expect(a.client.view!.room.shares).toEqual({})
   })
 
-  it('keeps the share across the object being evicted', () => {
-    const { a, b } = three()
+  it('keeps the shares across the object being evicted, and reads a room stored before v15', () => {
+    const { a, b, c } = three()
     share(b.conn)
+    t.tick(1)
+    share(c.conn)
     const woken = setup('w')
     woken.host.restore(t.saved.room as RoomInfo, t.saved.rev, t.saved.sessions, [
       { conn: a.conn, openedAt: woken.now() },
       { conn: b.conn, openedAt: woken.now() },
     ])
-    expect(woken.host.view().room.share?.memberId).toBe(b.id)
+    expect(sharers(woken.host.view())).toEqual([b.id, c.id])
     // A stored share whose member is gone is dropped
     const stale = setup('s')
-    stale.host.restore({ ...INFO, share: { memberId: 'nobody', since: 1 } }, 3, [], [])
-    expect(stale.host.view().room.share).toBeNull()
+    stale.host.restore(
+      { ...INFO, shares: { nobody: { memberId: 'nobody', since: 1 } } } as RoomInfo,
+      3,
+      [],
+      [],
+    )
+    expect(stale.host.view().room.shares).toEqual({})
+    // v14 stored one `share`: it becomes the only entry of `shares`
+    const old = setup('o')
+    const { shares: _none, ...v14 } = t.saved.room as RoomInfo
+    old.host.restore(
+      { ...v14, share: { memberId: b.id, since: 9 } } as unknown as RoomInfo,
+      t.saved.rev,
+      t.saved.sessions,
+      [{ conn: b.conn, openedAt: old.now() }],
+    )
+    expect(old.host.view().room.shares).toEqual({ [b.id]: { memberId: b.id, since: 9 } })
+    expect('share' in old.host.view().room).toBe(false)
   })
 
-  it('lets the host stop anyone’s share (the entry point F1 puts on the wire), nobody else', () => {
+  it('lets the host stop anyone’s share and only that one; nobody else may', () => {
     const { a, b, c } = three()
     share(b.conn)
     tracks(b.conn, 'sb', ['mic', 'screen'])
+    t.tick(1)
+    share(c.conn)
+    tracks(c.conn, 'sc', ['mic', 'screen'])
     expect(t.host.stopShare(c.id, b.id)).toBe(false)
-    expect(t.host.stopShare(a.id, c.id)).toBe(false)
-    expect(a.client.view!.room.share?.memberId).toBe(b.id)
+    expect(t.host.stopShare(a.id, a.id)).toBe(false)
+    expect(sharers(a.client.view)).toEqual([b.id, c.id])
     expect(t.host.stopShare(a.id, b.id)).toBe(true)
-    expect(c.client.view!.room.share).toBeNull()
+    expect(sharers(c.client.view)).toEqual([c.id])
     expect(kinds(c.client.view, b.id)).toEqual(['mic'])
+    expect(kinds(b.client.view, c.id)).toEqual(['mic', 'screen'])
+    // A sharer may stop its own
+    expect(t.host.stopShare(c.id, c.id)).toBe(true)
+    expect(a.client.view!.room.shares).toEqual({})
   })
 
   it('refuses to start a share in an audio-only month', () => {
@@ -1140,13 +1185,13 @@ describe('RoomHost screen share (e3-t02): one sharer, take-over, host stop', () 
     t.host.setUsage('audioOnly')
     share(b.conn)
     expect(b.client.received.at(-1)).toEqual({ t: 'error', code: 'audio_only' })
-    expect(a.client.view!.room.share).toBeNull()
+    expect(a.client.view!.room.shares).toEqual({})
   })
 
-  it('refuses a share message of the wrong shape', () => {
-    const { b } = three()
-    t.host.message(b.conn, JSON.stringify({ t: 'share' }))
-    expect(b.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+  it('takes a share message in a v14 browser’s shape too (takeOver is ignored)', () => {
+    const { a, b } = three()
+    t.host.message(b.conn, JSON.stringify({ t: 'share', takeOver: true }))
+    expect(sharers(a.client.view)).toEqual([b.id])
   })
 })
 
@@ -1366,7 +1411,7 @@ describe('RoomHost host controls (F1, e1-t07)', () => {
 
   it('refuses every control from a participant, and changes nothing', () => {
     const { a, b, c } = three()
-    t.host.message(b.conn, JSON.stringify({ t: 'share', takeOver: false }))
+    t.host.message(b.conn, JSON.stringify({ t: 'share' }))
     const before = structuredClone(a.client.view)
     for (const action of ['muteMember', 'camOff', 'stopShare', 'remove']) {
       host(c.conn, action, a.id)
@@ -1421,23 +1466,23 @@ describe('RoomHost host controls (F1, e1-t07)', () => {
 
   it('stops a share (RoomHost.stopShare on the wire) and tells the sharer', () => {
     const { a, b, c } = three()
-    t.host.message(b.conn, JSON.stringify({ t: 'share', takeOver: false }))
+    t.host.message(b.conn, JSON.stringify({ t: 'share' }))
     publish(b, 'sb', ['mic', 'cam', 'screen'])
     host(a.conn, 'stopShare', c.id)
     expect(notices(c.client)).toEqual([])
     host(a.conn, 'stopShare', b.id)
-    expect(c.client.view!.room.share).toBeNull()
+    expect(c.client.view!.room.shares).toEqual({})
     expect(c.client.view!.members[b.id].tracks.map((track) => track.kind)).toEqual(['mic', 'cam'])
     expect(notices(b.client)).toEqual([{ t: 'notice', notice: 'shareStopped', by: a.id }])
   })
 
   it('removes a member: closed with `removed`, gone for everyone, its share with it', () => {
     const { a, b, c } = three()
-    t.host.message(b.conn, JSON.stringify({ t: 'share', takeOver: false }))
+    t.host.message(b.conn, JSON.stringify({ t: 'share' }))
     host(a.conn, 'remove', b.id)
     expect(b.client.closed).toEqual({ code: CloseCode.removed, reason: 'removed' })
     expect(c.client.view!.members[b.id]).toBeUndefined()
-    expect(c.client.view!.room.share).toBeNull()
+    expect(c.client.view!.room.shares).toEqual({})
     expect(t.host.banList).toEqual([{ client: 'browser-xiaojie-0000', until: t.now() + BAN_MS }])
     expect(t.saved.bans).toEqual(t.host.banList)
     // Its session is over: the SFU proxy no longer knows its token
@@ -1621,7 +1666,7 @@ describe('RoomHost lock and waiting room (F2, e1-t09, e1-t10)', () => {
     // Chat, sharing and host controls are refused (worker/roles.ts)
     t.host.message(c.conn, JSON.stringify({ t: 'chat', text: 'hi' }))
     expect(c.client.received.at(-1)).toEqual(forbidden)
-    t.host.message(c.conn, JSON.stringify({ t: 'share', takeOver: false }))
+    t.host.message(c.conn, JSON.stringify({ t: 'share' }))
     expect(c.client.received.at(-1)).toEqual(forbidden)
     host(c.conn, { action: 'admit', memberId: c.id })
     expect(c.client.received.at(-1)).toEqual(forbidden)

@@ -7,9 +7,13 @@ import { zhTW as strings } from '../src/i18n/zh-TW.ts'
 // apart, and must each see and hear the other two through the real Realtime SFU (three, because
 // two never showed the lost-video races fixed after C1); muting and turning the camera off must
 // show on the other side, and turning them back on must bring the media back. Then screen sharing
-// (D1): one member shares, the others see the share in the main area and hear its sound (D2);
-// the sharer turns the sound off from the bar and the others hear silence; another takes over
-// after the question; the share stops from the bar and everyone is back in the gallery. Before
+// (D1): one member shares, the others see the share in the main area and hear its sound (D2),
+// and the sharer sees a small preview on the bar (H5); the sharer turns the sound off from the
+// bar and the others hear silence; a second member shares at the same time (H5): the third sees
+// the latest share big and the other in the strip, brings the first to the main area and picks
+// the second again from the picker (the big one at a higher layer); the host stops the first
+// share from the participants panel; the second switches to 動態 and stops from the bar, and
+// everyone is back in the gallery. Before
 // the media checks, chat (D3): one member sends a message with a link, the others see the unread
 // badge, open the chat and find it there. Then the host controls (F1): the host mutes a member
 // from the participants panel (the member is told, and its own browser turns the microphone
@@ -248,6 +252,16 @@ const shareVideo = (viewer: Member, sharer: Member) =>
   viewer.page
     .getByRole('figure', { name: strings.screenShare.region(sharer.name) })
     .getByLabel(strings.screenShare.region(sharer.name), { exact: true })
+
+/** The share in `viewer`'s main area (H5: one of several) */
+const mainShare = (viewer: Member) =>
+  stage(viewer).locator('[data-share]').getByRole('figure').first()
+
+/** `sharer`'s share in `viewer`'s strip (H5: the shares not in the main area) */
+const stripShare = (viewer: Member, sharer: Member) =>
+  stage(viewer)
+    .getByRole('group', { name: strings.stage.strip })
+    .getByRole('figure', { name: strings.screenShare.region(sharer.name) })
 
 /** Frames `viewer` decoded of `sharer`'s screen in one second (0 when there is none) */
 async function shareFramesPerSecond(viewer: Member, sharer: Member): Promise<number> {
@@ -502,8 +516,14 @@ interop(
         await expect(
           bob.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
         ).toBeVisible()
-        // Bob is not shown his own screen (no endless mirror): he keeps the gallery
+        // Bob is not shown his own screen big (no endless mirror): he keeps the gallery, and
+        // his bar has a small preview drawn from his own capture (the presenter view, e3-t08)
         await expect(stage(bob)).toHaveAttribute('data-mode', 'grid')
+        await expect(
+          bob.page
+            .getByRole('region', { name: strings.screenShare.youAreSharing })
+            .getByRole('img', { name: strings.screenShare.preview }),
+        ).toBeVisible()
         await expectSeesShare(alice, bob)
         await expectSeesShare(carol, bob)
         // The share's sound, apart from Bob's microphone (muted above): both hear it
@@ -541,28 +561,110 @@ interop(
       },
     )
 
-    await interop.step('Carol takes over after the question: Bob stops sharing', async () => {
-      await toolbarButton(carol, strings.toolbar.share).click()
-      const dialog = carol.page.getByRole('alertdialog', {
-        name: strings.screenShare.takeOverTitle,
-      })
-      await expect(dialog).toContainText(bob.name)
-      await dialog.getByRole('button', { name: strings.screenShare.takeOver }).click()
-      await expect(
-        carol.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
-      ).toBeVisible()
-      await expect(
-        bob.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
-      ).toHaveCount(0)
-      await expect(toolbarButton(bob, strings.toolbar.share)).toBeVisible()
-      await expectSeesShare(alice, carol)
-      await expectSeesShare(bob, carol)
-      // Bob's share took its sound with it; Carol's has its own
-      await expect(alice.page.locator(`audio[data-share-audio="${bob.name}"]`)).toHaveCount(0)
-      await expect
-        .poll(() => sharePeak(alice, carol), { message: "Alice hears the sound of Carol's share" })
-        .toBeGreaterThan(AUDIBLE)
-    })
+    await interop.step(
+      'Carol shares too: both shares are on, the latest in the main area (H5, e3-t07)',
+      async () => {
+        await toolbarButton(carol, strings.toolbar.share).click()
+        await expect(
+          carol.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
+        ).toBeVisible()
+        // Nobody was asked to take over, and Bob still shares
+        await expect(carol.page.getByRole('alertdialog')).toHaveCount(0)
+        await expect(
+          bob.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
+        ).toBeVisible()
+        // Alice: Carol's (the latest) big, Bob's in the strip; Bob and Carol see each other's
+        await expect(mainShare(alice)).toHaveAccessibleName(strings.screenShare.region(carol.name))
+        await expect(stripShare(alice, bob)).toBeVisible()
+        await expectSeesShare(alice, carol)
+        await expectSeesShare(bob, carol)
+        await expectSeesShare(carol, bob)
+        // Both shares' sounds play for Alice
+        for (const sharer of [bob, carol]) {
+          await expect
+            .poll(() => sharePeak(alice, sharer), {
+              message: `Alice hears the sound of ${sharer.name}'s share`,
+            })
+            .toBeGreaterThan(AUDIBLE)
+        }
+      },
+    )
+
+    await interop.step(
+      "Alice brings Bob's share to the main area, then picks Carol's again (e3-t07)",
+      async () => {
+        await stripShare(alice, bob)
+          .getByRole('button', { name: strings.screenShare.showMain(bob.name) })
+          .click()
+        await expect(mainShare(alice)).toHaveAccessibleName(strings.screenShare.region(bob.name))
+        await expect(stripShare(alice, carol)).toBeVisible()
+        await mainShare(alice)
+          .getByRole('group', { name: strings.screenShare.picker })
+          .getByRole('button', { name: strings.screenShare.label(carol.name) })
+          .click()
+        await expect(mainShare(alice)).toHaveAccessibleName(strings.screenShare.region(carol.name))
+        // Layers (H1): the main share comes in at the screen's top layer, the strip's at half
+        await expect
+          .poll(
+            async () => {
+              const height = (sharer: Member) =>
+                shareVideo(alice, sharer).evaluate((v: HTMLVideoElement) => v.videoHeight)
+              const [main, strip] = await Promise.all([height(carol), height(bob)])
+              return strip > 0 && main > strip
+            },
+            {
+              message: "Alice receives Carol's share (main) taller than Bob's (strip)",
+              timeout: 30_000,
+            },
+          )
+          .toBe(true)
+      },
+    )
+
+    await interop.step(
+      "Alice (the host) stops Bob's share from the participants panel; Carol's goes on (F1, H5)",
+      async () => {
+        await toolbarButton(alice, strings.toolbar.participantsCount(3)).click()
+        const panel = alice.page.getByRole('complementary', { name: strings.participants.title })
+        await panel.getByRole('button', { name: strings.participants.actions(bob.name) }).click()
+        await alice.page.getByRole('menuitem', { name: strings.participants.stopShare }).click()
+        await expect(
+          bob.page.getByText(
+            strings.hostNotice.shareStopped(
+              strings.hostNotice.actor(strings.participants.host, 'Alice'),
+            ),
+          ),
+          'Bob is told who stopped his share',
+        ).toBeVisible()
+        await expect(
+          bob.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
+        ).toHaveCount(0)
+        await expect(toolbarButton(bob, strings.toolbar.share)).toBeVisible()
+        await expect(stripShare(alice, bob)).toHaveCount(0)
+        await expect(alice.page.locator(`audio[data-share-audio="${bob.name}"]`)).toHaveCount(0)
+        await expectSeesShare(alice, carol)
+        await expectSeesShare(bob, carol)
+        // The panel closes again (the later steps open it)
+        await toolbarButton(alice, strings.toolbar.participantsCount(3)).click()
+        await expect(panel).toHaveCount(0)
+      },
+    )
+
+    await interop.step(
+      'Carol switches to 動態 on her bar: her share goes on (e3-t06)',
+      async () => {
+        const modes = carol.page
+          .getByRole('region', { name: strings.screenShare.youAreSharing })
+          .getByRole('group', { name: strings.screenShare.mode })
+        await modes.getByRole('button', { name: strings.screenShare.modeMotion }).click()
+        await expect(
+          modes.getByRole('button', { name: strings.screenShare.modeMotion }),
+        ).toHaveAttribute('aria-pressed', 'true')
+        await expect
+          .poll(() => shareFramesPerSecond(alice, carol))
+          .toBeGreaterThanOrEqual(SHARE_FRAMES_PER_SECOND)
+      },
+    )
 
     await interop.step('Carol stops from the bar: everyone is back in the gallery', async () => {
       await carol.page
