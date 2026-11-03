@@ -19,7 +19,7 @@
 | `src/strings.ts` | 介面文字的唯一入口：目前語言的字典、`setLocale`、`Intl` 日期時間；字典本身在 `src/i18n/zh-TW.ts`、`en.ts` | 在模組層級存字典的一部分（`const text = strings.room` 會凍結成開頁時的語言） |
 
 - **伺服器把關**：權限、房間狀態、錄影與同意，只在 RoomDO 判斷；前端只是按鈕。
-- **DRY**：顏色只在 `styles/tokens.ts`；介面文字只在 `strings.ts`。
+- **DRY**：顏色只在 `styles/tokens.ts`；介面文字只在 `strings.ts`。`npm run lint` 會擋（G5，`scripts/literals.ts`）：`src/` 的程式碼（註解不算）裡有中文字或全形標點、顏色字面值（`#rgb`、`rgb()`、`hsl()`）、JSX 標籤之間的文字、`aria-label`／`title`／`placeholder`／`alt`／`label` 的字面文字就失敗；字典、`tokens.ts`、`brand.ts` 除外，真的需要的那一行在行尾寫 `// literal-ok: <理由>`。
 - **lazy**：會議室頁是獨立 chunk；白板、背景模糊、錄影、標註都要 `lazy()`，不能進首頁或會議室的初始 JS。
 
 ### 介面文字與語言（G1，`e4-t15`）
@@ -30,6 +30,15 @@
 - 日期時間用 `strings.ts` 的 `formatClock`、`formatDateTime`、`formatDay`（`Intl`），不要 `toLocaleString('zh-TW')` 寫死。
 - 測試預設繁中（`tests/setupLocale.ts` 把 jsdom 的瀏覽器語言設成 zh-TW，`tests/setup.ts` 每個測試前 `setLocale('zh-TW', false)`）；要測英文就在測試裡 `setLocale('en', false)`。
 - 靜態的 `index.html`、manifest、OG 圖只用中文字典（`src/brand.ts`）。
+
+### 無障礙（G5，`e4-t14`）
+
+- 圖示鈕的名稱用 `aria-label`，而且**看得到的字要出現在名稱裡**（WCAG 2.5.3：「放行」鈕叫「放行 Bob 進入會議室」，不是「讓 Bob 進來」）；徽章的數字用 CSS 畫（`data-count`），數字寫在名稱裡（「參與者（3 人）」）。
+- 狀態不只靠顏色：靜音、說話、舉手、等候、錯誤都要有圖示或文字（toast 依語氣有不同圖示）。
+- 會變的狀態要讓螢幕閱讀器知道，但不要吵：一直在頁面上的 live region（toast 的 `role="status"`、會議室的 `useAnnouncer`），**不要**用「出現時才掛上去的 `role="status"`」（常常念不出來）；說話中的變化不念。格子的名字就是名字，狀態（主持人、麥克風、鏡頭、舉手、釘選…）放在 `aria-describedby`。
+- 每個操作都要能用鍵盤：自訂的按鈕、選單、抽屜用 `button`／`role="menu"`，Esc 關、焦點回原處；只在 hover 出現的按鈕在 `:focus-within` 時也要出現。焦點外框用全域的 `:focus-visible`（`color.focus`，2 px），不要 `outline: none`。
+- 動畫在 `prefers-reduced-motion` 時要停（`GlobalStyle` 全域處理；JS 的動畫看 `useReducedMotion`）。
+- 新的畫面或打開的狀態（對話框、抽屜）加進 `e2e/local/a11y.spec.ts`，axe 一個違規都不能有；顏色 token 的對比在 `tests/tokensContrast.test.ts`。
 
 ## 2. 程式風格
 

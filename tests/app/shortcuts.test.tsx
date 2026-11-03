@@ -300,7 +300,7 @@ describe('shortcuts in the room (e4-t13)', () => {
     await within(toolbar).findByRole('button', { name: '解除靜音' })
     await press({ key: ' ', code: 'Space' })
     expect(await within(toolbar).findByRole('button', { name: '靜音' })).toBeInTheDocument()
-    expect(screen.getByText('按住說話中…')).toBeInTheDocument()
+    expect(screen.getByText('按住說話中…', { selector: 'p' })).toBeInTheDocument()
     // The key repeats while held: still talking
     await press({ key: ' ', code: 'Space', repeat: true })
     expect(within(toolbar).getByRole('button', { name: '靜音' })).toBeInTheDocument()

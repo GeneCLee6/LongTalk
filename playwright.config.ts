@@ -18,6 +18,8 @@ if (!baseURL) {
 
 export default defineConfig({
   testDir: 'e2e',
+  // e2e/local runs without a deployment (playwright.local.config.ts)
+  testIgnore: 'local/**',
   forbidOnly: !!process.env.CI,
   // One retry absorbs a cold Durable Object or SFU hiccup; a second failure is a real failure
   retries: process.env.CI ? 1 : 0,

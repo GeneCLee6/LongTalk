@@ -8,6 +8,7 @@ import { TextInput } from '../components/Field.tsx'
 import { OfflineIcon } from '../components/icons.tsx'
 import { InstallPrompt } from '../components/InstallPrompt.tsx'
 import { LanguageSelect } from '../components/LanguageSelect.tsx'
+import { ThemeSelect } from '../components/ThemeSelect.tsx'
 import { Logo } from '../components/Logo.tsx'
 import { useOnline } from '../pwa/online.ts'
 import { strings } from '../strings.ts'
@@ -46,7 +47,10 @@ export function HomePage() {
     <Page>
       <Top>
         <Logo size={30} />
-        <LanguageSelect />
+        <Preferences>
+          <ThemeSelect />
+          <LanguageSelect />
+        </Preferences>
       </Top>
       <Hero>
         <h1>{strings.tagline}</h1>
@@ -119,6 +123,13 @@ const Top = styled.header`
   @media (max-width: ${breakpoint.phone}) {
     padding: ${space(4)};
   }
+`
+
+const Preferences = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: ${space(2)} ${space(4)};
 `
 
 const Hero = styled.section`

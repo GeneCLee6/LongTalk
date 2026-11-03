@@ -58,7 +58,7 @@ describe('ParticipantsPanel: lock and waiting room (F2, e1-t11)', () => {
     const rows = within(queue).getAllByRole('listitem')
     expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual(['阿明', '阿華'])
     expect(within(rows[1]).getByText('重新連線中')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '讓 阿明 進入會議室' }))
+    fireEvent.click(screen.getByRole('button', { name: '放行 阿明 進入會議室' }))
     expect(p.onAdmit).toHaveBeenCalledWith('x')
     fireEvent.click(screen.getByRole('button', { name: '拒絕 阿華 進入' }))
     expect(p.onDeny).toHaveBeenCalledWith('y')
@@ -132,12 +132,14 @@ describe('Toolbar and TopBar (F2)', () => {
   it('counts who waits on the participants button, in its name too', () => {
     toolbar(2)
     const button = screen.getByRole('button', { name: '參與者（3 人，2 人在等候室）' })
-    expect(button).toHaveTextContent('2')
+    expect(button.querySelector('[data-count]')).toHaveAttribute('data-count', '2')
   })
 
   it('counts the members when nobody waits', () => {
     toolbar(0)
-    expect(screen.getByRole('button', { name: '參與者（3 人）' })).toHaveTextContent('3')
+    expect(
+      screen.getByRole('button', { name: '參與者（3 人）' }).querySelector('[data-count]'),
+    ).toHaveAttribute('data-count', '3')
   })
 
   it('shows the padlock to everyone while the room is locked', () => {

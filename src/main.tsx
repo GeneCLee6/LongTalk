@@ -4,7 +4,11 @@ import { App } from './App.tsx'
 import { startPwa } from './pwa/pwa.ts'
 import { takePasswordFromUrl } from './room/roomPassword.ts'
 import { GlobalStyle } from './styles/GlobalStyle.ts'
+import { applyTheme } from './styles/theme.ts'
 import { installTelemetry } from './telemetry.ts'
+
+// A light or dark page chosen before (G5, AC-4.8), before anything is drawn
+applyTheme()
 
 // A link's ?pwd= (F3, e1-t15) leaves the address bar before telemetry or the app can see it
 takePasswordFromUrl()

@@ -16,3 +16,16 @@ export type Widen<T> = T extends string
         : T
 
 export type Strings = Widen<typeof zhTW>
+
+/** What a tile says about its member besides the name (G5, e4-t14; `room.tileState`) */
+export interface TileState {
+  host: boolean
+  cohost: boolean
+  micMuted: boolean
+  camOff: boolean
+  /** Their place in the raised-hand queue, 1 first; null when the hand is down */
+  hand: number | null
+  pinned: boolean
+  spotlighted: boolean
+  reconnecting: boolean
+}

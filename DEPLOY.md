@@ -45,6 +45,7 @@ LongTalk 是**一個 Cloudflare Worker**：同一個 Worker 回答 `/api/*`、�
 | --- | --- | --- |
 | `ci.yml` | 每次 push、每個 PR | `npm ci` → lint → typecheck → test → build → JS 預算（首頁 ≤ 150 kB、會議室 ≤ 350 kB gzip）。全綠才可合併（AC-11.2） |
 | `preview.yml` | PR 開啟、更新 | 部署 `longtalk-pr-<號>`（`CLOUDFLARE_ENV=preview`），smoke test，把網址留言在 PR；接著 `e2e` job 在這個預覽跑三個瀏覽器的互通測試（§7）；PR 關閉時刪除該 Worker 與它的資料 |
+| `ui.yml`（`UI checks`） | 每個 PR、`main` 的 push、手動 | 在 Playwright 的 Docker image 裡 build＋`vite preview`：`a11y`（axe 與鍵盤、Lighthouse 無障礙 ≥ 0.95）、`visual`（12 張基準截圖）；不是必過的檢查（§7） |
 | `deploy.yml` | CI 在 `main` 綠了之後 | 部署正式站 `longtalk`，smoke test 確認它正在提供這個 commit |
 
 smoke test（`scripts/smoke.sh`）檢查：首頁 `<meta name="app-version">` 是這個 commit、`/api/health` 回這個 commit、`/r/<id>` 回 200（SPA fallback）、品牌檔案（§9），以及 `/sw.js` 是 JavaScript、`Cache-Control: no-cache`、`appVersion` 是這個 commit、預先快取清單裡沒有 `/api`（§10）。
@@ -230,9 +231,15 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
     - **離線殼**：裝好的 App（或開過一次首頁的瀏覽器）關掉 Wi-Fi 與行動網路再打開：首頁照樣出現，寫「你目前離線…」；點一個房間連結：「你目前離線」＋「再試一次」，打開網路後**自己重試**、進到預先加入頁。
     - **新版本**：開著一個房間（電腦與手機都在裡面），合併任何改到程式的 PR（部署完成後）：幾分鐘內或切回分頁時，兩邊左下角出現「有新版本。重新整理後會直接回到這場會議…」卡片，**通話不會自己中斷**；按「稍後」卡片消失、繼續開會；離開會議回首頁時（換頁）才自動換新版。另一台按「重新整理」：約幾秒回到同一場會議、同一格。只改文件的 PR 合併後**不應該**出現卡片。
     - **快捷鍵**（電腦）：在房間裡按 M（靜音／解除）、V、C（聊天打開）、在聊天框打字 m、v、空白不觸發、Esc 關聊天、P、R（舉手）、?（清單）、L（先問「要離開會議室嗎？」）；用注音輸入法在聊天框選字時按空白或 Enter 不觸發。靜音時**按住空白鍵**：另一台聽得到、名牌的紅色麥克風消失，放開立即靜音；按住時切到別的視窗也會恢復靜音。Ctrl／Cmd＋C、V、R、L 這些照舊是瀏覽器的。把滑鼠移到工具列按鈕上，提示寫「靜音（M）」。
-    - 把裝置的系統、瀏覽器版本與結果寫進 PR；安裝與 standalone 三台都通過才勾 AC-4.7（AC-4.9 還要 G5 的 Lighthouse）。
+    - 把裝置的系統、瀏覽器版本與結果寫進 PR；安裝與 standalone 三台都通過才勾 AC-4.7（AC-4.9 的其餘部分在第 19 步）。
 
-19. **Simulcast 與選層（H1，AC-2.6）**：一台電腦（Chrome 或 Edge）、一支手機（Android Chrome 與 iPhone Safari 各試一次更好），再湊到 **8 人**（另一台電腦開私密視窗或 headless bot 都可以，但至少兩台是不同的真實裝置；bot 不要放在你自己那台電腦，它們會吃掉 CPU 與上行）。電腦另開一個分頁 `chrome://webrtc-internals`（看 `inbound-rtp` 的 `frameHeight`、`bytesReceived_in_bits/s`，與 candidate-pair 的 `bytesReceived_in_bits/s`）：
+19. **無障礙快速檢查（G5，AC-4.9、AC-4.10 之外的人工部分）**：一台 Mac（Safari＋VoiceOver，⌘F5 開關）或 iPhone（設定 › 輔助使用 › VoiceOver），一台 Windows（Chrome 或 Edge＋[NVDA](https://www.nvaccess.org/)，免費），各 10 分鐘；另一台裝置在房間裡當對方：
+    - **只用鍵盤開一場會**（電腦，不碰滑鼠）：首頁 Tab 到「開一間房」Enter → 預先加入頁游標在名字欄、打名字 Enter 進房 → Tab 依序經過頂部條、格子的「釘選」鈕（Tab 到時才出現）、工具列；每個焦點都看得到藍綠色外框；M、V、空白鍵按住說話；「反應」Enter 開選擇器、方向鍵選、Enter 送出、Esc 關；「參與者」Enter → Tab 到對方的「⋯」Enter 開選單、方向鍵選「靜音」、Esc 關選單後焦點回到「⋯」；? 開快捷鍵清單、Esc 關；L 離開。過程中**沒有卡住出不來的地方**（對話框、抽屜裡 Tab 只在裡面繞，Esc 一定關得掉）。
+    - **VoiceOver／NVDA**：首頁念得出標題「開著就不會斷的會議室」與每個按鈕的名稱；預先加入頁的名字欄念「你的名字」；進房後移到對方的格子念「名字」加狀態（例如「主持人，麥克風已關，鏡頭沒開」），**對方說話時不會一直插話**；按 M 念「麥克風已關閉／已開啟」；對方舉手、你被主持人靜音、有人在等候室時念出提示（一次，不重複）；按住空白鍵念「按住說話中…」、放開念「已恢復靜音」；工具列「參與者」念「參與者（2 人）」、聊天有未讀時念「聊天（1 則未讀）」。
+    - **外觀**：首頁右上「外觀」選「深色」／「淺色」：整頁立刻換、重新整理還在；選「跟隨系統」回到系統的；進房一律深色。系統設定「減少動態效果」打開：抽屜不滑動、反應不飄、換頁直接跳。
+    - 把裝置、螢幕閱讀器版本與結果寫進 PR；都通過才勾 AC-4.9（Lighthouse 與 axe 由 `UI checks` 擋）。
+
+20. **Simulcast 與選層（H1，AC-2.6）**：一台電腦（Chrome 或 Edge）、一支手機（Android Chrome 與 iPhone Safari 各試一次更好），再湊到 **8 人**（另一台電腦開私密視窗或 headless bot 都可以，但至少兩台是不同的真實裝置；bot 不要放在你自己那台電腦，它們會吃掉 CPU 與上行）。電腦另開一個分頁 `chrome://webrtc-internals`（看 `inbound-rtp` 的 `frameHeight`、`bytesReceived_in_bits/s`，與 candidate-pair 的 `bytesReceived_in_bits/s`）：
     - **發布**：電腦的 `outbound-rtp` 有三條 video，`rid` 是 `f`／`h`／`q`，大約 1280×720、640×360、320×180（鏡頭本身做不到 720p 時會少一層，正常）；手機也是三條（iPhone Safari 若只有一條，寫進結果：Safari 拒絕 simulcast 時退回一層，別人照樣看得到）。開始分享：分享的 `outbound-rtp` 兩條（原尺寸與一半）。
     - **8 人格狀**：電腦視窗開到一般大小，等 20 秒：每個格子的 `frameHeight` 大多是 **360**（格子比 360 行小），candidate-pair 的接收 **≤ 4 Mbps**（AC-2.6 的數字）。把視窗拉到全螢幕：格子變大時有的會換到 720（其他會降，總量仍 ≤ 4 Mbps）；拉回去後過幾秒換回 360。
     - **大格與條帶**：釘選一個人：幾秒內他的 `frameHeight` 變 **720**，下方條帶的人變 **180**（降層可能要 10 秒左右）。取消釘選：回到 360。
@@ -292,6 +299,30 @@ PW_CHANNEL=chrome BASE_URL=… npm run test:e2e   # 用已安裝的 Chrome，不
 `BASE_URL` 必須是有 SFU secret 的部署（PR 預覽或正式站）；`npm run dev` 的本機 Worker 沒有 secret，媒體連不上。`npm test`（Vitest）只跑 `tests/`，不會撿到 `e2e/`。
 
 **是不是必過的檢查**：目前不是（`main` 的保護只要求 `CI / verify`）。它依賴 Cloudflare 與 SFU secret，fork 的 PR 也不會跑；穩定跑過幾個 PR 後，可以在分支保護加上 Preview workflow 的 `e2e`（略過時算通過）。
+
+### 不需要部署的檢查：無障礙與視覺回歸（G5，`e4-t14`、`e4-t17`）
+
+`.github/workflows/ui.yml`（`UI checks`）在每個 PR 與 `main` 上跑，**不用 Cloudflare 帳號**：`npm run build` 之後用 `vite preview` 在 workerd 裡跑整個 Worker（API、Durable Objects、靜態資產），房間照常運作，只是沒有 Realtime SFU（會議室顯示「媒體伺服器尚未設定」）。兩個 job 都在 **Playwright 的 Docker image**（`mcr.microsoft.com/playwright:v1.64.0-noble`，版本要和 `package.json` 的 `@playwright/test` 一樣；升級 Playwright 時兩處一起改，並重做基準截圖）裡跑，字型與繪製每次一樣。設定在 `playwright.local.config.ts`，測試在 `e2e/local/`。
+
+- **`a11y`**：`e2e/local/a11y.spec.ts` 用 axe-core（`@axe-core/playwright`，WCAG 2.2 A／AA＋best practice）掃首頁（深淺色、錯誤訊息）、預先加入、`/admin`、會議室（兩人）、聊天側欄、參與者面板與對某人的選單、反應選擇器、「更多」、快捷鍵清單、離開確認、手機的會議室與抽屜、等候室（等候者與主持人的名單）、離開後畫面、密碼與改名對話框、英文介面；**一個違規就失敗**。另外用鍵盤走一遍：名字欄先有焦點、Enter 進房、Tab 到格子的「釘選」、反應選擇器、參與者選單（Esc 後焦點回原處）、每個可聚焦的元素都有 2 px 外框。接著 `scripts/lighthouse.ts`（`npm run lighthouse`）用 Lighthouse 13 量首頁、預先加入（navigation）與會議室（加入後 snapshot）在桌機與手機的無障礙分數，**任何一個 < 0.95 就失敗**；分數表在這次 run 的 Summary，HTML 報告在 `a11y` artifact。2026-11-03（#30）CI：六個都是 1.00。
+- **`visual`**：`e2e/local/visual.spec.ts` 截首頁、預先加入、會議室 × 淺色／深色 × 桌機（1280×800）／手機（390×844）共 12 張，和 `e2e/local/__screenshots__/` 的基準比（差異超過 0.1% 像素就失敗）。為了每次都一樣：假鏡頭換成一張靜止畫面、假麥克風是靜音（`e2e/local/fakeMedia.ts` 產生的 Y4M 與 WAV，`--use-file-for-fake-*-capture`），名字固定（Ada），`reducedMotion: reduce`＋截圖時停掉動畫、藏游標，會變的東西蓋掉（房間代碼、會議時鐘、以檔案路徑命名的鏡頭選單），預先加入頁等「沒有偵測到聲音」出現後才截（固定 6 秒後）。會議室一律深色，所以它的淺色截圖是在確認「系統是淺色時會議室仍是深色」。
+- **不是必過的檢查**：`main` 的保護仍只要求 `CI / verify`。這兩個 job 沒有外部依賴、跑過幾次都很穩，觀察幾個 PR 後可以在分支保護加上 `UI checks / a11y` 與 `UI checks / visual`。
+
+**更新視覺基準**（介面本來就要變的時候）：
+
+1. 推上分支，`visual` 失敗時會上傳兩個 artifact：`visual-diff`（每張變了的截圖的 expected／actual／diff，看看是不是只變了該變的）與 `visual-baselines`（整套新的基準）。
+2. 確認變化是對的之後：`gh run download <run id> -n visual-baselines -D e2e/local/__screenshots__`（覆蓋舊檔），commit、推上去，`visual` 就會過。
+3. 想直接要一套新的（例如升級 Playwright 後）：Actions › UI checks › Run workflow，勾 `update`（這個 workflow 在 `main` 上才能手動跑）；或在有 Docker 的機器上：`docker run --rm --ipc=host -v "$PWD":/work -w /work mcr.microsoft.com/playwright:v1.64.0-noble bash -c "npm ci && npm run build && npx playwright test -c playwright.local.config.ts visual.spec.ts --update-snapshots"`。**不要用 Windows 或 Mac 產生的截圖當基準**（字型與反鋸齒不同，CI 一定失敗）；在非 Linux 上 `visual` 預設略過（`VISUAL=1` 可以強制跑，只用來看畫面）。
+
+**本機跑**：
+
+```bash
+npx playwright install chromium        # 第一次
+npm run build && npm run test:ui       # axe、鍵盤（visual 在 Windows／Mac 上略過）
+npx vite preview --port 4173 &  npm run lighthouse   # 另一個終端機也可以
+```
+
+`test:ui` 自己會起 `vite preview`（本機已經有一個在 4173 就直接用它）。**改了程式要重新 build**，而且已經開著的 `vite preview` 要關掉重開：它不會看到新的檔案（舊的 workerd 程序還在時，頁面的 JS 會回 `text/html`、畫面一片空白）。
 
 ## 8. 最小遙測與 `/admin`（e11-t03，D3）
 

@@ -25,7 +25,7 @@ coverage
 
 tmp/
 
-# Playwright visual tests: results and reports (the baselines in tests/visual/__screenshots__ are kept)
+# Playwright: results and reports (the visual baselines in e2e/local/__screenshots__ are kept)
 test-results/
 playwright-report/
 
@@ -40,3 +40,6 @@ playwright-report/
 # Local Claude Code session data; never committed
 .claude/
 
+
+# Lighthouse reports (scripts/lighthouse.ts)
+lighthouse-report/
