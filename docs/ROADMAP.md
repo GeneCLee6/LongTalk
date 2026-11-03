@@ -77,7 +77,7 @@ worktree 開分支、只讀需要的段落、lint+typecheck+test+build 只看最
 | [x] G1 | `e4-t09` `e4-t15` | 預先加入完整版（喇叭測試、裝置記憶、等候室畫面、權限教學）、i18n 繁中／英文 · #27 | F2 |
 | [x] G2 | `e4-t10` `e4-t11` | 演講者版面與釘選、聚光燈、隱藏自己、隱藏無視訊者 · #24 | F1 |
 | [x] G3 | `e5-t03` `e5-t04` `e4-t16` | 表情反應、舉手與排序、音效 · #26 | F1 |
-| [ ] G4 | `e4-t12` `e4-t13` | PWA（manifest、service worker、安裝與新版本提示）、鍵盤快捷鍵與按住說話 | G1 |
+| [x] G4 #28 | `e4-t12` `e4-t13` | PWA（manifest、service worker、安裝與新版本提示）、鍵盤快捷鍵與按住說話 | G1 |
 | [ ] G5 | `e4-t14` `e4-t17` | 無障礙（焦點、aria、Lighthouse 進 CI）、Playwright 視覺回歸 | G4 |
 
 ## Phase H · M1 品質（E2、E6、E3）

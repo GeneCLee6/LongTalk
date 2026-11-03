@@ -7,6 +7,9 @@ import { ShareTile } from '../../src/components/ShareTile.tsx'
 import { SharingBar } from '../../src/components/SharingBar.tsx'
 import { Stage } from '../../src/components/Stage.tsx'
 import { strings } from '../../src/strings.ts'
+import { preloadRoomPage } from './preloadRoom.ts'
+
+preloadRoomPage()
 
 /** A ResizeObserver the test drives (as in Stage.test.tsx) */
 class FakeResizeObserver {

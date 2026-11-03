@@ -13,6 +13,8 @@ export interface ReactionsButtonProps {
   handUp: boolean
   onReact: (emoji: Reaction) => void
   onToggleHand: () => void
+  /** The raise-hand key (G4, e4-t13), shown on 舉手 / 放下手 */
+  handShortcut?: string
 }
 
 /**
@@ -22,7 +24,12 @@ export interface ReactionsButtonProps {
  * phone it is a bottom sheet that closes after each choice, so the stage is visible again for
  * the float. While our hand is up the button shows the hand, in amber.
  */
-export function ReactionsButton({ handUp, onReact, onToggleHand }: ReactionsButtonProps) {
+export function ReactionsButton({
+  handUp,
+  onReact,
+  onToggleHand,
+  handShortcut,
+}: ReactionsButtonProps) {
   const sheet = usePhoneLayout() !== null
   const [open, setOpen] = useState(false)
   const panelId = useId()
@@ -96,6 +103,15 @@ export function ReactionsButton({ handUp, onReact, onToggleHand }: ReactionsButt
       <Hand
         type="button"
         aria-pressed={handUp}
+        aria-keyshortcuts={handShortcut}
+        title={
+          handShortcut
+            ? strings.shortcuts.tooltip(
+                handUp ? strings.reactions.lower : strings.reactions.raise,
+                handShortcut,
+              )
+            : undefined
+        }
         $up={handUp}
         $sheet={sheet}
         onClick={() => {

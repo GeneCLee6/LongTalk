@@ -43,10 +43,12 @@ import {
 import { MemberAudio } from '../components/MemberAudio.tsx'
 import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
+import { OfflineScreen } from '../components/OfflineScreen.tsx'
 import { ParticipantsPanel, type RoleChange } from '../components/ParticipantsPanel.tsx'
 import { PreJoin, type PasswordFieldProps } from '../components/PreJoin.tsx'
 import type { PermissionGuideProps } from '../components/PermissionGuide.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
+import { ShortcutsDialog } from '../components/ShortcutsDialog.tsx'
 import { ShareTile } from '../components/ShareTile.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
 import { Stage } from '../components/Stage.tsx'
@@ -101,6 +103,8 @@ import { useRoomConnection } from '../room/useRoomConnection.ts'
 import { useRoomTelemetry } from '../room/useRoomTelemetry.ts'
 import type { LocalTracks } from '../room/RoomMedia.ts'
 import { useRoomMedia } from '../room/useRoomMedia.ts'
+import { useRoomShortcuts } from '../room/useRoomShortcuts.ts'
+import { useOnline } from '../pwa/online.ts'
 import type { ShareNotice } from '../room/ScreenShare.ts'
 import { useScreenShare } from '../room/useScreenShare.ts'
 import { copyRoomLink, roomUrl, shareRoomLink, type LinkOutcome } from '../room/shareLink.ts'
@@ -281,6 +285,19 @@ function PreJoinGate({
 }) {
   const [summary, setSummary] = useState<Summary>(LOADING)
   const [attempt, setAttempt] = useState(0)
+  const retry = () => {
+    setSummary(LOADING)
+    setAttempt((n) => n + 1)
+  }
+  // Opened offline (the app shell, e4-t12): try again as soon as the network is back
+  const online = useOnline()
+  const offlineError = summary.status === 'error' && !online
+  const [waitedOffline, setWaitedOffline] = useState(false)
+  if (offlineError && !waitedOffline) setWaitedOffline(true)
+  if (online && waitedOffline) {
+    setWaitedOffline(false)
+    retry()
+  }
   useEffect(() => {
     let cancelled = false
     getRoom(roomId).then(
@@ -308,6 +325,7 @@ function PreJoinGate({
       cancelled = true
     }
   }, [roomId, attempt])
+  if (offlineError) return <OfflineScreen onRetry={retry} />
   switch (summary.status) {
     case 'loading':
       return <p role="status">{strings.room.connecting}</p>
@@ -318,10 +336,7 @@ function PreJoinGate({
         <TurnedAwayScreen
           reason="locked"
           roomName={strings.room.title(roomId)}
-          onRetry={() => {
-            setSummary(LOADING)
-            setAttempt((n) => n + 1)
-          }}
+          onRetry={retry}
           onHome={onHome}
         />
       )
@@ -790,6 +805,10 @@ function Room({
       checked: prefs.sounds,
       onSelect: () => updatePrefs({ sounds: !prefs.sounds }),
     },
+    // The list of keyboard shortcuts (G4, e4-t13), where there is a keyboard layout
+    ...(phone === null
+      ? [{ id: 'shortcuts', label: strings.shortcuts.menu, onSelect: () => setShortcutsOpen(true) }]
+      : []),
     // 更多 › 語言 (G1, e4-t15): each language named in itself; switching keeps the call going
     ...LOCALES.map((which) => ({
       id: `language-${which}`,
@@ -1067,6 +1086,58 @@ function Room({
   })
   const speaker = useHeldSpeaker(pickSpeaker(shown.ids, state.you, lastHeard), shown.ids)
   const focus = stageFocus(shown.ids, pinnedId, spotlight, speaker)
+  // Who could take over from us: connected members in the meeting, the room's own pick first
+  const successors = members
+    .filter((member) => member.id !== state.you && !member.reconnecting)
+    .sort((a, b) => successorOrder(a) - successorOrder(b) || a.joinedAt - b.joinedAt)
+
+  // Keyboard shortcuts and push-to-talk (G4, e4-t13): only in the room itself. 離開 from the
+  // keyboard asks first (a host is asked who takes over, as with the button)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [confirmLeave, setConfirmLeave] = useState(false)
+  const micBusy = !local.ready || local.mic.opening
+  const talking = useRoomShortcuts({
+    enabled: inRoom,
+    micOn: local.mic.on,
+    micBusy,
+    setMic: (on) => void devices?.setOn('mic', on),
+    onAction: (action) => {
+      switch (action) {
+        case 'mic':
+          if (micBusy) return false
+          void devices?.setOn('mic', !local.mic.on)
+          return
+        case 'cam':
+          if (!local.ready || local.cam.opening) return false
+          toggleCam()
+          return
+        case 'share':
+          if (!screenShareSupported) return false
+          onToggleShare()
+          return
+        case 'chat':
+          togglePanel('chat')
+          return
+        case 'participants':
+          togglePanel('participants')
+          return
+        case 'hand':
+          onToggleHand()
+          return
+        case 'leave':
+          if (role === 'host' && successors.length > 0) setLeaving(true)
+          else setConfirmLeave(true)
+          return
+        case 'help':
+          setShortcutsOpen(true)
+          return
+        case 'close':
+          if (panel === null) return false
+          setPanel(null)
+          return
+      }
+    },
+  })
 
   if (gone || outcome) {
     return (
@@ -1109,10 +1180,6 @@ function Room({
     media.error !== 'unauthorized'
   const mediaProblem = mediaLost ? null : mediaErrorText(media.error)
   const selfReconnecting = state.status === 'reconnecting' || media.status === 'reconnecting'
-  // Who could take over from us: connected members in the meeting, the room's own pick first
-  const successors = members
-    .filter((member) => member.id !== state.you && !member.reconnecting)
-    .sort((a, b) => successorOrder(a) - successorOrder(b) || a.joinedAt - b.joinedAt)
   const onLeave = () => {
     if (role === 'host' && successors.length > 0) {
       setLeaving(true)
@@ -1272,6 +1339,7 @@ function Room({
                   {strings.common.retry}
                 </Button>
               )}
+              {talking && <Note role="status">{strings.shortcuts.talking}</Note>}
               {inRoom && media.status === 'connecting' && (
                 <Note>{strings.room.mediaConnecting}</Note>
               )}
@@ -1330,10 +1398,11 @@ function Room({
           onLeave={onLeave}
           micOn={local.mic.on}
           camOn={local.cam.on}
-          micBusy={!local.ready || local.mic.opening}
+          micBusy={micBusy}
           camBusy={!local.ready || local.cam.opening}
           onToggleMic={() => void devices?.setOn('mic', !local.mic.on)}
           onToggleCam={toggleCam}
+          shortcuts={phone === null}
           devices={local.devices}
           selected={{
             mic: trackDevice(local.mic.track) ?? local.chosen.mic,
@@ -1394,6 +1463,20 @@ function Room({
             onEndMeeting()
           }}
           onCancel={() => setLeaving(false)}
+        />
+      )}
+      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+      {confirmLeave && (
+        <ConfirmDialog
+          title={strings.shortcuts.leaveTitle}
+          body={strings.shortcuts.leaveBody}
+          confirmLabel={strings.shortcuts.leave}
+          onConfirm={() => {
+            setConfirmLeave(false)
+            leave()
+            onLeft('left', title)
+          }}
+          onCancel={() => setConfirmLeave(false)}
         />
       )}
       {renaming === 'room' && (

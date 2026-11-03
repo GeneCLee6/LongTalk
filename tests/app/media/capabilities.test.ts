@@ -37,7 +37,10 @@ function fullBrowser(): CapabilityEnv {
     RTCRtpSender,
     HTMLMediaElement,
     AudioContext: class {},
+    onbeforeinstallprompt: null,
     navigator: {
+      serviceWorker: {},
+      standalone: false,
       mediaDevices: new MediaDevices(),
       clipboard: { writeText() {} },
       share() {},

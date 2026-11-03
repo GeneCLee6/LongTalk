@@ -39,6 +39,18 @@ export interface Capabilities {
    * permissions, so it can tell a system block from a browser one and retry once allowed
    */
   permissions: boolean
+  /** navigator.serviceWorker (G4): the app shell opens offline and says when a new version is out */
+  serviceWorker: boolean
+  /**
+   * The `beforeinstallprompt` event (G4, Chromium): the home page's 「安裝 LongTalk」 button opens
+   * the browser's own install dialog
+   */
+  installPrompt: boolean
+  /**
+   * navigator.standalone (G4: iOS and iPadOS Safari, which have no install dialog): the home page
+   * shows a one-time hint 「分享 › 加入主畫面」 instead
+   */
+  homeScreenHint: boolean
 }
 
 export type Capability = keyof Capabilities
@@ -57,6 +69,9 @@ export const CAPABILITIES: readonly Capability[] = [
   'clipboard',
   'webShare',
   'permissions',
+  'serviceWorker',
+  'installPrompt',
+  'homeScreenHint',
 ]
 
 /** Where detection looks: the browser's globals, or a stand-in in tests */
@@ -65,7 +80,10 @@ export interface CapabilityEnv {
   RTCRtpSender?: { prototype: object }
   HTMLMediaElement?: { prototype: object }
   AudioContext?: unknown
+  onbeforeinstallprompt?: unknown
   navigator?: {
+    serviceWorker?: object | null
+    standalone?: boolean
     mediaDevices?: object | null
     clipboard?: object | null
     share?: unknown
@@ -126,6 +144,24 @@ export function canQueryPermissions(env: CapabilityEnv = browser()): boolean {
   return has(env.navigator?.permissions, 'query')
 }
 
+/** Whether a service worker can keep the app shell (navigator.serviceWorker; HTTPS or localhost) */
+export function canUseServiceWorker(env: CapabilityEnv = browser()): boolean {
+  return !!env.navigator?.serviceWorker
+}
+
+/** Whether the browser offers its own install dialog (`beforeinstallprompt`: Chromium) */
+export function canPromptInstall(env: CapabilityEnv = browser()): boolean {
+  return 'onbeforeinstallprompt' in (env as object)
+}
+
+/**
+ * Whether this is the browser that installs from its share sheet, 「加入主畫面」 (iOS and iPadOS
+ * Safari: the only ones with navigator.standalone)
+ */
+export function hasHomeScreenHint(env: CapabilityEnv = browser()): boolean {
+  return typeof env.navigator?.standalone === 'boolean'
+}
+
 /** Everything at once (the doc's table, for this browser) */
 export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities {
   const devices = env.navigator?.mediaDevices
@@ -143,5 +179,8 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     clipboard: canCopy(env),
     webShare: canWebShare(env),
     permissions: canQueryPermissions(env),
+    serviceWorker: canUseServiceWorker(env),
+    installPrompt: canPromptInstall(env),
+    homeScreenHint: hasHomeScreenHint(env),
   }
 }

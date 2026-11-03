@@ -15,6 +15,7 @@
 | `src/pages/` | 組合：取狀態、接路由 | 樣式細節以外的規則判斷 |
 | `src/components/` | 展示與互動 | 直接呼叫 API 或 WebSocket（由 props 傳入 callback） |
 | `src/styles/tokens.ts` | 顏色、字體、間距 | — |
+| `src/pwa/`（G4） | service worker 的規則與 handler（`swRouting.ts`、`swWorker.ts`、`sw.ts`，`scripts/swPlugin.ts` 打包成 `/sw.js`），頁面端的註冊、新版本與安裝（`pwa.ts`、`update.ts`、`install.ts`） | app 匯入 `swRouting.ts`／`swWorker.ts`（只有 `sw.ts` 能匯入，型別除外）；service worker 碰 `/api/*` |
 | `src/strings.ts` | 介面文字的唯一入口：目前語言的字典、`setLocale`、`Intl` 日期時間；字典本身在 `src/i18n/zh-TW.ts`、`en.ts` | 在模組層級存字典的一部分（`const text = strings.room` 會凍結成開頁時的語言） |
 
 - **伺服器把關**：權限、房間狀態、錄影與同意，只在 RoomDO 判斷；前端只是按鈕。

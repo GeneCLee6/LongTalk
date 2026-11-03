@@ -555,6 +555,51 @@ export const zhTW = {
     body: '可能是網路中斷，或 LongTalk 剛更新。重新整理後就能繼續。',
     reload: '重新整理',
   },
+  // The app shell (G4, e4-t12): the install offer (home page only), new versions, offline
+  pwa: {
+    installLabel: '安裝 App',
+    installTitle: '安裝 LongTalk',
+    installBody: '裝到電腦或手機，下次從桌面或主畫面一鍵開會。',
+    install: '安裝',
+    installDismiss: '不用了',
+    iosTitle: '把 LongTalk 加到主畫面',
+    iosBody: '在 Safari 點「分享」，再選「加入主畫面」，下次就能像 App 一樣打開。',
+    iosDismiss: '知道了',
+    updateLabel: '新版本',
+    update: '有新版本，重新整理就能使用。',
+    // In a meeting: reloading goes straight back in (the session token, AC-1.2)
+    updateRoom: '有新版本。重新整理後會直接回到這場會議，也可以等會議結束再說。',
+    updateReload: '重新整理',
+    updateLater: '稍後',
+    offlineTitle: '你目前離線',
+    offlineHome: '你目前離線。連上網路後才能開房或加入會議室。',
+    offlineRoom: '進會議室需要網路。連上網路後會自動再試一次。',
+  },
+  // Keyboard shortcuts and push-to-talk (G4, e4-t13): the list (?, 更多), tooltips, confirms
+  shortcuts: {
+    title: '鍵盤快捷鍵',
+    menu: '鍵盤快捷鍵…',
+    // A button's tooltip with its key: 「靜音（M）」
+    tooltip: (label: string, key: string) => `${label}（${key}）`,
+    space: '空白鍵',
+    hint: '游標在輸入框（例如聊天）裡打字時，快捷鍵不會作用。',
+    actions: {
+      mic: '靜音／解除靜音',
+      pushToTalk: '靜音時按住說話，放開就恢復靜音',
+      cam: '開啟／關閉視訊',
+      share: '分享螢幕／停止分享',
+      chat: '打開／關閉聊天',
+      participants: '打開／關閉參與者',
+      hand: '舉手／放下手',
+      leave: '離開會議室（會先確認）',
+      help: '顯示這份清單',
+      close: '關閉聊天或參與者',
+    },
+    talking: '按住說話中…',
+    leaveTitle: '要離開會議室嗎？',
+    leaveBody: '離開後可以從同一個連結再加入。',
+    leave: '離開',
+  },
   // The top bar (e4-t06): room name, elapsed time, copy link
   topBar: {
     label: '會議室資訊',

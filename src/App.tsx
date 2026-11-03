@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { LoadFailedBoundary } from './components/LoadFailed.tsx'
+import { UpdatePrompt } from './components/UpdatePrompt.tsx'
 import { HomePage } from './pages/HomePage.tsx'
 import { useLocale } from './strings.ts'
 
@@ -26,6 +27,8 @@ export function App() {
           </Routes>
         </Suspense>
       </LoadFailedBoundary>
+      {/* 「有新版本，重新整理」 (e4-t12): never a reload by itself, a toast-like card in the room */}
+      <UpdatePrompt />
     </BrowserRouter>
   )
 }

@@ -314,3 +314,19 @@ export function GlobeIcon() {
     </svg>
   )
 }
+
+export function InstallIcon() {
+  return (
+    <svg {...common}>
+      <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+    </svg>
+  )
+}
+
+export function OfflineIcon() {
+  return (
+    <svg {...common}>
+      <path d="M2 8.8a15 15 0 0 1 4.2-2.7M22 8.8A15 15 0 0 0 10.7 5M5.5 12.5a10 10 0 0 1 3-1.9M18.5 12.5a10 10 0 0 0-2.1-1.5M9 16a5 5 0 0 1 6 0M12 20h.01M3 3l18 18" />
+    </svg>
+  )
+}
