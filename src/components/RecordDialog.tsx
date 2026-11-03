@@ -57,68 +57,69 @@ export default function RecordDialog({ initial, formats, onStart, onCancel }: Re
         aria-labelledby={titleId}
         aria-describedby={bodyId}
         onKeyDown={onKeyDown}
-        onSubmit={submit}
       >
-        <h2 id={titleId}>{text.dialogTitle}</h2>
-        <p id={bodyId}>{text.dialogBody}</p>
-        <Group>
-          <legend>{text.content}</legend>
-          <Choice>
-            <input
-              type="radio"
-              name={contentName}
-              checked={!settings.audioOnly}
-              onChange={() => update({ audioOnly: false })}
-            />
-            {text.videoAndAudio}
-          </Choice>
-          <Choice>
-            <input
-              type="radio"
-              name={contentName}
-              checked={settings.audioOnly}
-              disabled={formats.audio === null}
-              onChange={() => update({ audioOnly: true })}
-            />
-            {text.audioOnly}
-          </Choice>
-        </Group>
-        <Group disabled={settings.audioOnly}>
-          <legend>{text.resolution}</legend>
-          {resolutions.map(({ value, label }) => (
-            <Choice key={value}>
+        <Body onSubmit={submit}>
+          <h2 id={titleId}>{text.dialogTitle}</h2>
+          <p id={bodyId}>{text.dialogBody}</p>
+          <Group>
+            <legend>{text.content}</legend>
+            <Choice>
               <input
                 type="radio"
-                name={resolutionName}
-                checked={settings.resolution === value}
-                onChange={() => update({ resolution: value })}
+                name={contentName}
+                checked={!settings.audioOnly}
+                onChange={() => update({ audioOnly: false })}
               />
-              {label}
+              {text.videoAndAudio}
             </Choice>
-          ))}
-        </Group>
-        <div>
-          <Choice $disabled={settings.audioOnly}>
-            <input
-              type="checkbox"
-              checked={settings.includeSelf}
-              disabled={settings.audioOnly}
-              aria-describedby={selfHint}
-              onChange={() => update({ includeSelf: !settings.includeSelf })}
-            />
-            {text.includeSelf}
-          </Choice>
-          <Hint id={selfHint}>{text.includeSelfHint}</Hint>
-        </div>
-        {format && <Hint>{text.format(containerType(format))}</Hint>}
-        <Actions>
-          <Button type="button" variant="secondary" onClick={onCancel}>
-            {strings.common.cancel}
-          </Button>
-          <Button type="submit" autoFocus>
-            {text.confirm}
-          </Button>
-        </Actions>
+            <Choice>
+              <input
+                type="radio"
+                name={contentName}
+                checked={settings.audioOnly}
+                disabled={formats.audio === null}
+                onChange={() => update({ audioOnly: true })}
+              />
+              {text.audioOnly}
+            </Choice>
+          </Group>
+          <Group disabled={settings.audioOnly}>
+            <legend>{text.resolution}</legend>
+            {resolutions.map(({ value, label }) => (
+              <Choice key={value}>
+                <input
+                  type="radio"
+                  name={resolutionName}
+                  checked={settings.resolution === value}
+                  onChange={() => update({ resolution: value })}
+                />
+                {label}
+              </Choice>
+            ))}
+          </Group>
+          <div>
+            <Choice $disabled={settings.audioOnly}>
+              <input
+                type="checkbox"
+                checked={settings.includeSelf}
+                disabled={settings.audioOnly}
+                aria-describedby={selfHint}
+                onChange={() => update({ includeSelf: !settings.includeSelf })}
+              />
+              {text.includeSelf}
+            </Choice>
+            <Hint id={selfHint}>{text.includeSelfHint}</Hint>
+          </div>
+          {format && <Hint>{text.format(containerType(format))}</Hint>}
+          <Actions>
+            <Button type="button" variant="secondary" onClick={onCancel}>
+              {strings.common.cancel}
+            </Button>
+            <Button type="submit" autoFocus>
+              {text.confirm}
+            </Button>
+          </Actions>
+        </Body>
       </Panel>
     </Backdrop>
   )
@@ -134,9 +135,7 @@ const Backdrop = styled.div`
   background: ${color.overlay};
 `
 
-const Panel = styled.form`
-  display: grid;
-  gap: ${space(3)};
+const Panel = styled.div`
   width: min(100%, 440px);
   max-height: 100%;
   overflow: auto;
@@ -157,6 +156,12 @@ const Panel = styled.form`
     font-size: ${fontSize.small};
     line-height: 1.6;
   }
+`
+
+/** The settings and the buttons: a form, so Enter starts */
+const Body = styled.form`
+  display: grid;
+  gap: ${space(3)};
 `
 
 const Group = styled.fieldset`
