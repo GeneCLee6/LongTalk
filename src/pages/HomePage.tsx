@@ -92,7 +92,7 @@ const Page = styled.main`
   min-height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr auto;
-  font-family: ${font.ui};
+  font-family: ${font.current};
   background: ${color.bg};
   color: ${color.fg};
 `

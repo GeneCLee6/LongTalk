@@ -1754,7 +1754,7 @@ const Page = styled.main`
   min-height: 100dvh;
   display: grid;
   place-items: center;
-  font-family: ${font.ui};
+  font-family: ${font.current};
   background: ${color.bg};
   color: ${color.fg};
 
@@ -1810,7 +1810,7 @@ const Shell = styled.main`
   overscroll-behavior: none;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  font-family: ${font.ui};
+  font-family: ${font.current};
   background: ${color.bg};
   color: ${color.fg};
 

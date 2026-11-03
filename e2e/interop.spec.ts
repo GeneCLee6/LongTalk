@@ -204,7 +204,9 @@ async function join(
     await expect(page.getByText(strings.prejoin.passwordWrong)).toBeVisible()
   }
   if (passwords.length === 0) {
-    await page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
+    // With the waiting room on, 加入 reads 要求加入 (G1)
+    const label = waits ? strings.prejoin.joinWaiting : strings.prejoin.join
+    await page.getByRole('button', { name: label, exact: true }).click()
   }
   if (waits) await expect(page.getByRole('heading', { name: strings.waiting.title })).toBeVisible()
   else await expect(page.getByRole('region', { name: strings.room.grid })).toBeVisible()

@@ -317,7 +317,7 @@ const dayColumns: { label: string; value: (counts: EventCounts) => string }[] = 
 const Page = styled.main`
   min-height: 100dvh;
   padding: ${space(6)} ${space(4)};
-  font-family: ${font.ui};
+  font-family: ${font.current};
   background: ${color.bg};
   color: ${color.fg};
 `
