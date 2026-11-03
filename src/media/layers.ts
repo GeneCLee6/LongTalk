@@ -37,6 +37,11 @@ export interface VideoDemand {
   width: number
   height: number
   visible: boolean
+  /**
+   * The received picture's short side in pixels (min of videoWidth, videoHeight); null or absent
+   * before frames. Screens only use it (H5): a shared window is rarely the nominal 1080p
+   */
+  sourceShortSide?: number | null
   /** The received picture's width / height (videoWidth / videoHeight); null before frames */
   aspect: number | null
 }
@@ -86,13 +91,34 @@ export function shownShortSide(kind: LayeredKind, demand: VideoDemand): number {
   return Math.max(0, s * Math.min(1, aspect))
 }
 
+/**
+ * The layers of a kind with their short sides for this video. A camera is captured at a known
+ * size (devices.ts), so the nominal sides hold. A screen is whatever was shared: a window, a tab,
+ * a 720p canvas. Once frames arrive at the layer asked for (`current`), the full capture's short
+ * side is that picture's times the layer's scale, and each layer's side follows from it (H5: a
+ * 720p window's half layer is 360 lines, not the nominal 540, so a 540-line main area needs `f`).
+ */
+export function layerSides(
+  kind: LayeredKind,
+  demand: VideoDemand | null,
+  current: Layer | null,
+): readonly SimulcastLayer[] {
+  const layers = ladder(kind)
+  const received = demand?.sourceShortSide
+  if (kind !== 'screen' || !received || received <= 0 || !current) return layers
+  const now = layers.find((l) => l.layer === current)
+  if (!now) return layers
+  const full = received * now.scaleResolutionDownBy
+  return layers.map((l) => ({ ...l, shortSide: Math.round(full / l.scaleResolutionDownBy) }))
+}
+
 /** The layer for one video by size alone, keeping `current` while it is in the hysteresis band */
 export function layerForSize(
   kind: LayeredKind,
   demand: VideoDemand | null,
   current: Layer | null,
 ): Layer {
-  const layers = ladder(kind)
+  const layers = layerSides(kind, demand, current)
   const lowest = layers[layers.length - 1]
   if (!demand || !demand.visible || demand.width <= 0 || demand.height <= 0) return lowest.layer
   const needed = shownShortSide(kind, demand)
@@ -133,7 +159,9 @@ export function chooseLayers(inputs: readonly LayerInput[], budgetBps: number): 
   /** How much of what the tile shows a layer covers (1: all of it) */
   const coverage = (i: LayerInput, layer: Layer) => {
     const needed = i.demand?.visible ? shownShortSide(i.kind, i.demand) : 0
-    const side = ladder(i.kind).find((l) => l.layer === layer)?.shortSide ?? 0
+    const current = i.current ? clampLayer(i.kind, i.current) : null
+    const side =
+      layerSides(i.kind, i.demand, current).find((l) => l.layer === layer)?.shortSide ?? 0
     return needed > 0 ? Math.min(1, side / needed) : 1
   }
   const area = (i: LayerInput) => (i.demand?.visible ? i.demand.width * i.demand.height : 0)

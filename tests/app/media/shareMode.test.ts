@@ -212,6 +212,39 @@ describe('layers for several shares (e3-t07 with H1)', () => {
     expect(chosen.get('s1')).toBe('medium')
     expect(chosen.get('s2')).toBe('medium')
   })
+  it('judges a screen by the size it really is: a 720p window needs `f` in a 540-line main area', () => {
+    const at = (
+      key: string,
+      w: number,
+      h: number,
+      received: number,
+      current: 'high' | 'medium',
+    ) => ({
+      key,
+      kind: 'screen' as const,
+      demand: { width: w, height: h, visible: true, aspect: 16 / 9, sourceShortSide: received },
+      current,
+    })
+    // Nominal 1080p: half (540) is enough for a 960 × 540 main area
+    expect(chooseLayers([screen('main', 960, 540)], DOWNLINK_BUDGET_BPS).get('main')).toBe('medium')
+    // The picture says the capture is 720p (720 lines at `f`, or 360 at `h`): its half is 360
+    for (const [received, current] of [
+      [720, 'high'],
+      [360, 'medium'],
+    ] as const) {
+      const chosen = chooseLayers(
+        [at('main', 960, 540, received, current), at('strip', 320, 180, received, current)],
+        DOWNLINK_BUDGET_BPS,
+      )
+      expect(chosen.get('main')).toBe('high')
+      expect(chosen.get('strip')).toBe('medium')
+    }
+    // A real 1080p capture keeps the nominal sides
+    expect(
+      chooseLayers([at('main', 960, 540, 540, 'medium')], DOWNLINK_BUDGET_BPS).get('main'),
+    ).toBe('medium')
+  })
+
   it('steps the main share down too once H2 lowers the budget (a struggling link)', () => {
     const chosen = chooseLayers(
       [screen('main', 1600, 900), screen('strip', 320, 180)],
