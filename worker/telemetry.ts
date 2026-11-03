@@ -244,3 +244,53 @@ export class EventRateLimit {
     if (this.windows.size >= MAX_TRACKED_CLIENTS) this.windows.clear()
   }
 }
+
+/** The part of Durable Object storage TelemetryStore needs (a Map-backed fake in tests) */
+export interface TelemetryStorage {
+  get<T>(key: string): Promise<T | undefined>
+  put<T>(key: string, value: T): Promise<void>
+}
+
+/** The storage key of the one TelemetryRecord */
+export const TELEMETRY_RECORD_KEY = 'telemetry'
+
+/**
+ * TelemetryDO's state without the runtime: the ledger, the rate limit and when they reach
+ * storage. Writes through: every batch that counted something is stored before `record`
+ * answers. (Before the 2026-11-03 field test fix it saved from an alarm 30 s later; an object
+ * with no WebSockets and no timers may leave memory after about 10 s idle, and the alarm then
+ * woke a fresh instance that stored the old record again, so a quiet deployment's last events,
+ * such as the ratings given on leaving, never reached /admin.)
+ */
+export class TelemetryStore {
+  private readonly limit = new EventRateLimit()
+  private readonly storage: TelemetryStorage
+  private readonly ledger: TelemetryLedger
+
+  private constructor(storage: TelemetryStorage, ledger: TelemetryLedger) {
+    this.storage = storage
+    this.ledger = ledger
+  }
+
+  static async load(storage: TelemetryStorage): Promise<TelemetryStore> {
+    const stored = await storage.get<TelemetryRecord>(TELEMETRY_RECORD_KEY)
+    return new TelemetryStore(storage, new TelemetryLedger(stored ?? null))
+  }
+
+  /** Counts what `client` may send now, stores it, and answers what was accepted */
+  async record(
+    client: string,
+    events: readonly ClientEvent[],
+    now: number,
+  ): Promise<ClientEvent[]> {
+    const accepted = this.limit.take(client, events, now)
+    if (accepted.length === 0) return accepted
+    this.ledger.add(accepted, now)
+    await this.storage.put(TELEMETRY_RECORD_KEY, this.ledger.record)
+    return accepted
+  }
+
+  summary(now: number): TelemetrySummary {
+    return this.ledger.summary(now)
+  }
+}
