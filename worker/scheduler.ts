@@ -8,7 +8,7 @@ export type Schedule = Record<string, number>
  * scheduled moves it. Pure: no clock of its own, so tests drive it with a fake one.
  *
  * Keys in RoomHost: `sweep` (heartbeats, reconnect grace, usage flush), `close` (empty room),
- * `handoff` (host reconnecting too long). Later jobs (ban expiry, e1-t07) add their own keys.
+ * `handoff` (host reconnecting too long), `bans` (the next ban of a removed browser runs out, F1).
  */
 export class Scheduler {
   private readonly due = new Map<string, number>()

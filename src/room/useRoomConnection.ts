@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
-import type { ClientMessage, ErrorCode } from '../../shared/protocol.ts'
+import type { ClientMessage, ErrorCode, NoticeMessage } from '../../shared/protocol.ts'
 import { watchNetwork } from './network.ts'
 import { RoomConnection, type ChatSendResult, type RoomConnectionState } from './RoomConnection.ts'
-import { clearSession, loadSession, saveSession } from './session.ts'
+import { clearSession, loadClientId, loadSession, saveSession } from './session.ts'
 
 export interface RoomConnectionHandle {
   state: RoomConnectionState
@@ -16,6 +16,8 @@ export interface RoomConnectionHandle {
   rename: (name: string) => void
   /** Listens for the room's refusals (`error` codes); returns a function that stops listening */
   onError: (listener: (code: ErrorCode) => void) => () => void
+  /** Listens for what a host did to this member (F1); returns a function that stops listening */
+  onNotice: (listener: (notice: NoticeMessage) => void) => () => void
   /** Sends a chat message (D3); anything but `sent` means the text should stay in the box */
   sendChat: (text: string) => ChatSendResult
 }
@@ -31,7 +33,7 @@ export function useRoomConnection(roomId: string, name: string): RoomConnectionH
     () =>
       new RoomConnection(
         roomId,
-        { name, token: loadSession(roomId) },
+        { name, token: loadSession(roomId), client: loadClientId() },
         { onToken: (token) => saveSession(roomId, token) },
       ),
     [roomId, name],
@@ -60,6 +62,7 @@ export function useRoomConnection(roomId: string, name: string): RoomConnectionH
     retry: connection.retry,
     rename: connection.rename,
     onError: connection.onError,
+    onNotice: connection.onNotice,
     sendChat: connection.sendChat,
   }
 }

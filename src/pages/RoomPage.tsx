@@ -5,9 +5,12 @@ import {
   MAX_NAME_CHARS,
   MAX_ROOM_NAME_CHARS,
   normalizeName,
+  type HostMemberAction,
+  type NoticeMessage,
   type RoomInfo,
   type Role,
 } from '../../shared/protocol.ts'
+import { can } from '../../shared/roles.ts'
 import { pickSpeaker } from '../../shared/layout.ts'
 import { isRoomId } from '../../shared/room-id.ts'
 import type { UsageState } from '../../shared/usage.ts'
@@ -27,10 +30,11 @@ import {
 import { MemberAudio } from '../components/MemberAudio.tsx'
 import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
+import { ParticipantsPanel } from '../components/ParticipantsPanel.tsx'
 import { PreJoin } from '../components/PreJoin.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
 import { ShareTile } from '../components/ShareTile.tsx'
-import { SidePanel } from '../components/SidePanel.tsx'
+import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
 import { Stage, type StageMode } from '../components/Stage.tsx'
 import { Tile, type TileProps } from '../components/Tile.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
@@ -109,8 +113,11 @@ type Stage =
   | { at: 'room'; choices: JoinChoices }
   | { at: 'left'; reason: LeftReason; roomName: string }
 
-/** `left`: pressed 「離開」; `closed`: the room was gone when we came back to it */
-export type LeftReason = 'left' | 'closed'
+/**
+ * `left`: pressed 「離開」; `closed`: the room was gone when we came back to it; `ended`, `removed`:
+ * the host ended the meeting or removed us (F1)
+ */
+export type LeftReason = 'left' | 'closed' | 'ended' | 'removed'
 
 function RoomEntry({ roomId }: { roomId: string }) {
   const navigate = useNavigate()
@@ -281,6 +288,7 @@ function Room({
     retry: retryRoom,
     rename,
     onError,
+    onNotice: onHostControl,
     sendChat,
   } = useRoomConnection(roomId, choices.name)
   const toasts = useToasts()
@@ -288,6 +296,8 @@ function Room({
   const roomInfo = state.view?.room ?? null
   const title = roomTitle(roomId, roomInfo)
   const gone = state.status === 'notFound'
+  // The host removed us or ended the meeting (F1): the after-leave screen says which
+  const outcome = state.status === 'removed' || state.status === 'ended' ? state.status : null
   // Whether the room ever welcomed this tab: a room that is gone after that closed while we were
   // away (asleep, offline past the grace period) and gets the after-leave screen; one that was
   // never there (a stale tab resuming) is just not found
@@ -302,8 +312,15 @@ function Room({
   useEffect(() => {
     if (gone) onGone()
   }, [gone])
+  const onOutcome = useEffectEvent((reason: 'removed' | 'ended') => {
+    clearSession(roomId)
+    onLeft(reason, title)
+  })
+  useEffect(() => {
+    if (outcome) onOutcome(outcome)
+  }, [outcome])
   const self = state.you ? state.view?.members[state.you] : undefined
-  const isHost = self?.role === 'host'
+  const role: Role = self?.role ?? 'participant'
   useHostNotice(self?.role, show)
   useEffect(() => {
     document.title = `${title} · ${strings.appName}`
@@ -313,8 +330,12 @@ function Room({
   }, [title])
   const [renaming, setRenaming] = useState<'room' | 'self' | null>(null)
   const phone = usePhoneLayoutQuery()
-  // The chat (D3): a side panel on desktop, a full-screen drawer on phones
-  const [chatOpen, setChatOpen] = useState(false)
+  // The chat (D3) and the participants (F1): one side panel on desktop, a full-screen drawer on
+  // phones, switching between the two
+  const [panel, setPanel] = useState<'chat' | 'participants' | null>(null)
+  const chatOpen = panel === 'chat'
+  const togglePanel = (which: 'chat' | 'participants') =>
+    setPanel((open) => (open === which ? null : which))
   const chat = useChatNotifications({
     messages: state.chat,
     loaded: state.chatLoaded,
@@ -326,6 +347,8 @@ function Room({
     () =>
       onError((code) => {
         if (code === 'rate_limited') show(strings.chat.rateLimited, 'warn')
+        // A host control the room refused (our role changed meanwhile, F1)
+        if (code === 'forbidden') show(strings.participants.forbidden, 'warn')
       }),
     [onError, show],
   )
@@ -349,8 +372,8 @@ function Room({
         ]
       : []),
     { id: 'rename-self', label: strings.rename.self, onSelect: () => setRenaming('self') },
-    // Only the host may rename the room (RoomDO checks it too)
-    ...(isHost
+    // Who may rename the room: shared/roles.ts (RoomDO checks it too)
+    ...(can(role, 'renameRoom')
       ? [{ id: 'rename-room', label: strings.rename.room, onSelect: () => setRenaming('room') }]
       : []),
   ]
@@ -403,7 +426,7 @@ function Room({
           show(strings.screenShare.takenOver(memberName.current(notice.by)))
           return
         case 'stopped':
-          show(strings.screenShare.stopped)
+          // The host stopped it (F1): the room's notice says so, by name (onHostNotice)
           return
         case 'audioOnly':
           show(strings.screenShare.audioOnly, 'warn')
@@ -452,6 +475,41 @@ function Room({
   })
   const usage = state.view?.usage ?? 'normal'
   useUsageNotices(usage, media.videoRefused, show)
+  // What a host did to us (F1, AC-1.4): the room already lists the track muted; our browser
+  // turns the device off itself and says who did it. Only we can turn it back on.
+  const onHostNotice = useEffectEvent((notice: NoticeMessage) => {
+    const actor = viewMembers?.[notice.by]
+    const who = strings.hostNotice.actor(
+      actor?.role === 'cohost' ? strings.participants.cohost : strings.participants.host,
+      actor?.name ?? '',
+    )
+    switch (notice.notice) {
+      case 'muted':
+        void devices?.setOn('mic', false)
+        show(notice.all ? strings.hostNotice.mutedAll(who) : strings.hostNotice.muted(who), 'warn')
+        return
+      case 'camOff':
+        void devices?.setOn('cam', false)
+        show(strings.hostNotice.camOff(who), 'warn')
+        return
+      case 'shareStopped':
+        show(strings.hostNotice.shareStopped(who), 'warn')
+        return
+    }
+  })
+  useEffect(() => onHostControl((notice) => onHostNotice(notice)), [onHostControl])
+  // Host controls from the participants panel (e1-t07); RoomDO decides (worker/roles.ts)
+  const onMemberAction = (action: HostMemberAction, memberId: string) => {
+    send({ t: 'host', action, memberId })
+    if (action === 'remove') {
+      show(strings.participants.removed(viewMembers?.[memberId]?.name ?? ''))
+    }
+  }
+  const onMuteAll = () => {
+    send({ t: 'host', action: 'muteAll' })
+    show(strings.participants.mutedAll)
+  }
+  const onEndMeeting = () => send({ t: 'host', action: 'endMeeting' })
   useRoomTelemetry({
     status: state.status,
     mediaStatus: media.status,
@@ -488,7 +546,7 @@ function Room({
     void devices?.setOn('cam', !local.cam.on)
   }
 
-  if (gone) {
+  if (gone || outcome) {
     return (
       <Centered>
         <NotFound />
@@ -525,6 +583,27 @@ function Room({
     sharer && sharer.id !== state.you ? sharer.tracks.find((t) => t.kind === 'screenAudio') : null
   const sharerAudio =
     (sharerAudioTrack && media.received[trackKey(sharerAudioTrack)]?.track) || null
+  const panelTabs = (
+    <PanelTabs
+      label={strings.participants.tabs}
+      tabs={[
+        { id: 'chat', label: strings.toolbar.chatUnread(chat.unread) },
+        { id: 'participants', label: strings.participants.tabParticipants(members.length) },
+      ]}
+      selected={panel ?? 'chat'}
+      onSelect={(id) => setPanel(id === 'participants' ? 'participants' : 'chat')}
+    />
+  )
+  const participantsPanel = (
+    <ParticipantsPanel
+      members={members}
+      you={state.you}
+      sharerId={roomShare?.memberId ?? null}
+      onAction={onMemberAction}
+      onMuteAll={onMuteAll}
+      onEndMeeting={onEndMeeting}
+    />
+  )
   const shareTile =
     sharer && sharer.id !== state.you ? (
       <ShareTile
@@ -625,13 +704,18 @@ function Room({
             </Notices>
           </StageBox>
         </StageArea>
-        {chatOpen && phone === null && (
+        {panel !== null && phone === null && (
           <SidePanel
-            title={strings.chat.title}
-            closeLabel={strings.chat.close}
-            onClose={() => setChatOpen(false)}
+            title={panel === 'chat' ? strings.chat.title : strings.participants.title}
+            closeLabel={panel === 'chat' ? strings.chat.close : strings.participants.close}
+            onClose={() => setPanel(null)}
           >
-            <ChatPanel messages={state.chat} you={state.you} onSend={sendChat} autoFocus />
+            {panelTabs}
+            {panel === 'chat' ? (
+              <ChatPanel messages={state.chat} you={state.you} onSend={sendChat} autoFocus />
+            ) : (
+              participantsPanel
+            )}
           </SidePanel>
         )}
       </Middle>
@@ -643,8 +727,9 @@ function Room({
           onToggleShare={onToggleShare}
           chatOpen={chatOpen}
           chatUnread={chat.unread}
-          onToggleChat={() => setChatOpen((open) => !open)}
-          onComingSoon={(feature) => show(strings.toolbar.comingSoon(feature))}
+          onToggleChat={() => togglePanel('chat')}
+          participantsOpen={panel === 'participants'}
+          onToggleParticipants={() => togglePanel('participants')}
           moreItems={moreItems}
           onLeave={onLeave}
           micOn={local.mic.on}
@@ -663,15 +748,24 @@ function Room({
           speakerSupported={speakerSupported}
         />
       </ToolbarArea>
-      {chatOpen && phone !== null && (
-        <Drawer variant="full" title={strings.chat.title} onClose={() => setChatOpen(false)}>
-          <ChatPanel messages={state.chat} you={state.you} onSend={sendChat} />
+      {panel !== null && phone !== null && (
+        <Drawer
+          variant="full"
+          title={panel === 'chat' ? strings.chat.title : strings.participants.title}
+          onClose={() => setPanel(null)}
+        >
+          {panelTabs}
+          {panel === 'chat' ? (
+            <ChatPanel messages={state.chat} you={state.you} onSend={sendChat} />
+          ) : (
+            participantsPanel
+          )}
         </Drawer>
       )}
       {!chatOpen && (
         <ChatPreview
           message={chat.preview}
-          onOpen={() => setChatOpen(true)}
+          onOpen={() => setPanel('chat')}
           onDismiss={chat.dismissPreview}
         />
       )}
@@ -930,6 +1024,9 @@ function statusText({ status, view }: RoomConnectionState): string {
   switch (status) {
     case 'connecting':
     case 'notFound':
+    // The after-leave screen replaces the room at once (F1)
+    case 'removed':
+    case 'ended':
       return strings.room.connecting
     case 'open':
       return strings.room.memberCount(Object.keys(view?.members ?? {}).length)

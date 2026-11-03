@@ -1,15 +1,19 @@
-import { isSessionToken, normalizeName } from '../../shared/protocol.ts'
+import { isClientId, isSessionToken, normalizeName } from '../../shared/protocol.ts'
 
 // What the browser remembers between visits (AC-1.2, AC-4.2):
 // - the display name, in localStorage: every room, every tab;
 // - the chosen microphone, camera and speaker (e2-t06), in localStorage: the pre-join screen
 //   and the room read and write the same choice;
 // - the room's session token, in sessionStorage: it survives a reload of the tab, but a second
-//   tab (or the next visit) joins as someone new instead of taking the first tab's place.
+//   tab (or the next visit) joins as someone new instead of taking the first tab's place;
+// - this browser's own random id (F1), in localStorage: every `join` carries it, and a member the
+//   host removes is banned by it for 10 minutes. Without accounts nothing better identifies a
+//   browser; a private window, another browser or clearing the site's data gets a new one.
 // Storage can be missing or throw (private mode, blocked cookies): then nothing is remembered.
 
 const NAME_KEY = 'longtalk.name'
 const DEVICES_KEY = 'longtalk.devices'
+const CLIENT_KEY = 'longtalk.client'
 const tokenKey = (roomId: string) => `longtalk.session.${roomId}`
 
 function storage(kind: 'localStorage' | 'sessionStorage'): Storage | null {
@@ -58,6 +62,27 @@ export function saveSession(roomId: string, token: string): void {
 
 export function clearSession(roomId: string): void {
   write('sessionStorage', tokenKey(roomId), null)
+}
+
+/** Kept for the page's life when storage is blocked: one id per tab then */
+let memoryClientId: string | null = null
+
+/** This browser's own id (F1): made once, then the same in every room and tab */
+export function loadClientId(): string {
+  const saved = read('localStorage', CLIENT_KEY)
+  if (isClientId(saved)) return saved
+  memoryClientId ??= newClientId()
+  write('localStorage', CLIENT_KEY, memoryClientId)
+  return memoryClientId
+}
+
+/** 16 random bytes, base64url without padding (22 characters) */
+function newClientId(): string {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
 /** Which device of each kind the person chose last (null: the browser's default) */

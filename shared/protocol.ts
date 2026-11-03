@@ -55,6 +55,17 @@
 //    also brings a member who reconnected up to date), and every accepted message after that as
 //    `chat` with that one message, to everyone (the sender too: that is its acknowledgement).
 //    A member over CHAT_RATE is answered `error` code `rate_limited`.
+// 12. Host controls (F1, e1-t07): `host` asks the room to act on one member (`muteMember`,
+//    `camOff`, `stopShare`, `remove`) or on the whole room (`muteAll`, `endMeeting`). The room
+//    decides with worker/roles.ts (shared/roles.ts' table) and answers `error` code `forbidden`
+//    when the member may not. Muting and turning a camera off mark the track `muted` in the
+//    target's list at once and send the target `notice`, on which its browser turns the
+//    microphone or camera off itself (and says so); nobody can turn anyone else's back on, only
+//    the member themselves. Stopping a share ends it like `unshare` and sends `notice` too.
+//    `remove` closes the member's socket with CloseCode.removed and bans its browser (the `client`
+//    id every `join` carries) for BAN_MS: a `join` from it is closed with CloseCode.removed until
+//    then. `endMeeting` closes every socket with CloseCode.ended and the room at once (its id
+//    answers 404 / CloseCode.roomNotFound from then on, like a room closed when empty).
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -64,16 +75,19 @@
 //   `renameRoom`, error code `forbidden`.
 // v6 → v7 (D1): `RoomInfo.share`, `share`, `unshare`, error codes `share_busy`, `audio_only`.
 // v7 → v8 (D3): `chat` both ways, error code `rate_limited`; MAX_CLIENT_MESSAGE_CHARS 4096 → 16384.
+// v8 → v9 (F1): `join.client`, `host`, `notice`, roles `cohost` / `waiting`, close codes
+//   `removed`, `ended`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
 // View types are `type` aliases, not interfaces, so they stay assignable to JsonValue.
 import { isChatMessage, normalizeChatText, type ChatMessage } from './chat.ts'
 import type { JsonValue, PatchOp } from './patch.ts'
+import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 8
+export const PROTOCOL_VERSION = 9
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -105,6 +119,10 @@ export const MAX_ROOM_NAME_CHARS = 60
 export const EMPTY_ROOM_TTL_MS = 10 * 60_000
 /** A host reconnecting for this long hands the role to a connected member (AC-1.3) */
 export const HOST_HANDOFF_MS = 60_000
+/** A removed member's browser cannot join the room again for this long (AC-1.4) */
+export const BAN_MS = 10 * 60_000
+/** The most browsers a room keeps banned at once (the oldest ban goes first) */
+export const MAX_BANS = 200
 
 /**
  * WebSocket close codes the server uses. The browser does not reconnect after the 44xx ones but
@@ -122,6 +140,10 @@ export const CloseCode = {
   stale: 4408,
   /** The same session joined from another socket (a second tab, or a reload that beat the close) */
   replaced: 4410,
+  /** The host removed this member, or its browser is still banned (BAN_MS, F1) */
+  removed: 4403,
+  /** The host ended the meeting: the room is closed (F1) */
+  ended: 4411,
 } as const
 
 /** What POST /api/rooms decides about a room */
@@ -149,8 +171,8 @@ export type ShareInfo = {
   since: number
 }
 
-/** What a member may do in the room; cohost and waiting arrive with e1-t06 */
-export type Role = 'host' | 'participant'
+/** What a member may do in the room: shared/roles.ts (F1, e1-t06) */
+export type { Role }
 
 /** What GET /api/rooms/<id> answers, for the pre-join screen */
 export type RoomSummary = RoomInfo & { memberCount: number }
@@ -183,7 +205,10 @@ export const isSfuId = (value: unknown): value is string =>
 export type Member = {
   id: string
   name: string
-  /** One member is the host whenever anyone is connected (C2, e1-t04) */
+  /**
+   * One member is the host whenever anyone is connected (C2, e1-t04); `cohost` comes with
+   * e1-t16, `waiting` with e1-t10
+   */
   role: Role
   joinedAt: number
   /** The socket dropped without `leave`; the member keeps its place for RECONNECT_GRACE_MS */
@@ -226,6 +251,16 @@ export type PatchMessage = { t: 'patch'; rev: number; ops: PatchOp[] }
  */
 export type ErrorCode = 'bad_message' | 'forbidden' | 'share_busy' | 'audio_only' | 'rate_limited'
 
+/**
+ * What a host (or co-host) did to this member (F1): `muted` (the microphone; `all` when it was
+ * 全員靜音), `camOff`, `shareStopped`. `by` is that member's id. The browser turns its microphone
+ * or camera off on `muted` / `camOff` (the room already lists the track muted) and says what
+ * happened.
+ */
+export type NoticeKind = 'muted' | 'camOff' | 'shareStopped'
+
+export type NoticeMessage = { t: 'notice'; notice: NoticeKind; by: string; all?: true }
+
 export type ErrorMessage = { t: 'error'; code: ErrorCode }
 
 /**
@@ -236,12 +271,16 @@ export type ErrorMessage = { t: 'error'; code: ErrorCode }
 export type ChatServerMessage = { t: 'chat'; messages: ChatMessage[]; reset?: true }
 
 export type ServerMessage =
-  WelcomeMessage | SnapshotMessage | PatchMessage | ErrorMessage | ChatServerMessage
+  WelcomeMessage | SnapshotMessage | PatchMessage | ErrorMessage | ChatServerMessage | NoticeMessage
 
 // ── Browser → server ─────────────────────────────────────────────────────────────────────────
 
-/** The first message on every socket; `token` is null for someone new */
-export type JoinMessage = { t: 'join'; name: string; token: string | null }
+/**
+ * The first message on every socket; `token` is null for someone new. `client` is this browser's
+ * own random id (localStorage, src/room/session.ts), what a ban is kept against (F1); null when
+ * missing or malformed.
+ */
+export type JoinMessage = { t: 'join'; name: string; token: string | null; client: string | null }
 
 export type ResyncMessage = { t: 'resync' }
 
@@ -282,8 +321,24 @@ export type UnshareMessage = { t: 'unshare' }
 /** A chat message to everyone in the room (D3); `text` is normalizeChatText's */
 export type ChatClientMessage = { t: 'chat'; text: string }
 
+/** The host controls that act on one member (F1); `memberId` says who */
+export type HostMemberAction = 'muteMember' | 'camOff' | 'stopShare' | 'remove'
+
+/** The host controls that act on the whole room (F1) */
+export type HostRoomAction = 'muteAll' | 'endMeeting'
+
+export type HostAction = HostMemberAction | HostRoomAction
+
+const HOST_MEMBER_ACTIONS: readonly string[] = ['muteMember', 'camOff', 'stopShare', 'remove']
+const HOST_ROOM_ACTIONS: readonly string[] = ['muteAll', 'endMeeting']
+
+/** A host control (F1, e1-t07); the room checks the member may (worker/roles.ts) */
+export type HostMessage =
+  { t: 'host'; action: HostMemberAction; memberId: string } | { t: 'host'; action: HostRoomAction }
+
 export type ClientMessage =
   | ChatClientMessage
+  | HostMessage
   | JoinMessage
   | ResyncMessage
   | LeaveMessage
@@ -336,6 +391,19 @@ export function isSessionToken(value: unknown): value is string {
   return typeof value === 'string' && SESSION_TOKEN_PATTERN.test(value)
 }
 
+/** A browser's own id (F1): 16–64 URL-safe characters */
+const CLIENT_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/
+
+export function isClientId(value: unknown): value is string {
+  return typeof value === 'string' && CLIENT_ID_PATTERN.test(value)
+}
+
+/** Member ids are the room's own (crypto.randomUUID): anything else is not worth a lookup */
+const MEMBER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
+
+const isMemberId = (value: unknown): value is string =>
+  typeof value === 'string' && MEMBER_ID_PATTERN.test(value)
+
 /** A new session token (crypto.getRandomValues, in the Worker) */
 export function newSessionToken(): string {
   const bytes = new Uint8Array(32)
@@ -354,7 +422,12 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       if (name === null) return null
       // A malformed token is someone new, not an error: the browser may hold one from an
       // older version
-      return { t: 'join', name, token: isSessionToken(value.token) ? value.token : null }
+      return {
+        t: 'join',
+        name,
+        token: isSessionToken(value.token) ? value.token : null,
+        client: isClientId(value.client) ? value.client : null,
+      }
     }
     case 'resync':
       return { t: 'resync' }
@@ -377,6 +450,17 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     case 'chat': {
       const text = normalizeChatText(value.text)
       return text === null ? null : { t: 'chat', text }
+    }
+    case 'host': {
+      const action = value.action
+      if (typeof action !== 'string') return null
+      if (HOST_ROOM_ACTIONS.includes(action)) {
+        return { t: 'host', action: action as HostRoomAction }
+      }
+      if (HOST_MEMBER_ACTIONS.includes(action) && isMemberId(value.memberId)) {
+        return { t: 'host', action: action as HostMemberAction, memberId: value.memberId }
+      }
+      return null
     }
     case 'stats':
       return isSfuId(value.sessionId) &&
@@ -454,6 +538,10 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     case 'chat':
       return Array.isArray(value.messages) && value.messages.every(isChatMessage)
         ? (value as ChatServerMessage)
+        : null
+    case 'notice':
+      return typeof value.notice === 'string' && typeof value.by === 'string'
+        ? (value as NoticeMessage)
         : null
     default:
       return null
