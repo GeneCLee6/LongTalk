@@ -583,7 +583,12 @@ interop(
         await expect(dave.page.getByRole('heading', { name: strings.waiting.title })).toHaveCount(0)
         await expectReceiving(alice, dave)
         await expectReceiving(dave, alice)
-        await expectReceiving(dave, bob)
+        // Bob is still muted (above): his camera only
+        await expect
+          .poll(() => framesPerSecond(dave, bob), {
+            message: "Dave decodes frames of Bob's camera",
+          })
+          .toBeGreaterThanOrEqual(VIDEO_FRAMES_PER_SECOND)
         return dave
       },
     )

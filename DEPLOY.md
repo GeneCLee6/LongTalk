@@ -215,7 +215,7 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
 - **螢幕分享（D1）**：Bob 按「分享螢幕」：他看到「你正在分享畫面」條、自己維持格狀；Alice、Carol 的舞台切成分享版面、主區看到 Bob 的畫面（每秒 ≥ 3 幀）、Carol 的鏡頭在側列照常。Carol 按分享 → 「接手分享？」→ 接手：Bob 的提示條消失、大家看到 Carol 的畫面。Carol 從提示條停止：三人都回到格狀。headless Chromium 沒有螢幕可擷取、也沒有選擇器可點，所以分享來源是 `addInitScript` 換掉的 `getDisplayMedia`（canvas `captureStream`，會動的畫面）；真的選擇器在 §5 第 9 步實測。
 - **分享音訊（D2）**：替身 `getDisplayMedia` 在房間要求音訊時多給一條 oscillator 的音軌（當成分頁音訊）。Alice、Carol 的 `audio[data-share-audio="Bob"]` 音量峰值 > 0.05（Bob 的麥克風此時是靜音的，聲音只會來自分享音訊）；Bob 按提示條的「關閉分享音訊」→ Alice 聽到靜音、分享畫面照常；「開啟分享音訊」→ 聲音回來。Carol 接手後 Bob 的分享音訊元素消失、Alice 聽得到 Carol 的分享音訊。真的分頁／系統音訊與回音在 §5 第 10 步實測。
 - **聊天（D3）**：媒體檢查之前，Alice 打開聊天、送一則帶連結的中文訊息；Bob、Carol 的「聊天」鈕出現「1 則未讀」，打開後看到同一則訊息、連結是 `rel="noopener noreferrer"`，再關上（讓舞台回到全寬）。
-- **等候室與鎖房（F2）**：Carol 被移出後，Alice（主持人）在參與者面板打開「等候室」；第四個 context Dave 加入：他看到等候畫面（「你是下一位」），Alice 看到「Dave 在等候室，等你放行」與琥珀色徽章，Bob 的舞台上沒有 Dave；Alice 按「放行」→ Dave 同一頁進房，Alice 收得到 Dave 的畫面與聲音、Dave 收得到 Alice 與 Bob 的。Alice 打開「鎖定會議室」：三人都看到鎖頭；第五個 context 開連結直接是「這間會議室已鎖定」（沒有名字欄）。
+- **等候室與鎖房（F2）**：Carol 被移出後，Alice（主持人）在參與者面板打開「等候室」；第四個 context Dave 加入：他看到等候畫面（「你是下一位」），Alice 看到「Dave 在等候室，等你放行」與琥珀色徽章，Bob 的舞台上沒有 Dave；Alice 按「放行」→ Dave 同一頁進房，Alice 與 Dave 互相收得到畫面與聲音、Dave 收得到 Bob 的畫面（Bob 前面靜音了）。Alice 打開「鎖定會議室」：三人都看到鎖頭；第五個 context 開連結直接是「這間會議室已鎖定」（沒有名字欄）。
 - **離開後畫面（D4）**：最後 Carol 按「離開」：她看到「你已經離開會議室」與「重新加入」，按「5 分：很好」後出現「謝謝你的回饋！」，而且這個評分真的送到 `POST /api/events`（請求內容有 `{ "type": "rating", "score": 5 }`、回 202）；Alice、Bob 的舞台上 Carol 的格子消失。
 - 結束時每個人按「離開」，SFU session 立刻關閉（省額度）。
 
