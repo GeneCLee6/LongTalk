@@ -1,3 +1,4 @@
+import type { SignalLevel } from '../../shared/protocol.ts'
 import type { zhTW } from './zh-TW.ts'
 
 /**
@@ -28,4 +29,8 @@ export interface TileState {
   pinned: boolean
   spotlighted: boolean
   reconnecting: boolean
+  /** Their connection as they report it (H2, e2-t13); null or absent: unknown */
+  signal?: SignalLevel | null
+  /** Their camera is on but not received, to save our downlink (e2-t15) */
+  videoPaused?: boolean
 }

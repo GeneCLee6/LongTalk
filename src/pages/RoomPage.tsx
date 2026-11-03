@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -62,6 +64,8 @@ import { ShareTile } from '../components/ShareTile.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
 import { Stage } from '../components/Stage.tsx'
 import { Tile, type TileProps } from '../components/Tile.tsx'
+import type { StatsPanelProps } from '../components/StatsPanel.tsx'
+import type { DownlinkStage, UplinkState } from '../media/adaptation.ts'
 import { OffStageReactions } from '../components/TileReactions.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
 import { Toolbar } from '../components/Toolbar.tsx'
@@ -642,9 +646,10 @@ function Room({
   const phone = usePhoneLayoutQuery()
   // The chat (D3) and the participants (F1): one side panel on desktop, a full-screen drawer on
   // phones, switching between the two
-  const [panel, setPanel] = useState<'chat' | 'participants' | null>(null)
+  // 連線統計 (H2, e2-t14) opens in the same place as chat and participants
+  const [panel, setPanel] = useState<'chat' | 'participants' | 'stats' | null>(null)
   const chatOpen = panel === 'chat'
-  const togglePanel = (which: 'chat' | 'participants') =>
+  const togglePanel = (which: 'chat' | 'participants' | 'stats') =>
     setPanel((open) => (open === which ? null : which))
   const chat = useChatNotifications({
     messages: state.chat,
@@ -817,6 +822,8 @@ function Room({
       checked: prefs.sounds,
       onSelect: () => updatePrefs({ sounds: !prefs.sounds }),
     },
+    // 更多 › 連線統計 (H2, e2-t14)
+    { id: 'stats', label: strings.stats.menu, onSelect: () => setPanel('stats') },
     // The list of keyboard shortcuts (G4, e4-t13), where there is a keyboard layout
     ...(phone === null
       ? [{ id: 'shortcuts', label: strings.shortcuts.menu, onSelect: () => setShortcutsOpen(true) }]
@@ -917,7 +924,10 @@ function Room({
   // The room view stays on screen while the socket reconnects; so does the media connection. Not
   // in the waiting room: the SFU proxy would refuse us (F2)
   const inRoom = (state.status === 'open' || state.status === 'reconnecting') && !waiting
+  // Audio-only (H2, e2-t15's suggestion; H3's 純音訊模式 settles where else it is switched)
+  const [audioOnly, setAudioOnly] = useState(false)
   const media = useRoomMedia({
+    audioOnly,
     enabled: inRoom && state.token !== null,
     createTransport,
     iceConfig,
@@ -931,6 +941,20 @@ function Room({
   })
   const usage = state.view?.usage ?? 'normal'
   useUsageNotices(usage, media.videoRefused, show)
+  useAdaptationNotices(media.downlink, media.uplink, audioOnly, show)
+  const switchAudioOnly = (on: boolean) => {
+    setAudioOnly(on)
+    // Audio-only sends no camera either; turning it off again leaves the camera to the member
+    if (on) {
+      void devices?.setOn('cam', false)
+      show(strings.adapt.audioOnlyOn)
+    }
+  }
+  // The suggestion (e2-t15) until the member answers it; it comes back after the link recovered
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false)
+  if (suggestionDismissed && media.downlink !== 'audioOnly') setSuggestionDismissed(false)
+  const suggestAudioOnly =
+    inRoom && media.downlink === 'audioOnly' && !audioOnly && !suggestionDismissed
   // What a host did to us (F1, AC-1.4): the room already lists the track muted; our browser
   // turns the device off itself and says who did it. Only we can turn it back on.
   const onHostNotice = useEffectEvent((notice: NoticeMessage) => {
@@ -1077,6 +1101,8 @@ function Room({
       show(strings.usage.videoRefused, 'warn')
       return false
     }
+    // Turning the camera on ends audio-only (which sends no camera)
+    if (!local.cam.on && audioOnly) setAudioOnly(false)
     void devices?.setOn('cam', !local.cam.on)
     return true
   }
@@ -1090,8 +1116,19 @@ function Room({
     const cam = member.tracks.find((t) => t.kind === 'cam')
     return (cam && !cam.muted && media.received[trackKey(cam)]?.track) || null
   }
+  // A camera the downlink paused (e2-t15) is still on: its tile stays when hiding tiles without video
+  const paused = new Set(media.pausedVideos)
+  const camKey = (member: (typeof members)[number]) => {
+    const cam = member.tracks.find((t) => t.kind === 'cam')
+    return cam ? trackKey(cam) : null
+  }
+  const videoPaused = (member: (typeof members)[number]) =>
+    member.id !== state.you && paused.has(camKey(member) ?? '')
   const shown = visibleTiles({
-    tiles: members.map((member) => ({ id: member.id, video: videoOf(member) !== null })),
+    tiles: members.map((member) => ({
+      id: member.id,
+      video: videoOf(member) !== null || videoPaused(member),
+    })),
     you: state.you,
     hideSelf: view.hideSelf,
     hideNoVideo,
@@ -1099,6 +1136,21 @@ function Room({
   })
   const speaker = useHeldSpeaker(pickSpeaker(shown.ids, state.you, lastHeard), shown.ids)
   const focus = stageFocus(shown.ids, pinnedId, spotlight, speaker)
+  // The cameras that stay when the downlink has to stop receiving cameras (e2-t15): a pin, a
+  // spotlight, whoever the stage shows big, the speaker
+  const keepIds = [pinnedId, spotlight, focus?.id ?? null, speaker]
+  const keepKeys = [...new Set(keepIds)]
+    .filter((id): id is string => id !== null && id !== state.you)
+    .flatMap((id) => {
+      const member = state.view?.members[id]
+      const key = member ? camKey(member) : null
+      return key ? [key] : []
+    })
+  const keepJoined = keepKeys.join(' ')
+  const { setVideoPriority } = media
+  useEffect(() => {
+    setVideoPriority(keepJoined === '' ? [] : keepJoined.split(' '))
+  }, [setVideoPriority, keepJoined])
   // Who could take over from us: connected members in the meeting, the room's own pick first
   const successors = members
     .filter((member) => member.id !== state.you && !member.reconnecting)
@@ -1268,6 +1320,23 @@ function Room({
       onRole={onRole}
     />
   )
+  // Whose a received track is, for the stats panel (e2-t14)
+  const describeTrack = (key: string): ReturnType<StatsPanelProps['describe']> => {
+    for (const member of members) {
+      const track = member.tracks.find((t) => trackKey(t) === key)
+      if (track) return { name: member.name, kind: track.kind }
+    }
+    return null
+  }
+  const statsPanel = (
+    <Suspense fallback={null}>
+      <StatsPanel
+        store={media.stats}
+        describe={describeTrack}
+        onExported={() => show(strings.stats.exported)}
+      />
+    </Suspense>
+  )
   const shareTile =
     sharer && sharer.id !== state.you ? (
       <ShareTile
@@ -1328,6 +1397,11 @@ function Room({
                       role={member.role}
                       reconnecting={you ? selfReconnecting : member.reconnecting}
                       relayed={you && media.usingRelay}
+                      // Ours from our own stats while connected; theirs as they report it (e2-t13)
+                      signal={
+                        you ? (media.status === 'connected' ? media.signal : null) : member.signal
+                      }
+                      videoPaused={videoPaused(member)}
                       video={videoOf(member)}
                       pinned={member.id === pinnedId}
                       spotlighted={member.id === spotlight}
@@ -1376,6 +1450,27 @@ function Room({
                 <Note>{strings.room.mediaConnecting}</Note>
               )}
               {mediaReconnecting && <Note>{strings.room.mediaReconnecting}</Note>}
+              {suggestAudioOnly && (
+                <Alert role="alert">
+                  <span>{strings.adapt.suggest}</span>
+                  <AlertActions>
+                    <Button variant="secondary" onClick={() => setSuggestionDismissed(true)}>
+                      {strings.adapt.dismiss}
+                    </Button>
+                    <Button onClick={() => switchAudioOnly(true)}>
+                      {strings.adapt.switchAudioOnly}
+                    </Button>
+                  </AlertActions>
+                </Alert>
+              )}
+              {inRoom && audioOnly && (
+                <Note>
+                  {strings.adapt.audioOnly}
+                  <InlineButton type="button" onClick={() => switchAudioOnly(false)}>
+                    {strings.adapt.leaveAudioOnly}
+                  </InlineButton>
+                </Note>
+              )}
               {mediaLost && (
                 <Alert role="alert">
                   <span>{strings.room.mediaLost}</span>
@@ -1397,7 +1492,16 @@ function Room({
             </Notices>
           </StageBox>
         </StageArea>
-        {panel !== null && phone === null && (
+        {panel === 'stats' && phone === null && (
+          <SidePanel
+            title={strings.stats.title}
+            closeLabel={strings.stats.close}
+            onClose={() => setPanel(null)}
+          >
+            {statsPanel}
+          </SidePanel>
+        )}
+        {panel !== null && panel !== 'stats' && phone === null && (
           <SidePanel
             title={panel === 'chat' ? strings.chat.title : strings.participants.title}
             closeLabel={panel === 'chat' ? strings.chat.close : strings.participants.close}
@@ -1444,7 +1548,12 @@ function Room({
           reactions={{ handUp, onReact, onToggleHand }}
         />
       </ToolbarArea>
-      {panel !== null && phone !== null && (
+      {panel === 'stats' && phone !== null && (
+        <Drawer variant="full" title={strings.stats.title} onClose={() => setPanel(null)}>
+          {statsPanel}
+        </Drawer>
+      )}
+      {panel !== null && panel !== 'stats' && phone !== null && (
         <Drawer
           variant="full"
           title={panel === 'chat' ? strings.chat.title : strings.participants.title}
@@ -1830,6 +1939,40 @@ function mediaErrorText(error: MediaTransportErrorCode | null): string | null {
  * The free-tier notices (e11-t13): a toast whenever the month's state gets worse while we are in
  * the room (or is already bad when we arrive), and one when our own camera was not sent
  */
+/** 連線統計 (e2-t14): its own chunk, loaded when the panel first opens */
+const StatsPanel = lazy(() => import('../components/StatsPanel.tsx'))
+
+/**
+ * What the bandwidth adaptation did, as toasts (e2-t15, PRD 「網路不穩，已降低畫質」): a step
+ * down on what we receive or send, and the way back. The audio-only suggestion is a banner, not
+ * a toast; nothing is said while the member chose audio-only.
+ */
+function useAdaptationNotices(
+  downlink: DownlinkStage,
+  uplink: UplinkState,
+  audioOnly: boolean,
+  show: (text: string, tone?: 'warn') => void,
+) {
+  const before = useRef(downlink)
+  useEffect(() => {
+    const was = before.current
+    before.current = downlink
+    if (was === downlink || audioOnly) return
+    if (downlink === 'reduced' && was === 'normal') show(strings.adapt.reduced, 'warn')
+    else if (downlink === 'videoCut' && was !== 'audioOnly') show(strings.adapt.videoCut, 'warn')
+    else if (downlink === 'reduced' && was === 'videoCut') show(strings.adapt.videoBack)
+    else if (downlink === 'normal') show(strings.adapt.recovered)
+  }, [downlink, audioOnly, show])
+  const limited = uplink.cam !== 'high' || uplink.screen !== 'high'
+  const wasLimited = useRef(limited)
+  useEffect(() => {
+    if (wasLimited.current === limited) return
+    wasLimited.current = limited
+    if (limited) show(strings.adapt.uplinkLimited, 'warn')
+    else show(strings.adapt.uplinkRestored)
+  }, [limited, show])
+}
+
 function useUsageNotices(
   usage: UsageState,
   videoRefused: boolean,
@@ -2004,6 +2147,12 @@ const Notices = styled.div`
   &:empty {
     display: none;
   }
+`
+
+const AlertActions = styled.span`
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: ${space(2)};
 `
 
 const Note = styled.p`

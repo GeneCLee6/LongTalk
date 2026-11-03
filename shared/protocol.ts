@@ -113,6 +113,11 @@
 //    keeps its place. `host` `lowerHand` lowers someone else's (worker/roles.ts `lowerHand`: a
 //    host or co-host, on someone ranked below), who gets `notice` `handLowered`. A hand stays up
 //    while its member reconnects and goes with the member.
+// 20. Signal (H2, e2-t13): every browser judges its own connection from its getStats()
+//    (src/media/quality.ts) and sends `signal` with the level (good, fair, poor) when it changes,
+//    at most once every SIGNAL_REPORT_MS; the room puts it in `Member.signal` (null until the
+//    first report) for everyone's nameplates. More than SIGNAL_RATE is dropped without an answer,
+//    and so is one from someone waiting. The level stays while the member reconnects.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -133,6 +138,7 @@
 //   close codes `passwordRequired`, `passwordWrong`, `passwordWait`.
 // v12 → v13 (G3): `react`, `reaction`, `Member.hand`, `hand`, `host` action `lowerHand`, notice
 //   `handLowered`.
+// v13 → v14 (H2): `signal`, `Member.signal`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -145,7 +151,7 @@ import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 13
+export const PROTOCOL_VERSION = 14
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -323,7 +329,23 @@ export type Member = {
    * (shared/reactions.ts handQueue); null while it is down
    */
   hand: number | null
+  /** How good the member's own connection is, as their browser judged it (H2); null: unknown */
+  signal: SignalLevel | null
 }
+
+/** A nameplate's signal bars (e2-t13): 好／普通／差 */
+export type SignalLevel = 'good' | 'fair' | 'poor'
+
+export const SIGNAL_LEVELS: readonly SignalLevel[] = ['good', 'fair', 'poor']
+
+export const isSignalLevel = (value: unknown): value is SignalLevel =>
+  SIGNAL_LEVELS.includes(value as SignalLevel)
+
+/** A browser sends `signal` at most this often (changes in between wait) */
+export const SIGNAL_REPORT_MS = 5_000
+
+/** The room drops `signal` beyond this per member (a browser keeping SIGNAL_REPORT_MS never hits it) */
+export const SIGNAL_RATE = { count: 3, windowMs: 10_000 } as const
 
 /** What every member sees of the room: the state `snapshot` sends and `patch` keeps up to date */
 export type RoomView = {
@@ -487,6 +509,9 @@ export type ReactClientMessage = { t: 'react'; emoji: Reaction }
 /** Raise (`up`) or lower the member's own hand (G3, e5-t04) */
 export type HandMessage = { t: 'hand'; up: boolean }
 
+/** The member's own connection, as their browser judges it (H2, e2-t13) */
+export type SignalMessage = { t: 'signal'; level: SignalLevel }
+
 /** The host controls that act on one member (F1; `lowerHand` G3); `memberId` says who */
 export type HostMemberAction = 'muteMember' | 'camOff' | 'stopShare' | 'remove' | 'lowerHand'
 
@@ -553,6 +578,7 @@ export type ClientMessage =
   | SpotlightMessage
   | ReactClientMessage
   | HandMessage
+  | SignalMessage
 
 // ── POST /api/rooms ──────────────────────────────────────────────────────────────────────────
 
@@ -667,6 +693,8 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return isReaction(value.emoji) ? { t: 'react', emoji: value.emoji } : null
     case 'hand':
       return typeof value.up === 'boolean' ? { t: 'hand', up: value.up } : null
+    case 'signal':
+      return isSignalLevel(value.level) ? { t: 'signal', level: value.level } : null
     case 'host': {
       const action = value.action
       if (typeof action !== 'string') return null

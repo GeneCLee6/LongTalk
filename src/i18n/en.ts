@@ -6,6 +6,7 @@ import type { Strings, TileState } from './types.ts'
 
 const lower = (kind: string) => kind.toLowerCase()
 const plural = (count: number, one: string, many: string) => (count === 1 ? one : many)
+const enSignal = { good: 'good signal', fair: 'fair signal', poor: 'poor signal' }
 
 export const en: Strings = {
   appName: 'LongTalk',
@@ -187,11 +188,16 @@ export const en: Strings = {
         state.host && 'host',
         state.cohost && 'co-host',
         state.micMuted ? 'microphone off' : 'microphone on',
-        state.camOff ? 'camera off' : 'camera on',
+        state.videoPaused
+          ? 'video paused (poor connection)'
+          : state.camOff
+            ? 'camera off'
+            : 'camera on',
         state.hand !== null && `hand raised, number ${state.hand}`,
         state.pinned && 'pinned',
         state.spotlighted && 'spotlight',
         state.reconnecting && 'reconnecting',
+        state.signal && enSignal[state.signal],
       ]
         .filter(Boolean)
         .join(', '),
@@ -668,6 +674,82 @@ export const en: Strings = {
   share: {
     action: 'Share link…',
     text: 'Come and talk on LongTalk: ',
+  },
+  stats: {
+    menu: 'Connection stats',
+    title: 'Connection stats',
+    close: 'Close connection stats',
+    signal: enSignal,
+    collecting: 'Collecting connection data… updated every 2 seconds.',
+    yours: 'Your connection',
+    rtt: 'Round trip',
+    lossDown: 'Receive loss',
+    lossUp: 'Send loss',
+    receive: 'Receiving',
+    send: 'Sending',
+    path: 'Path',
+    direct: 'Direct',
+    relay: 'Through a relay server (TURN)',
+    candidate: 'Candidate type',
+    protocol: 'Protocol',
+    uplinkEstimate: 'Uplink estimate',
+    sending: 'What you send',
+    receiving: 'What you receive',
+    nothingSent: 'You’re not sending any sound or video right now.',
+    nothingReceived: 'You’re not receiving any sound or video right now.',
+    kinds: {
+      mic: 'Microphone',
+      cam: 'Camera',
+      screen: 'Shared screen',
+      screenAudio: 'Shared audio',
+    },
+    track: (name: string, kind: string) => `${name} · ${lower(kind)}`,
+    unknownMember: 'Someone who left',
+    codec: 'Codec',
+    resolution: 'Resolution',
+    fps: 'Frame rate',
+    bitrate: 'Bitrate',
+    loss: 'Loss',
+    jitter: 'Jitter',
+    layer: 'Layer asked for',
+    layers: 'Layers sent',
+    layerNames: { high: 'high', medium: 'medium', low: 'low' },
+    layerOff: 'off',
+    limitation: 'Encoder limited by',
+    limitations: { none: 'nothing', bandwidth: 'bandwidth', cpu: 'the processor', other: 'other' },
+    freezes: 'Freezes',
+    adaptation: 'Adaptation',
+    downlink: 'Receiving',
+    uplink: 'Sending',
+    downlinkStages: {
+      normal: 'normal',
+      reduced: 'lower quality',
+      videoCut: 'others’ video paused',
+      audioOnly: 'audio-only suggested',
+    },
+    budget: 'Video budget',
+    paused: (count: number) => `video paused for ${count} ${plural(count, 'person', 'people')}`,
+    uplinkNormal: 'normal',
+    uplinkLimited: 'your top quality is off',
+    audioOnlyOn: 'Audio-only mode',
+    export: 'Export JSON',
+    exportHint: 'A file for debugging: it has members’ names, no passwords, tokens or SDP.',
+    exported: 'Connection stats downloaded',
+  },
+  adapt: {
+    reduced: 'Unstable network: video quality lowered',
+    videoCut: 'Unstable network: others’ video paused (sound continues)',
+    videoBack: 'Network improving: video is back',
+    recovered: 'Network recovered: video quality restored',
+    uplinkLimited: 'Your upload is struggling: the video you send is lowered',
+    uplinkRestored: 'The video you send is back to full quality',
+    suggest:
+      'Poor network: others’ video is paused and sound is still choppy. Audio-only can make the sound steadier.',
+    switchAudioOnly: 'Switch to audio-only',
+    dismiss: 'No thanks',
+    audioOnly: 'Audio-only: no video received, and your camera isn’t sent.',
+    leaveAudioOnly: 'Turn video back on',
+    audioOnlyOn: 'Switched to audio-only',
   },
   rename: {
     room: 'Rename room',

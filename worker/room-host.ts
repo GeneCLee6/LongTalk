@@ -14,9 +14,11 @@ import {
   MAX_PENDING_SOCKETS,
   PROTOCOL_VERSION,
   RECONNECT_GRACE_MS,
+  SIGNAL_RATE,
   STALE_AFTER_MS,
   SWEEP_INTERVAL_MS,
   WAIT_TIMEOUT_MS,
+  isSignalLevel,
   parseClientMessage,
   viewAsJson,
   waitingQueue,
@@ -31,6 +33,7 @@ import {
   type RoomSummary,
   type RoomView,
   type ServerMessage,
+  type SignalLevel,
   type StatsMessage,
   type TrackKind,
   type TracksMessage,
@@ -278,6 +281,8 @@ export class RoomHost {
   private readonly chatRate = new ChatRateLimit()
   /** Reactions per member (G3, REACTION_RATE), in memory like the chat's */
   private readonly reactionRate = new ChatRateLimit(REACTION_RATE)
+  /** `signal` reports per member (H2, SIGNAL_RATE), in memory */
+  private readonly signalRate = new ChatRateLimit(SIGNAL_RATE)
   /** Removed (F1) and denied (F2) browsers and until when, by client id */
   private readonly bans = new Map<string, { until: number; kind: BanKind }>()
   /** The `lobby` each waiting member was sent last (F2), to send it only when it changes */
@@ -344,6 +349,7 @@ export class RoomHost {
     this.relayed.clear()
     this.chatRate.clear()
     this.reactionRate.clear()
+    this.signalRate.clear()
     this.bans.clear()
     this.lobbies.clear()
     for (const ban of bans) {
@@ -365,14 +371,15 @@ export class RoomHost {
     }
     for (const record of sessions) {
       // Members stored by protocol v2 have no tracks, by v3 no `muted`, by v5 no role, by v12 no
-      // hand
+      // hand, by v13 no signal
       const tracks = (record.member.tracks ?? []).map((track) => ({
         ...track,
         muted: track.muted ?? false,
       }))
       const role = record.member.role ?? 'participant'
       const hand = typeof record.member.hand === 'number' ? record.member.hand : null
-      this.members.set(record.member.id, { ...record.member, role, tracks, hand })
+      const signal = isSignalLevel(record.member.signal) ? record.member.signal : null
+      this.members.set(record.member.id, { ...record.member, role, tracks, hand, signal })
       this.sessions.set(record.member.id, {
         token: record.token,
         conn: record.conn,
@@ -614,6 +621,9 @@ export class RoomHost {
       case 'hand':
         this.raiseHand(connId, conn.member!, message.up)
         return
+      case 'signal':
+        this.setSignal(conn.member!, message.level)
+        return
     }
   }
 
@@ -629,6 +639,19 @@ export class RoomHost {
     for (const [id, conn] of this.conns) {
       if (this.inRoom(conn)) this.deps.sockets.send(id, frame)
     }
+  }
+
+  /**
+   * `signal` (H2, e2-t13): the member's own connection level for everyone's nameplates. Not a
+   * permission (it only says something about the sender), but someone waiting has no nameplate,
+   * and over SIGNAL_RATE it is dropped without an answer, like a reaction.
+   */
+  private setSignal(memberId: string, level: SignalLevel): void {
+    const member = this.members.get(memberId)
+    if (!member || member.role === 'waiting' || member.signal === level) return
+    if (!this.signalRate.take(memberId, this.deps.now())) return
+    this.setMember(memberId, { signal: level })
+    this.publish()
   }
 
   /**
@@ -1458,6 +1481,7 @@ export class RoomHost {
         reconnecting: false,
         tracks: [],
         hand: null,
+        signal: null,
       }
       this.members.set(memberId, member)
       this.sessions.set(memberId, {
@@ -1528,6 +1552,7 @@ export class RoomHost {
     this.relayed.delete(memberId)
     this.chatRate.forget(memberId)
     this.reactionRate.forget(memberId)
+    this.signalRate.forget(memberId)
     this.lobbies.delete(memberId)
   }
 
@@ -1646,6 +1671,7 @@ export class RoomHost {
     this.chatId = 0
     this.chatRate.clear()
     this.reactionRate.clear()
+    this.signalRate.clear()
     this.bans.clear()
     this.lobbies.clear()
     this.password = null

@@ -11,6 +11,7 @@ import {
   radius,
   space,
 } from '../styles/tokens.ts'
+import type { SignalLevel } from '../../shared/protocol.ts'
 import type { Role } from '../../shared/roles.ts'
 import type { FloatingReaction } from '../room/floatingReactions.ts'
 import {
@@ -22,6 +23,7 @@ import {
   SpotlightIcon,
 } from './icons.tsx'
 import { TileVisibleContext } from './layoutContext.ts'
+import { SignalBars } from './SignalBars.tsx'
 import { TileReactions } from './TileReactions.tsx'
 import { useTrack } from './useTrack.ts'
 import { useVideoDemand } from './useVideoDemand.ts'
@@ -54,12 +56,20 @@ export interface TileProps {
   reactions?: readonly FloatingReaction[]
   /** Host or co-host: said with the tile's state to a screen reader (G5, e4-t14) */
   role?: Role
+  /**
+   * Their connection (H2, e2-t13): ours from our own stats, theirs as they report it; three bars
+   * on the nameplate. Null or absent: unknown, no bars
+   */
+  signal?: SignalLevel | null
+  /** Their camera is on, but we do not receive it to save our downlink (e2-t15): initials */
+  videoPaused?: boolean
 }
 
 /**
  * One member in the room (e4-t04, e4-t05; DESIGN.md §5): their camera, or their initial on a
  * colour from their name; the nameplate bottom-left (muted microphone, speaking mark, name, 「你」);
- * a green outline while they speak; dimmed with a 「重新連線中」 badge while they reconnect. Fills
+ * a green outline while they speak; dimmed with a 「重新連線中」 badge while they reconnect; their
+ * signal bars (H2) after the name. Fills
  * the box the grid gives it. Their microphone plays elsewhere (MemberAudio), so a tile can move
  * between pages or layouts without a gap in the sound. A tile on a page out of view
  * (TileVisibleContext, e4-t07) shows the initial instead of the video until it is back.
@@ -79,6 +89,8 @@ export function Tile({
   hand = null,
   reactions = NO_REACTIONS,
   role,
+  signal = null,
+  videoPaused = false,
 }: TileProps) {
   const visible = useContext(TileVisibleContext)
   const shown = visible ? video : null
@@ -99,6 +111,8 @@ export function Tile({
     pinned,
     spotlighted,
     reconnecting,
+    signal,
+    videoPaused,
   })
   return (
     <Frame
@@ -196,9 +210,10 @@ export function Tile({
           )
         )}
         <Name>{name}</Name>
+        {signal && !reconnecting && <SignalBars level={signal} />}
         {you && <You>{strings.common.you}</You>}
         {relayed && <Quiet>{strings.room.relayed}</Quiet>}
-        {!video && <VisuallyHidden> · {strings.room.camOff}</VisuallyHidden>}
+        {!video && !videoPaused && <VisuallyHidden> · {strings.room.camOff}</VisuallyHidden>}
       </Nameplate>
       <span id={stateId} hidden>
         {state}

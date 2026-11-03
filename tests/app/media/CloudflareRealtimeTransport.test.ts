@@ -72,23 +72,25 @@ class MockPc {
   getTransceivers() {
     return this.transceivers
   }
+  /** What getStats() reports; a test may replace it */
+  report: Map<string, Record<string, unknown>> = new Map<string, Record<string, unknown>>([
+    [
+      'p',
+      {
+        id: 'p',
+        type: 'candidate-pair',
+        nominated: true,
+        state: 'succeeded',
+        currentRoundTripTime: 0.042,
+        bytesSent: 10,
+        bytesReceived: 20,
+        localCandidateId: 'l',
+      },
+    ],
+    ['l', { id: 'l', type: 'local-candidate', candidateType: 'relay' }],
+  ])
   async getStats() {
-    return new Map<string, Record<string, unknown>>([
-      [
-        'p',
-        {
-          id: 'p',
-          type: 'candidate-pair',
-          nominated: true,
-          state: 'succeeded',
-          currentRoundTripTime: 0.042,
-          bytesSent: 10,
-          bytesReceived: 20,
-          localCandidateId: 'l',
-        },
-      ],
-      ['l', { id: 'l', type: 'local-candidate', candidateType: 'relay' }],
-    ])
+    return this.report
   }
   close() {
     this.closed = true
@@ -572,11 +574,97 @@ describe('CloudflareRealtimeTransport', () => {
   it('summarises the selected candidate pair, including TURN use', async () => {
     const { transport } = setup({ 'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' } })
     await transport.connect()
-    expect(await transport.getStats()).toEqual({
+    expect(await transport.getStats()).toMatchObject({
       rttMs: 42,
       usingRelay: true,
+      candidateType: 'relay',
       bytesSent: 10,
       bytesReceived: 20,
+      outbound: [],
+      inbound: [],
+    })
+  })
+
+  it('reads every sent and received track by its mid, and nothing it does not know (e2-t13)', async () => {
+    const { transport, pc } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: 'sfu-answer' },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    await transport.connect()
+    const mic = await transport.publish(track, { kind: 'mic' })
+    pc.report = new Map(
+      [
+        {
+          id: 'o1',
+          type: 'outbound-rtp',
+          kind: 'audio',
+          mid: '0',
+          bytesSent: 900,
+          packetsSent: 30,
+          codecId: 'c1',
+        },
+        { id: 'r1', type: 'remote-inbound-rtp', localId: 'o1', packetsLost: 3, fractionLost: 0.1 },
+        { id: 'c1', type: 'codec', mimeType: 'audio/opus' },
+        { id: 'stray', type: 'inbound-rtp', kind: 'video', mid: '9', bytesReceived: 1 },
+      ].map((entry) => [entry.id, entry]),
+    )
+    const stats = await transport.getStats()
+    expect(stats.outbound).toEqual([
+      expect.objectContaining({
+        trackName: mic.trackName,
+        kind: 'mic',
+        codec: 'opus',
+        bytesSent: 900,
+        packetsLost: 3,
+        fractionLost: 0.1,
+      }),
+    ])
+    // A mid no subscription of ours has is left out
+    expect(stats.inbound).toEqual([])
+  })
+
+  it('turns simulcast layers above a ceiling off and back on, keeping the lowest (e2-t15)', async () => {
+    const { transport, pc } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: 'sfu-answer' },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    await transport.connect()
+    const cam = await transport.publish({ kind: 'video' } as MediaStreamTrack, {
+      kind: 'cam',
+      simulcast: true,
+    })
+    const sender = pc.transceivers[0].sender!
+    let encodings: Record<string, unknown>[] = [
+      { rid: 'f', active: true },
+      { rid: 'h', active: true },
+      { rid: 'q', active: true },
+    ]
+    sender.getParameters = () => ({ transactionId: 't2', encodings })
+    sender.setParameters.mockClear()
+    sender.setParameters.mockImplementation(async (params: { encodings: typeof encodings }) => {
+      encodings = params.encodings
+    })
+    await transport.limitSendLayers(cam.trackName, 'medium')
+    expect(encodings.map((e) => e.active)).toEqual([false, true, true])
+    expect(sender.setParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ transactionId: 't2' }),
+    )
+    await transport.limitSendLayers(cam.trackName, 'low')
+    expect(encodings.map((e) => e.active)).toEqual([false, false, true])
+    await transport.limitSendLayers(cam.trackName, 'high')
+    expect(encodings.map((e) => e.active)).toEqual([true, true, true])
+    // Asking for what it already sends changes nothing
+    sender.setParameters.mockClear()
+    await transport.limitSendLayers(cam.trackName, 'high')
+    expect(sender.setParameters).not.toHaveBeenCalled()
+    await expect(transport.limitSendLayers('nope', 'low')).rejects.toMatchObject({
+      code: 'not_found',
     })
   })
 

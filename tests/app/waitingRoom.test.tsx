@@ -16,6 +16,7 @@ const person = (id: string, name: string, role: Role): Member => ({
   reconnecting: false,
   tracks: [],
   hand: null,
+  signal: null,
 })
 
 const entry = (id: string, name: string, since: number, reconnecting = false): WaitingEntry => ({

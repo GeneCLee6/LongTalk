@@ -64,6 +64,13 @@ export class FakeTransport implements MediaTransport {
   bytesReceived = 0
   /** What getStats() reports as the path; tests set it (e2-t07) */
   usingRelay = false
+  /**
+   * The rest of what getStats() reports (e2-t13): tests set the per-track counters (or a function
+   * of the time, for a link that degrades) and move them forward
+   */
+  stats: Partial<TransportStats> | (() => Partial<TransportStats>) = {}
+  /** What limitSendLayers asked for, by trackName (e2-t15); absent: every layer */
+  readonly sendCeilings = new Map<string, Layer>()
   /** What connect() was given, and the servers setIceServers() handed over since */
   connectOptions: ConnectOptions | null = null
   readonly iceServerUpdates: RTCIceServer[][] = []
@@ -153,12 +160,29 @@ export class FakeTransport implements MediaTransport {
 
   async getStats(): Promise<TransportStats> {
     this.#requireSession()
+    const extra = typeof this.stats === 'function' ? this.stats() : this.stats
     return {
+      timestamp: Date.now(),
       rttMs: 0,
       usingRelay: this.usingRelay,
+      candidateType: this.usingRelay ? 'relay' : 'host',
+      protocol: 'udp',
       bytesSent: 0,
       bytesReceived: this.bytesReceived,
+      availableOutgoingBitrate: null,
+      outbound: [],
+      inbound: [],
+      ...extra,
     }
+  }
+
+  async limitSendLayers(trackName: string, highest: Layer): Promise<void> {
+    this.#requireSession()
+    if (!this.#ownTracks.has(trackName)) {
+      throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    }
+    if (highest === 'high') this.sendCeilings.delete(trackName)
+    else this.sendCeilings.set(trackName, highest)
   }
 
   setIceServers(iceServers: RTCIceServer[]): void {

@@ -61,6 +61,7 @@ const member = (id: string) => ({
   reconnecting: false,
   tracks: [],
   hand: null,
+  signal: null,
 })
 const TOKEN = 'T'.repeat(43)
 const welcome = (rev: number, members: Record<string, ReturnType<typeof member>> = {}) =>
