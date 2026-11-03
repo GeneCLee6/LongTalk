@@ -62,6 +62,7 @@ CI 不能代替實機的：真的鏡頭與麥克風、螢幕選擇器與分頁�
 - **WebKit（Safari 的引擎）simulcast**：三層都協商成功、沒有退回單層，但剛加入時只有 `f` 有畫面（`h`、`q` 還是 0×0）；Chromium 照樣收得到 WebKit 的畫面與聲音。真的 Safari 會不會一直只送一層、別人選小格時拿到什麼，要實機確認（`DEPLOY.md` §5「Mac」那段）；風險表（`PRD/e2-media-core-webrtc-sfu.md`）的退路「Safari 退化為單層」仍成立，別人一定看得到。
 - **Firefox 的 `getVideoPlaybackQuality()`** 對 MediaStream 的影片一直是 0（不是 LongTalk 的問題），測試改用 `requestVideoFrameCallback` 數幀。Playwright 在 Firefox 的 `fill()` 會觸發輸入法的 composition 事件，緊接著的 Enter 照設計只選字不送出（`chatText.ts` 的 `COMPOSITION_GRACE_MS`），測試改成逐字打。在 WebKit，從 init script 改 `navigator.mediaDevices` 上的方法沒有作用，測試的替身改放在 `MediaDevices.prototype`。
 - **Firefox 的 console 警告**「Using five or more STUN/TURN servers slows down discovery」：Cloudflare TURN 回的 ICE 網址（濾掉 port 53 之後）有 5 個以上。目前不影響連線（CI 互通正常）；要不要少給幾個（例如只留 UDP 3478 與 TLS 443），等實機量過連線時間再決定。
+- **安全標頭（I1，`public/_headers`）**：`UI checks / browsers` 的三個引擎都在這組 CSP（含 `script-src … 'wasm-unsafe-eval'`，RNNoise 的 wasm 要它；Chrome 97+、Firefox 102+、Safari 16+ 認得）、`Permissions-Policy`、`Cross-Origin-Opener-Policy: same-origin` 底下跑，首頁、預先加入、聊天、假裝置都正常，console 沒有警告。`Permissions-Policy` 只有 Chromium 真的照它做；Firefox 不認這個標頭（鏡頭、麥克風、分享照它自己的權限提示），Safari 只認一部分，所以 `camera=(self)` 這類限制在那兩個瀏覽器只是沒效果、不會擋到 LongTalk 自己。Turnstile（`challenges.cloudflare.com` 的 iframe）在 PR 預覽用 Cloudflare 的測試 key；Firefox、WebKit 經首頁開房都通過（`e2e-firefox`）。
 - **Windows 版的 Playwright WebKit** 沒有 WebRTC 與 `mediaDevices`：會議室顯示「這個瀏覽器不能視訊通話」（`e2-t09` 的畫面），本機跑 `npm run test:browsers` 時 WebKit 的媒體測試會略過；CI（Linux）有 WebRTC 與假裝置，全部會跑。
 
 **依文件，等實機**：
