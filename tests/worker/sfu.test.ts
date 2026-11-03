@@ -73,7 +73,7 @@ function room() {
     if (welcome?.t !== 'welcome') throw new Error('not welcomed')
     return { conn, token: welcome.token, id: welcome.you }
   }
-  return { host, gene: join('Gene'), wei: join('Wei') }
+  return { host, sent, gene: join('Gene'), wei: join('Wei') }
 }
 
 function setup(body: unknown = {}, status = 200, usage: UsageState = 'normal') {
@@ -154,6 +154,22 @@ describe('SFU proxy: membership', () => {
     )
     expect(res.status).toBe(401)
     expect(t.fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses someone in the waiting room (403, F2) until the host admits them', async () => {
+    const t = setup({ sessionId: 'sess-a' }, 201)
+    t.host.message(t.gene.conn, JSON.stringify({ t: 'host', action: 'waitingRoom', on: true }))
+    t.host.opened('c-Ann')
+    t.host.message('c-Ann', JSON.stringify({ t: 'join', name: 'Ann', token: null }))
+    const lobby = t.sent.get('c-Ann')!.find((m) => m.t === 'lobby')
+    if (lobby?.t !== 'lobby') throw new Error('not waiting')
+    const res = await handleSfu(req('POST', base, lobby.token), configured, t.deps)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'forbidden' })
+    expect(t.fetchMock).not.toHaveBeenCalled()
+    t.host.message(t.gene.conn, JSON.stringify({ t: 'host', action: 'admit', memberId: lobby.you }))
+    const admitted = await handleSfu(req('POST', base, lobby.token), configured, t.deps)
+    expect(admitted.status).toBe(201)
   })
 
   it("refuses to drive someone else's session (403)", async () => {

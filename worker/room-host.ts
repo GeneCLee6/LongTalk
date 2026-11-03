@@ -3,6 +3,7 @@ import { diff } from '../shared/patch.ts'
 import {
   BAN_MS,
   CloseCode,
+  DENY_COOLDOWN_MS,
   EMPTY_ROOM_TTL_MS,
   HEARTBEAT_PING,
   HOST_HANDOFF_MS,
@@ -14,9 +15,12 @@ import {
   RECONNECT_GRACE_MS,
   STALE_AFTER_MS,
   SWEEP_INTERVAL_MS,
+  WAIT_TIMEOUT_MS,
   parseClientMessage,
   viewAsJson,
+  waitingQueue,
   type HostMessage,
+  type LobbyMessage,
   type Member,
   type MemberTrack,
   type NoticeMessage,
@@ -28,6 +32,7 @@ import {
   type StatsMessage,
   type TrackKind,
   type TracksMessage,
+  type WaitingEntry,
 } from '../shared/protocol.ts'
 import {
   ASSUMED_BITRATE,
@@ -74,9 +79,13 @@ export type SessionRecord = {
 
 /**
  * A removed member's browser (F1, AC-1.4): `client` is the id its `join` carried. Kept until
- * `until` (BAN_MS after the removal) in the room's storage, so it outlasts an eviction.
+ * `until` (BAN_MS after the removal) in the room's storage, so it outlasts an eviction. `denied`
+ * (F2): turned away from the waiting room, kept out only for DENY_COOLDOWN_MS.
  */
-export type Ban = { client: string; until: number }
+export type Ban = { client: string; until: number; denied?: true }
+
+/** Why a browser may not join now (a ban, F1, or a denial's cool-down, F2) */
+type BanKind = 'removed' | 'denied'
 
 /**
  * What the SFU proxy may do for a session token (worker/sfu.ts): the member's id and the kind of
@@ -99,6 +108,23 @@ export type SfuTrackRef = { sessionId: string; trackName: string }
 
 /** Egress counted since the previous flush (shared/usage.ts), in bytes */
 export type UsageDelta = { clientBytes: number; estimateBytes: number }
+
+/** What each `host` action asks worker/roles.ts for (F1, F2) */
+const HOST_RULE: Readonly<Record<HostMessage['action'], Action>> = {
+  muteMember: 'muteMember',
+  camOff: 'camOff',
+  stopShare: 'stopShare',
+  remove: 'remove',
+  muteAll: 'muteAll',
+  endMeeting: 'endMeeting',
+  lock: 'lockRoom',
+  waitingRoom: 'waitingRoom',
+  admit: 'admit',
+  admitAll: 'admit',
+  deny: 'admit',
+}
+
+const NO_CONNS: ReadonlySet<string> = new Set()
 
 /** The kinds only the member holding the share may list (D1) */
 const SCREEN_KINDS: ReadonlySet<TrackKind> = new Set(['screen', 'screenAudio'])
@@ -205,8 +231,10 @@ export class RoomHost {
   private chatId = 0
   /** CHAT_RATE per member; in memory only (an eviction forgets it) */
   private readonly chatRate = new ChatRateLimit()
-  /** Removed browsers and until when (F1), by client id */
-  private readonly bans = new Map<string, number>()
+  /** Removed (F1) and denied (F2) browsers and until when, by client id */
+  private readonly bans = new Map<string, { until: number; kind: BanKind }>()
+  /** The `lobby` each waiting member was sent last (F2), to send it only when it changes */
+  private readonly lobbies = new Map<string, string>()
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -229,7 +257,17 @@ export class RoomHost {
     bans: readonly Ban[] = [],
   ): void {
     // Rooms stored before v6 have no name, creator or start time
-    this.info = info ? { name: null, createdBy: null, startedAt: null, share: null, ...info } : null
+    this.info = info
+      ? {
+          name: null,
+          createdBy: null,
+          startedAt: null,
+          share: null,
+          locked: false,
+          waitingRoom: false,
+          ...info,
+        }
+      : null
     this.rev = rev
     this.schedule = new Scheduler(schedule)
     this.storedSchedule = JSON.stringify(this.schedule)
@@ -241,7 +279,10 @@ export class RoomHost {
     this.relayed.clear()
     this.chatRate.clear()
     this.bans.clear()
-    for (const ban of bans) this.bans.set(ban.client, ban.until)
+    this.lobbies.clear()
+    for (const ban of bans) {
+      this.bans.set(ban.client, { until: ban.until, kind: ban.denied ? 'denied' : 'removed' })
+    }
     this.chat = [...chat].sort((a, b) => a.id - b.id).slice(-CHAT_HISTORY)
     this.chatId = this.chat.at(-1)?.id ?? 0
     this.reported = 0
@@ -292,9 +333,11 @@ export class RoomHost {
     return this.info !== null
   }
 
-  /** Members in the room, connected or reconnecting */
+  /** Members in the room, connected or reconnecting (not who waits, F2) */
   get memberCount(): number {
-    return this.members.size
+    let count = 0
+    for (const member of this.members.values()) if (member.role !== 'waiting') count++
+    return count
   }
 
   /** Whether the sweep alarm still has anything to watch */
@@ -308,7 +351,15 @@ export class RoomHost {
    */
   create(init: RoomInit): boolean {
     if (this.info) return false
-    this.info = { ...init, name: null, createdBy: null, startedAt: null, share: null }
+    this.info = {
+      ...init,
+      name: null,
+      createdBy: null,
+      startedAt: null,
+      share: null,
+      locked: false,
+      waitingRoom: false,
+    }
     this.deps.storage.saveRoom(this.info)
     this.usageAt = this.deps.now()
     this.sent = this.view()
@@ -337,6 +388,8 @@ export class RoomHost {
         this.publish()
       } else if (job === 'bans') {
         this.pruneBans()
+      } else if (job === 'waiting') {
+        this.expireWaiting()
       } else if (job === 'close' && this.info && !this.active) {
         this.close()
         result.closed = true
@@ -349,7 +402,7 @@ export class RoomHost {
 
   /** For GET /api/rooms/<id>; null when the room does not exist */
   summary(): RoomSummary | null {
-    return this.info ? { ...this.info, memberCount: this.members.size } : null
+    return this.info ? { ...this.info, memberCount: this.memberCount } : null
   }
 
   /** Whether a new WebSocket may open; `version` is the `v` query parameter */
@@ -403,6 +456,12 @@ export class RoomHost {
         this.join(connId, message.name, message.token, message.client)
         return
       case 'resync':
+        // Someone waiting never gets the view (F2): its lobby again instead
+        if (this.isWaiting(conn.member!)) {
+          this.lobbies.delete(conn.member!)
+          this.updateLobbies()
+          return
+        }
         this.deps.sockets.send(connId, {
           t: 'snapshot',
           rev: this.rev,
@@ -458,11 +517,28 @@ export class RoomHost {
    */
   private control(connId: string, memberId: string, message: HostMessage): void {
     const targetId = 'memberId' in message ? message.memberId : null
-    if (!this.allowed(memberId, message.action, targetId)) {
+    if (!this.allowed(memberId, HOST_RULE[message.action], targetId)) {
       this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
       return
     }
     switch (message.action) {
+      case 'lock':
+        this.setRoom({ locked: message.on })
+        return
+      case 'waitingRoom':
+        this.setRoom({ waitingRoom: message.on })
+        // Nobody is left waiting behind a waiting room that is off (F2)
+        if (!message.on) this.admitWaiting(this.waitingIds())
+        return
+      case 'admit':
+        this.admitWaiting([message.memberId])
+        return
+      case 'admitAll':
+        this.admitWaiting(this.waitingIds())
+        return
+      case 'deny':
+        this.deny(message.memberId)
+        return
       case 'muteMember':
         if (this.muteTrack(message.memberId, 'mic')) {
           this.notify(message.memberId, { t: 'notice', notice: 'muted', by: memberId })
@@ -494,6 +570,125 @@ export class RoomHost {
       case 'endMeeting':
         this.endMeeting()
         return
+    }
+  }
+
+  /** Changes the room's switches (F2) and tells everyone */
+  private setRoom(changes: Partial<Pick<RoomInfo, 'locked' | 'waitingRoom'>>): void {
+    this.info = { ...this.info!, ...changes }
+    this.deps.storage.saveRoom(this.info)
+    this.publish()
+  }
+
+  private isWaiting(memberId: string): boolean {
+    return this.members.get(memberId)?.role === 'waiting'
+  }
+
+  /** Who waits, in the queue's order */
+  private waitingIds(): string[] {
+    return waitingQueue(this.waitingView()).map((entry) => entry.id)
+  }
+
+  /**
+   * `admit` / `admitAll` (F2, e1-t10): each one still waiting becomes a participant (joined now,
+   * for the AC-1.3 handoff order) and, if connected, gets its `welcome` and the chat history
+   * right after everyone else's patch. Someone no longer waiting (admitted by another co-host,
+   * or gone) is skipped: the panel that showed them was out of date.
+   */
+  private admitWaiting(ids: readonly string[]): void {
+    const now = this.deps.now()
+    const admitted: string[] = []
+    for (const id of ids) {
+      if (!this.isWaiting(id)) continue
+      this.setMember(id, { role: 'participant', joinedAt: now })
+      this.lobbies.delete(id)
+      admitted.push(id)
+    }
+    if (admitted.length === 0) return
+    const conns = new Set<string>()
+    for (const id of admitted) {
+      const conn = this.sessions.get(id)?.conn
+      if (conn) conns.add(conn)
+    }
+    this.publish(conns)
+    for (const id of admitted) {
+      const conn = this.sessions.get(id)?.conn
+      if (conn) this.welcome(conn, id)
+    }
+  }
+
+  /**
+   * `deny` (F2): the person waiting is closed with CloseCode.denied and forgotten (its token
+   * too), and its browser cannot ask again for DENY_COOLDOWN_MS (a longer ban, from a removal,
+   * stays as it is).
+   */
+  private deny(memberId: string): void {
+    if (!this.isWaiting(memberId)) return
+    const session = this.sessions.get(memberId)!
+    if (session.client !== null && this.banned(session.client) === null) {
+      this.ban(session.client, 'denied')
+    }
+    if (session.conn !== null) {
+      this.conns.delete(session.conn)
+      this.deps.sockets.close(session.conn, CloseCode.denied, 'denied')
+    }
+    this.remove(memberId)
+    this.publish()
+  }
+
+  /**
+   * The `waiting` job (F2): whoever has waited WAIT_TIMEOUT_MS is closed with
+   * CloseCode.waitExpired and forgotten.
+   */
+  private expireWaiting(): void {
+    const now = this.deps.now()
+    let changed = false
+    for (const [id, member] of [...this.members]) {
+      if (member.role !== 'waiting' || now - member.joinedAt < WAIT_TIMEOUT_MS) continue
+      const conn = this.sessions.get(id)?.conn ?? null
+      if (conn !== null) {
+        this.conns.delete(conn)
+        this.deps.sockets.close(conn, CloseCode.waitExpired, 'waited too long')
+      }
+      this.remove(id)
+      changed = true
+    }
+    if (changed) this.publish()
+  }
+
+  /** Whether a host or co-host is connected: someone who can admit (F2) */
+  private staffPresent(): boolean {
+    for (const member of this.members.values()) {
+      if (!member.reconnecting && this.allowed(member.id, 'admit')) return true
+    }
+    return false
+  }
+
+  /**
+   * Sends each connected waiting member its `lobby` when it changed since the last one (its
+   * place, the queue's length, the room's name, whether someone can admit), or when it is on a
+   * new connection
+   */
+  private updateLobbies(): void {
+    const queue = this.waitingIds()
+    const hostPresent = this.staffPresent()
+    for (const [index, id] of queue.entries()) {
+      const session = this.sessions.get(id)!
+      if (session.conn === null) continue
+      const lobby: LobbyMessage = {
+        t: 'lobby',
+        v: PROTOCOL_VERSION,
+        you: id,
+        token: session.token,
+        position: index + 1,
+        count: queue.length,
+        room: { name: this.info!.name, createdBy: this.info!.createdBy },
+        hostPresent,
+      }
+      const key = `${session.conn} ${JSON.stringify(lobby)}`
+      if (this.lobbies.get(id) === key) continue
+      this.lobbies.set(id, key)
+      this.deps.sockets.send(session.conn, lobby)
     }
   }
 
@@ -535,26 +730,27 @@ export class RoomHost {
     this.publish()
   }
 
-  private ban(client: string): void {
+  private ban(client: string, kind: BanKind = 'removed'): void {
     this.bans.delete(client)
-    this.bans.set(client, this.deps.now() + BAN_MS)
+    const until = this.deps.now() + (kind === 'denied' ? DENY_COOLDOWN_MS : BAN_MS)
+    this.bans.set(client, { until, kind })
     // The oldest ban goes first (a Map keeps insertion order)
     while (this.bans.size > MAX_BANS) this.bans.delete(this.bans.keys().next().value!)
     this.saveBans()
   }
 
-  /** Whether the browser is banned now */
-  private banned(client: string | null): boolean {
-    if (client === null) return false
-    const until = this.bans.get(client)
-    return until !== undefined && until > this.deps.now()
+  /** Why the browser may not join now, or null when it may */
+  private banned(client: string | null): BanKind | null {
+    if (client === null) return null
+    const ban = this.bans.get(client)
+    return ban !== undefined && ban.until > this.deps.now() ? ban.kind : null
   }
 
   /** Drops the bans that ran out (the `bans` job, e1-t04's scheduler) */
   private pruneBans(): void {
     const now = this.deps.now()
     let changed = false
-    for (const [client, until] of this.bans) {
+    for (const [client, { until }] of this.bans) {
       if (until > now) continue
       this.bans.delete(client)
       changed = true
@@ -563,12 +759,14 @@ export class RoomHost {
   }
 
   private saveBans(): void {
-    this.deps.storage.saveBans([...this.bans].map(([client, until]) => ({ client, until })))
+    this.deps.storage.saveBans(this.banList)
   }
 
   /** The banned browsers now (for tests and the adapter) */
   get banList(): Ban[] {
-    return [...this.bans].map(([client, until]) => ({ client, until }))
+    return [...this.bans].map(([client, { until, kind }]) =>
+      kind === 'denied' ? { client, until, denied: true } : { client, until },
+    )
   }
 
   /**
@@ -612,7 +810,7 @@ export class RoomHost {
     while (this.chat.length > CHAT_HISTORY) this.deps.storage.dropChat(this.chat.shift()!.id)
     const frame: ServerMessage = { t: 'chat', messages: [message] }
     for (const [id, conn] of this.conns) {
-      if (conn.member !== null) this.deps.sockets.send(id, frame)
+      if (this.inRoom(conn)) this.deps.sockets.send(id, frame)
     }
   }
 
@@ -711,7 +909,7 @@ export class RoomHost {
   sfuAccess(token: string, sessionId: string | null, pulls: readonly SfuTrackRef[]): SfuAccess {
     const memberId = this.info ? this.byToken.get(token) : undefined
     if (memberId === undefined) return { ok: false, reason: 'unauthorized' }
-    // In the room, not (from e1-t10) in the waiting room: worker/roles.ts `media`
+    // In the room, not in the waiting room (F2): worker/roles.ts `media`
     if (!this.allowed(memberId, 'media')) return { ok: false, reason: 'forbidden' }
     if (sessionId !== null && this.sessions.get(memberId)!.sfu !== sessionId) {
       return { ok: false, reason: 'forbidden' }
@@ -731,7 +929,7 @@ export class RoomHost {
    */
   bindSfu(token: string, sessionId: string): boolean {
     const memberId = this.info ? this.byToken.get(token) : undefined
-    if (memberId === undefined) return false
+    if (memberId === undefined || !this.allowed(memberId, 'media')) return false
     const session = this.sessions.get(memberId)!
     session.sfu = sessionId
     this.baselines.set(memberId, { sessionId, bytes: 0, at: this.deps.now() })
@@ -826,8 +1024,17 @@ export class RoomHost {
   view(): RoomView {
     if (!this.info) throw new Error('The room was not created')
     const members: Record<string, Member> = {}
-    for (const [id, member] of this.members) members[id] = member
-    return { room: this.info, members, usage: this.usage }
+    for (const [id, member] of this.members) if (member.role !== 'waiting') members[id] = member
+    return { room: this.info, members, waiting: this.waitingView(), usage: this.usage }
+  }
+
+  /** Who waits (F2), as the room sees them */
+  private waitingView(): Record<string, WaitingEntry> {
+    const waiting: Record<string, WaitingEntry> = {}
+    for (const [id, { name, role, joinedAt, reconnecting }] of this.members) {
+      if (role === 'waiting') waiting[id] = { id, name, since: joinedAt, reconnecting }
+    }
+    return waiting
   }
 
   private findTrack(ref: SfuTrackRef): TrackKind | null {
@@ -892,13 +1099,18 @@ export class RoomHost {
    * banned browser (F1) is closed with CloseCode.removed.
    */
   private join(connId: string, name: string, token: string | null, client: string | null): void {
-    if (this.banned(client)) {
-      this.conns.delete(connId)
-      this.deps.sockets.close(connId, CloseCode.removed, 'removed')
-      this.reschedule()
+    const banned = this.banned(client)
+    if (banned) {
+      this.refuse(connId, banned === 'denied' ? CloseCode.denied : CloseCode.removed, banned)
       return
     }
     const known = token === null ? undefined : this.byToken.get(token)
+    // A locked room (F2) lets back in only who it knows: a member within its grace period, or
+    // someone already waiting
+    if (known === undefined && this.info!.locked) {
+      this.refuse(connId, CloseCode.locked, 'locked')
+      return
+    }
     let memberId: string
     if (known !== undefined) {
       memberId = known
@@ -913,8 +1125,7 @@ export class RoomHost {
       this.setMember(memberId, { name, reconnecting: false })
     } else {
       if (this.members.size >= MAX_MEMBERS) {
-        this.conns.delete(connId)
-        this.deps.sockets.close(connId, CloseCode.roomFull, 'room full')
+        this.refuse(connId, CloseCode.roomFull, 'room full')
         return
       }
       memberId = this.deps.newMemberId()
@@ -925,11 +1136,12 @@ export class RoomHost {
         this.info = { ...this.info!, createdBy: name, startedAt: now }
         this.deps.storage.saveRoom(this.info)
       }
-      // publish makes the member host if nobody is (assignHost)
+      // publish makes the member host if nobody is (assignHost); with the waiting room on, the
+      // member waits to be admitted (F2)
       const member: Member = {
         id: memberId,
         name,
-        role: 'participant',
+        role: this.info!.waitingRoom ? 'waiting' : 'participant',
         joinedAt: now,
         reconnecting: false,
         tracks: [],
@@ -945,7 +1157,21 @@ export class RoomHost {
       this.byToken.set(newToken, memberId)
     }
     this.conns.get(connId)!.member = memberId
-    this.publish(connId)
+    // Someone waiting gets its lobby from publish (updateLobbies), nothing else (F2)
+    this.lobbies.delete(memberId)
+    this.publish(new Set([connId]))
+    if (!this.isWaiting(memberId)) this.welcome(connId, memberId)
+  }
+
+  /** Closes a socket that may not join, with the reason */
+  private refuse(connId: string, code: number, reason: string): void {
+    this.conns.delete(connId)
+    this.deps.sockets.close(connId, code, reason)
+    this.reschedule()
+  }
+
+  /** The member is in the room on this connection: its welcome, then the chat history */
+  private welcome(connId: string, memberId: string): void {
     this.deps.sockets.send(connId, {
       t: 'welcome',
       v: PROTOCOL_VERSION,
@@ -955,6 +1181,11 @@ export class RoomHost {
       state: this.sent ?? this.view(),
     })
     this.sendChatHistory(connId)
+  }
+
+  /** A connection whose member is in the room (not waiting, F2): it gets patches and chat */
+  private inRoom(conn: Connection): boolean {
+    return conn.member !== null && !this.isWaiting(conn.member)
   }
 
   private markAway(memberId: string): void {
@@ -978,6 +1209,7 @@ export class RoomHost {
     this.baselines.delete(memberId)
     this.relayed.delete(memberId)
     this.chatRate.forget(memberId)
+    this.lobbies.delete(memberId)
   }
 
   /** Members are replaced, never mutated: `sent` shares their objects */
@@ -1007,6 +1239,8 @@ export class RoomHost {
     let host: Member | null = null
     let candidate: Member | null = null
     for (const member of this.members.values()) {
+      // Someone waiting is not in the meeting: never the host (F2)
+      if (member.role === 'waiting') continue
       if (member.role === 'host') {
         // Never two hosts (a defensive repair: nothing makes a second one)
         if (host) this.setMember(member.id, { role: 'participant' })
@@ -1046,14 +1280,27 @@ export class RoomHost {
     }
     const host = [...this.members.values()].find((member) => member.role === 'host')
     const away = host?.reconnecting ? (this.sessions.get(host.id)?.awaySince ?? null) : null
-    const someoneConnected = [...this.members.values()].some((member) => !member.reconnecting)
+    const someoneConnected = [...this.members.values()].some(
+      (member) => !member.reconnecting && member.role !== 'waiting',
+    )
     if (away !== null && someoneConnected) this.schedule.set('handoff', away + HOST_HANDOFF_MS)
     else this.schedule.clear('handoff')
     // The next ban to run out (F1); none left, no job
     let banEnds: number | null = null
-    for (const until of this.bans.values()) if (banEnds === null || until < banEnds) banEnds = until
+    for (const { until } of this.bans.values()) {
+      if (banEnds === null || until < banEnds) banEnds = until
+    }
     if (banEnds === null) this.schedule.clear('bans')
     else this.schedule.set('bans', banEnds)
+    // The next one to wait too long (F2); nobody waiting, no job
+    let waitEnds: number | null = null
+    for (const member of this.members.values()) {
+      if (member.role !== 'waiting') continue
+      const at = member.joinedAt + WAIT_TIMEOUT_MS
+      if (waitEnds === null || at < waitEnds) waitEnds = at
+    }
+    if (waitEnds === null) this.schedule.clear('waiting')
+    else this.schedule.set('waiting', waitEnds)
     const stored = JSON.stringify(this.schedule)
     if (stored !== this.storedSchedule) {
       this.storedSchedule = stored
@@ -1078,13 +1325,17 @@ export class RoomHost {
     this.chatId = 0
     this.chatRate.clear()
     this.bans.clear()
+    this.lobbies.clear()
     this.schedule.clearAll()
     this.storedSchedule = '{}'
     this.deps.storage.clear()
   }
 
-  /** Sends what changed since the last patch to every joined connection but `except` */
-  private publish(except?: string): void {
+  /**
+   * Sends what changed since the last patch to every connection in the room but `except` (who
+   * is about to get its welcome), then their lobby to who waits (F2)
+   */
+  private publish(except: ReadonlySet<string> = NO_CONNS): void {
     this.assignHost()
     this.reschedule()
     const next = this.view()
@@ -1093,12 +1344,14 @@ export class RoomHost {
       : [{ op: 'set' as const, path: [], value: viewAsJson(next) }]
     this.sent = next
     this.deps.storage.saveSessions(this.records())
-    if (ops.length === 0) return
-    this.rev += 1
-    this.deps.storage.saveRev(this.rev)
-    const message: ServerMessage = { t: 'patch', rev: this.rev, ops }
-    for (const [id, conn] of this.conns) {
-      if (id !== except && conn.member !== null) this.deps.sockets.send(id, message)
+    if (ops.length > 0) {
+      this.rev += 1
+      this.deps.storage.saveRev(this.rev)
+      const message: ServerMessage = { t: 'patch', rev: this.rev, ops }
+      for (const [id, conn] of this.conns) {
+        if (!except.has(id) && this.inRoom(conn)) this.deps.sockets.send(id, message)
+      }
     }
+    this.updateLobbies()
   }
 }

@@ -5,10 +5,12 @@ import {
   MAX_NAME_CHARS,
   MAX_ROOM_NAME_CHARS,
   normalizeName,
+  waitingQueue,
   type HostMemberAction,
   type NoticeMessage,
   type RoomInfo,
   type Role,
+  type WaitingEntry,
 } from '../../shared/protocol.ts'
 import { can } from '../../shared/roles.ts'
 import { pickSpeaker } from '../../shared/layout.ts'
@@ -40,6 +42,8 @@ import { Tile, type TileProps } from '../components/Tile.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
 import { Toolbar } from '../components/Toolbar.tsx'
 import { TopBar } from '../components/TopBar.tsx'
+import { TurnedAwayScreen, type TurnedAwayReason } from '../components/TurnedAwayScreen.tsx'
+import { WaitingScreen } from '../components/WaitingScreen.tsx'
 import { useToasts } from '../components/useToasts.ts'
 import {
   canChooseSpeaker,
@@ -111,13 +115,16 @@ export default function RoomPage() {
 type Stage =
   | { at: 'prejoin' }
   | { at: 'room'; choices: JoinChoices }
-  | { at: 'left'; reason: LeftReason; roomName: string }
+  | { at: 'left'; reason: LeftReason | TurnedAwayReason; roomName: string }
 
 /**
  * `left`: pressed 「離開」; `closed`: the room was gone when we came back to it; `ended`, `removed`:
  * the host ended the meeting or removed us (F1)
  */
 export type LeftReason = 'left' | 'closed' | 'ended' | 'removed'
+
+const isLeftReason = (reason: LeftReason | TurnedAwayReason): reason is LeftReason =>
+  reason === 'left' || reason === 'closed' || reason === 'ended' || reason === 'removed'
 
 function RoomEntry({ roomId }: { roomId: string }) {
   const navigate = useNavigate()
@@ -145,7 +152,20 @@ function RoomEntry({ roomId }: { roomId: string }) {
       </Shell>
     )
   }
-  if (stage.at === 'left') {
+  if (stage.at === 'left' && !isLeftReason(stage.reason)) {
+    // Not let in (F2): locked, turned away, waited too long, or left the waiting room
+    return (
+      <Page>
+        <TurnedAwayScreen
+          reason={stage.reason}
+          roomName={stage.roomName}
+          onRetry={() => setStage({ at: 'prejoin' })}
+          onHome={() => navigate('/')}
+        />
+      </Page>
+    )
+  }
+  if (stage.at === 'left' && isLeftReason(stage.reason)) {
     return (
       <Page>
         <LeftScreen
@@ -168,6 +188,7 @@ function RoomEntry({ roomId }: { roomId: string }) {
     <Page>
       <PreJoinGate
         roomId={roomId}
+        onHome={() => navigate('/')}
         onJoin={(choices) => {
           saveName(choices.name)
           setStage({ at: 'room', choices })
@@ -178,42 +199,65 @@ function RoomEntry({ roomId }: { roomId: string }) {
 }
 
 type Summary =
-  | { status: 'loading' | 'missing' | 'error'; memberCount: null }
-  | { status: 'ok'; memberCount: number }
+  | { status: 'loading' | 'missing' | 'error'; memberCount: null; waitingRoom: false }
+  | { status: 'ok'; memberCount: number; waitingRoom: boolean }
+  | { status: 'locked'; memberCount: null; waitingRoom: false }
 
-/** Checks the room exists before the pre-join screen asks for the camera */
+const LOADING: Summary = { status: 'loading', memberCount: null, waitingRoom: false }
+
+/**
+ * Checks the room exists before the pre-join screen asks for the camera; a locked room (F2) says
+ * so at once, with 再試一次 (the host may unlock it meanwhile)
+ */
 function PreJoinGate({
   roomId,
   onJoin,
+  onHome,
 }: {
   roomId: string
   onJoin: (choices: JoinChoices) => void
+  onHome: () => void
 }) {
-  const [summary, setSummary] = useState<Summary>({ status: 'loading', memberCount: null })
+  const [summary, setSummary] = useState<Summary>(LOADING)
+  const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     let cancelled = false
     getRoom(roomId).then(
       (room) => {
         if (cancelled) return
         setSummary(
-          room
-            ? { status: 'ok', memberCount: room.memberCount }
-            : { status: 'missing', memberCount: null },
+          !room
+            ? { status: 'missing', memberCount: null, waitingRoom: false }
+            : room.locked
+              ? { status: 'locked', memberCount: null, waitingRoom: false }
+              : { status: 'ok', memberCount: room.memberCount, waitingRoom: !!room.waitingRoom },
         )
       },
       () => {
-        if (!cancelled) setSummary({ status: 'error', memberCount: null })
+        if (!cancelled) setSummary({ status: 'error', memberCount: null, waitingRoom: false })
       },
     )
     return () => {
       cancelled = true
     }
-  }, [roomId])
+  }, [roomId, attempt])
   switch (summary.status) {
     case 'loading':
       return <p role="status">{strings.room.connecting}</p>
     case 'missing':
       return <NotFound />
+    case 'locked':
+      return (
+        <TurnedAwayScreen
+          reason="locked"
+          roomName={strings.room.title(roomId)}
+          onRetry={() => {
+            setSummary(LOADING)
+            setAttempt((n) => n + 1)
+          }}
+          onHome={onHome}
+        />
+      )
     default:
       return <PreJoinScreen roomId={roomId} summary={summary} onJoin={onJoin} />
   }
@@ -240,7 +284,13 @@ function PreJoinScreen({
     <PreJoin
       roomId={roomId}
       memberCount={summary.memberCount}
-      roomNotice={summary.status === 'error' ? strings.prejoin.loadFailed : null}
+      roomNotice={
+        summary.status === 'error'
+          ? strings.prejoin.loadFailed
+          : summary.waitingRoom
+            ? strings.prejoin.waitingRoom
+            : null
+      }
       name={name}
       onNameChange={setName}
       mic={mic}
@@ -279,7 +329,7 @@ function Room({
 }: {
   roomId: string
   choices: JoinChoices
-  onLeft: (reason: LeftReason, roomName: string) => void
+  onLeft: (reason: LeftReason | TurnedAwayReason, roomName: string) => void
 }) {
   const {
     state,
@@ -294,10 +344,21 @@ function Room({
   const toasts = useToasts()
   const { show } = toasts
   const roomInfo = state.view?.room ?? null
-  const title = roomTitle(roomId, roomInfo)
+  // In the waiting room (F2): no view, only the lobby (kept while the socket reconnects)
+  const lobby = state.lobby
+  const waiting = lobby !== null
+  const title = roomTitle(roomId, roomInfo ?? lobby?.room ?? null)
   const gone = state.status === 'notFound'
-  // The host removed us or ended the meeting (F1): the after-leave screen says which
-  const outcome = state.status === 'removed' || state.status === 'ended' ? state.status : null
+  // The host removed us or ended the meeting (F1), or did not let us in (F2): the after-leave
+  // screen, or the turned-away one, says which
+  const outcome =
+    state.status === 'removed' ||
+    state.status === 'ended' ||
+    state.status === 'locked' ||
+    state.status === 'denied' ||
+    state.status === 'waitExpired'
+      ? state.status
+      : null
   // Whether the room ever welcomed this tab: a room that is gone after that closed while we were
   // away (asleep, offline past the grace period) and gets the after-leave screen; one that was
   // never there (a stale tab resuming) is just not found
@@ -312,7 +373,7 @@ function Room({
   useEffect(() => {
     if (gone) onGone()
   }, [gone])
-  const onOutcome = useEffectEvent((reason: 'removed' | 'ended') => {
+  const onOutcome = useEffectEvent((reason: NonNullable<typeof outcome>) => {
     clearSession(roomId)
     onLeft(reason, title)
   })
@@ -459,8 +520,9 @@ function Room({
     setSharerName(currentSharerName)
   }
 
-  // The room view stays on screen while the socket reconnects; so does the media connection
-  const inRoom = state.status === 'open' || state.status === 'reconnecting'
+  // The room view stays on screen while the socket reconnects; so does the media connection. Not
+  // in the waiting room: the SFU proxy would refuse us (F2)
+  const inRoom = (state.status === 'open' || state.status === 'reconnecting') && !waiting
   const media = useRoomMedia({
     enabled: inRoom && state.token !== null,
     createTransport,
@@ -510,6 +572,24 @@ function Room({
     show(strings.participants.mutedAll)
   }
   const onEndMeeting = () => send({ t: 'host', action: 'endMeeting' })
+  // The lock and the waiting room (F2): RoomDO decides (worker/roles.ts)
+  const waitingList = waitingQueue(state.view?.waiting)
+  const canAdmit = can(role, 'admit')
+  useWaitingNotice(canAdmit ? waitingList : null, show)
+  const onLock = (on: boolean) => {
+    send({ t: 'host', action: 'lock', on })
+    show(on ? strings.participants.lockedNow : strings.participants.unlockedNow)
+  }
+  const onWaitingRoom = (on: boolean) => {
+    send({ t: 'host', action: 'waitingRoom', on })
+    show(on ? strings.participants.waitingOnNow : strings.participants.waitingOffNow)
+  }
+  const onAdmit = (memberId: string) => send({ t: 'host', action: 'admit', memberId })
+  const onDeny = (memberId: string) => {
+    send({ t: 'host', action: 'deny', memberId })
+    show(strings.participants.denied(state.view?.waiting?.[memberId]?.name ?? ''))
+  }
+  const onAdmitAll = () => send({ t: 'host', action: 'admitAll' })
   useRoomTelemetry({
     status: state.status,
     mediaStatus: media.status,
@@ -550,6 +630,33 @@ function Room({
     return (
       <Centered>
         <NotFound />
+      </Centered>
+    )
+  }
+  if (waiting) {
+    // The waiting room (F2, e1-t11): admitted, the room takes its place with the same devices
+    return (
+      <Centered>
+        <WaitingScreen
+          roomName={title}
+          lobby={lobby}
+          connection={
+            state.status === 'lost' ? 'lost' : state.status === 'waiting' ? 'ok' : 'reconnecting'
+          }
+          camera={camSending}
+          micOn={local.mic.on}
+          camOn={local.cam.on}
+          micBusy={!local.ready || local.mic.opening}
+          camBusy={!local.ready || local.cam.opening}
+          onToggleMic={() => void devices?.setOn('mic', !local.mic.on)}
+          onToggleCam={toggleCam}
+          onLeave={() => {
+            leave()
+            onLeft('leftWaiting', title)
+          }}
+          onRetry={retryRoom}
+        />
+        <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
       </Centered>
     )
   }
@@ -602,6 +709,14 @@ function Room({
       onAction={onMemberAction}
       onMuteAll={onMuteAll}
       onEndMeeting={onEndMeeting}
+      waiting={waitingList}
+      locked={roomInfo?.locked ?? false}
+      waitingRoom={roomInfo?.waitingRoom ?? false}
+      onLock={onLock}
+      onWaitingRoom={onWaitingRoom}
+      onAdmit={onAdmit}
+      onDeny={onDeny}
+      onAdmitAll={onAdmitAll}
     />
   )
   const shareTile =
@@ -618,6 +733,7 @@ function Room({
         startedAt={roomInfo?.startedAt ?? null}
         status={statusText(state)}
         warn={state.status !== 'open'}
+        locked={roomInfo?.locked ?? false}
         onCopyLink={() => void copyRoomLink(link, title, strings.share.text).then(onLinkOutcome)}
         onLeave={onLeave}
       />
@@ -722,6 +838,7 @@ function Room({
       <ToolbarArea>
         <Toolbar
           memberCount={members.length}
+          waitingCount={canAdmit ? waitingList.length : 0}
           canShareScreen={screenShareSupported}
           sharing={sharePhase === 'sharing' || sharePhase === 'claiming'}
           onToggleShare={onToggleShare}
@@ -844,7 +961,7 @@ function stageMode(phone: PhoneLayout): StageMode {
  * The room's name as shown (e1-t05): what the host named it, else "<first member>'s room", else
  * (before anyone joined, or a room from before v6) its code
  */
-function roomTitle(roomId: string, info: RoomInfo | null): string {
+function roomTitle(roomId: string, info: Pick<RoomInfo, 'name' | 'createdBy'> | null): string {
   if (info?.name) return info.name
   if (info?.createdBy) return strings.room.defaultName(info.createdBy)
   return strings.room.title(roomId)
@@ -857,6 +974,27 @@ function useHostNotice(role: Role | undefined, show: (text: string) => void) {
     if (role === 'host' && previous.current === 'participant') show(strings.room.youAreHost)
     previous.current = role
   }, [role, show])
+}
+
+/**
+ * For a host or co-host (F2, e1-t11): a toast, without a sound, whenever someone starts waiting
+ * (the participants button's badge keeps counting them). `waiting` is null for everyone else.
+ */
+function useWaitingNotice(waiting: WaitingEntry[] | null, show: (text: string) => void) {
+  const seen = useRef(new Set<string>())
+  const ids = waiting?.map((entry) => entry.id).join(' ') ?? null
+  const names = useRef(waiting)
+  useEffect(() => {
+    names.current = waiting
+  })
+  useEffect(() => {
+    if (ids === null) return
+    const now = names.current ?? []
+    const arrived = now.filter((entry) => !seen.current.has(entry.id))
+    seen.current = new Set(now.map((entry) => entry.id))
+    if (arrived.length === 1) show(strings.participants.waitingArrived(arrived[0].name))
+    else if (arrived.length > 1) show(strings.participants.waitingArrivedMany(arrived.length))
+  }, [ids, show])
 }
 
 /** 「<名字> 開始分享畫面」 when someone else starts sharing (not when we do) */
@@ -1024,9 +1162,13 @@ function statusText({ status, view }: RoomConnectionState): string {
   switch (status) {
     case 'connecting':
     case 'notFound':
-    // The after-leave screen replaces the room at once (F1)
+    // The after-leave screen replaces the room at once (F1), the turned-away one (F2)
     case 'removed':
     case 'ended':
+    case 'locked':
+    case 'denied':
+    case 'waitExpired':
+    case 'waiting':
       return strings.room.connecting
     case 'open':
       return strings.room.memberCount(Object.keys(view?.members ?? {}).length)

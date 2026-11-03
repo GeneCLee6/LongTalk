@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import styled from 'styled-components'
-import type { HostMemberAction, Member } from '../../shared/protocol.ts'
+import type { HostMemberAction, Member, WaitingEntry } from '../../shared/protocol.ts'
 import { RANK, can, canActOn, type Role } from '../../shared/roles.ts'
 import { strings } from '../strings.ts'
-import { avatar, avatarColor, color, fontSize, radius, space } from '../styles/tokens.ts'
+import { avatar, avatarColor, color, fontSize, motion, radius, space } from '../styles/tokens.ts'
 import { Button } from './Button.tsx'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { CamIcon, CamOffIcon, MicIcon, MicOffIcon, MoreIcon, ScreenShareIcon } from './icons.tsx'
@@ -21,7 +21,20 @@ export interface ParticipantsPanelProps {
   onAction: (action: HostMemberAction, memberId: string) => void
   onMuteAll: () => void
   onEndMeeting: () => void
+  /** Who waits to be admitted (F2), in the queue's order */
+  waiting?: WaitingEntry[]
+  /** The room's switches (F2) */
+  locked?: boolean
+  waitingRoom?: boolean
+  onLock?: (on: boolean) => void
+  /** Turning it off admits everyone waiting (the panel asks first when anyone does) */
+  onWaitingRoom?: (on: boolean) => void
+  onAdmit?: (memberId: string) => void
+  onDeny?: (memberId: string) => void
+  onAdmitAll?: () => void
 }
+
+const noop = () => {}
 
 /** What the per-person menu offers, in order, with the role table's action for each */
 const MEMBER_ACTIONS: readonly { action: HostMemberAction; label: string; danger?: true }[] = [
@@ -38,6 +51,10 @@ const MEMBER_ACTIONS: readonly { action: HostMemberAction; label: string; danger
  * follows shared/roles.ts for our role; RoomDO decides again on every action (CLAUDE.md rule 1).
  * Removing someone and ending the meeting ask first. Shown in the desktop SidePanel and the
  * phone's full-screen Drawer.
+ *
+ * For a host or co-host (F2, e1-t09 – e1-t11) it also has the room's switches at the top (lock,
+ * waiting room; turning the waiting room off with people in it asks first, since they all come
+ * in) and, while anyone waits, 「等候中 N」 with 放行 / 拒絕 per person and 全部放行.
  */
 export function ParticipantsPanel({
   members,
@@ -46,9 +63,17 @@ export function ParticipantsPanel({
   onAction,
   onMuteAll,
   onEndMeeting,
+  waiting = [],
+  locked = false,
+  waitingRoom = false,
+  onLock = noop,
+  onWaitingRoom = noop,
+  onAdmit = noop,
+  onDeny = noop,
+  onAdmitAll = noop,
 }: ParticipantsPanelProps) {
   const [confirm, setConfirm] = useState<
-    { type: 'remove'; member: Member } | { type: 'end' } | null
+    { type: 'remove'; member: Member } | { type: 'end' } | { type: 'waitingOff' } | null
   >(null)
   const role: Role = members.find((member) => member.id === you)?.role ?? 'participant'
   const sorted = [...members].sort(
@@ -59,6 +84,13 @@ export function ParticipantsPanel({
   )
   const canMuteAll = can(role, 'muteAll')
   const canEnd = can(role, 'endMeeting')
+  const canLock = can(role, 'lockRoom')
+  const canWaitingRoom = can(role, 'waitingRoom')
+  const canAdmit = can(role, 'admit')
+  const toggleWaitingRoom = () => {
+    if (waitingRoom && waiting.length > 0) setConfirm({ type: 'waitingOff' })
+    else onWaitingRoom(!waitingRoom)
+  }
 
   const itemsFor = (member: Member): MenuItem[] => {
     const mic = member.tracks.find((t) => t.kind === 'mic')
@@ -83,6 +115,70 @@ export function ParticipantsPanel({
 
   return (
     <Root>
+      {(canLock || canWaitingRoom) && (
+        <Settings aria-label={text.settings}>
+          {canLock && (
+            <Switch
+              label={text.lock}
+              hint={text.lockHint}
+              on={locked}
+              onToggle={() => onLock(!locked)}
+            />
+          )}
+          {canWaitingRoom && (
+            <Switch
+              label={text.waitingRoom}
+              hint={text.waitingRoomHint}
+              on={waitingRoom}
+              onToggle={toggleWaitingRoom}
+            />
+          )}
+        </Settings>
+      )}
+      {canAdmit && waiting.length > 0 && (
+        <Waiting aria-labelledby="waiting-title">
+          <WaitingHead>
+            <h3 id="waiting-title">{text.waiting(waiting.length)}</h3>
+            {waiting.length > 1 && (
+              <Button variant="secondary" onClick={onAdmitAll}>
+                {text.admitAll}
+              </Button>
+            )}
+          </WaitingHead>
+          <WaitingList aria-label={text.waitingList}>
+            {waiting.map((entry) => (
+              <Row key={entry.id} aria-label={entry.name} $away={entry.reconnecting}>
+                <Avatar aria-hidden="true" style={{ background: avatarColor(entry.name) }}>
+                  {[...entry.name][0]?.toUpperCase()}
+                </Avatar>
+                <Who>
+                  <Name>{entry.name}</Name>
+                  {entry.reconnecting && (
+                    <Tags>
+                      <Tag $warn>{text.reconnecting}</Tag>
+                    </Tags>
+                  )}
+                </Who>
+                <Decide>
+                  <Button
+                    variant="secondary"
+                    aria-label={text.denyLabel(entry.name)}
+                    onClick={() => onDeny(entry.id)}
+                  >
+                    {text.deny}
+                  </Button>
+                  <Button
+                    aria-label={text.admitLabel(entry.name)}
+                    onClick={() => onAdmit(entry.id)}
+                  >
+                    {text.admit}
+                  </Button>
+                </Decide>
+              </Row>
+            ))}
+          </WaitingList>
+        </Waiting>
+      )}
       <List aria-label={text.list}>
         {sorted.map((member) => {
           const mic = member.tracks.find((t) => t.kind === 'mic')
@@ -166,6 +262,18 @@ export function ParticipantsPanel({
           onCancel={() => setConfirm(null)}
         />
       )}
+      {confirm?.type === 'waitingOff' && (
+        <ConfirmDialog
+          title={text.waitingOffTitle}
+          body={text.waitingOffBody(waiting.length)}
+          confirmLabel={text.waitingOffConfirm(waiting.length)}
+          onConfirm={() => {
+            setConfirm(null)
+            onWaitingRoom(false)
+          }}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
       {confirm?.type === 'end' && (
         <ConfirmDialog
           title={text.endTitle}
@@ -179,6 +287,31 @@ export function ParticipantsPanel({
         />
       )}
     </Root>
+  )
+}
+
+/** One of the room's switches: what it is, what it does, on or off */
+function Switch({
+  label,
+  hint,
+  on,
+  onToggle,
+}: {
+  label: string
+  hint: string
+  on: boolean
+  onToggle: () => void
+}) {
+  return (
+    <SwitchRow>
+      <SwitchText>
+        <Name>{label}</Name>
+        <Hint>{hint}</Hint>
+      </SwitchText>
+      <Toggle type="button" role="switch" aria-checked={on} aria-label={label} onClick={onToggle}>
+        <Knob $on={on} />
+      </Toggle>
+    </SwitchRow>
   )
 }
 
@@ -271,6 +404,106 @@ const State = styled.span<{ $off?: boolean; $on?: boolean }>`
     width: 18px;
     height: 18px;
   }
+`
+
+const Settings = styled.section`
+  display: grid;
+  gap: ${space(2)};
+  padding: ${space(3)} ${space(4)};
+  border-bottom: 1px solid ${color.line};
+`
+
+const SwitchRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: ${space(3)};
+`
+
+const SwitchText = styled.span`
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: ${space(0.5)};
+`
+
+const Hint = styled.span`
+  color: ${color.muted};
+  font-size: ${fontSize.toolbarLabel};
+`
+
+/** 44 px tall to touch, a 40 × 24 track inside */
+const Toggle = styled.button`
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 52px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid ${color.focus};
+    outline-offset: 2px;
+    border-radius: ${radius.button};
+  }
+`
+
+const Knob = styled.span<{ $on: boolean }>`
+  position: relative;
+  width: 40px;
+  height: 24px;
+  border-radius: ${radius.pill};
+  background: ${({ $on }) => ($on ? color.primary : color.surface2)};
+  box-shadow: inset 0 0 0 1px ${color.line};
+  transition: background ${motion.fast};
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: ${({ $on }) => ($on ? '19px' : '3px')};
+    width: 18px;
+    height: 18px;
+    border-radius: ${radius.pill};
+    background: ${({ $on }) => ($on ? color.onPrimary : color.muted)};
+    transition: left ${motion.fast};
+  }
+`
+
+const Waiting = styled.section`
+  padding: ${space(2)} 0 0;
+  border-bottom: 1px solid ${color.line};
+
+  h3 {
+    margin: 0;
+    color: ${color.warn};
+    font-size: ${fontSize.small};
+  }
+`
+
+const WaitingHead = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: ${space(2)};
+  min-height: 44px;
+  padding: 0 ${space(4)};
+`
+
+const WaitingList = styled.ul`
+  max-height: 40vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0 ${space(2)} ${space(2)};
+  list-style: none;
+`
+
+const Decide = styled.span`
+  display: flex;
+  flex: none;
+  gap: ${space(2)};
 `
 
 const Footer = styled.div`

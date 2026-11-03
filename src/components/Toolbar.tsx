@@ -10,6 +10,11 @@ import { Menu, type MenuItem } from './Menu.tsx'
 export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
   /** Members in the room, on the participants button */
   memberCount: number
+  /**
+   * People in the waiting room, for a host or co-host (F2): while any wait, the participants
+   * button's badge counts them, in amber
+   */
+  waitingCount?: number
   /** This browser can share the screen (getDisplayMedia exists; not on phones) */
   canShareScreen: boolean
   /** We share the screen now: the button stops it (e3-t03) */
@@ -51,6 +56,7 @@ export interface ToolbarProps extends Omit<MediaControlsProps, 'children'> {
  */
 export function Toolbar({
   memberCount,
+  waitingCount = 0,
   canShareScreen,
   sharing = false,
   onToggleShare,
@@ -103,10 +109,15 @@ export function Toolbar({
         onClick={onToggleChat}
       />
       <IconButton
-        label={strings.toolbar.participantsCount(memberCount)}
+        label={
+          waitingCount > 0
+            ? strings.toolbar.participantsWaiting(memberCount, waitingCount)
+            : strings.toolbar.participantsCount(memberCount)
+        }
         caption={strings.toolbar.participants}
         icon={<PeopleIcon />}
-        badge={memberCount}
+        badge={waitingCount > 0 ? waitingCount : memberCount}
+        badgeTone={waitingCount > 0 ? 'warn' : 'primary'}
         showLabel
         aria-expanded={participantsOpen}
         onClick={onToggleParticipants}

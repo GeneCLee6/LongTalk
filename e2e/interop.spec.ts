@@ -14,7 +14,10 @@ import { strings } from '../src/strings.ts'
 // from the participants panel (the member is told, and its own browser turns the microphone
 // off), then removes it (the removed screen, and the same browser cannot join again at once). At
 // the end (D4) one member leaves, sees the after-leave screen and rates the call (the rating
-// reaches POST /api/events). Runs against a
+// reaches POST /api/events). Before that, the waiting room and the lock (F2): the host turns the
+// waiting room on, a fourth browser joins and waits (the host is told, with a badge), the host
+// admits it and it sees and hears the room; then the host locks the room, everyone sees the
+// padlock, and a fifth browser is shown the locked screen at once. Runs against a
 // deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
 // `e2e`).
 //
@@ -56,8 +59,16 @@ async function openRoom(browser: Browser): Promise<string> {
   return url
 }
 
-/** A new browser (its own storage: a different member) that joins through the pre-join screen */
-async function join(browser: Browser, roomUrl: string, name: string): Promise<Member> {
+/**
+ * A new browser (its own storage: a different member) that joins through the pre-join screen;
+ * `waits`: the room has its waiting room on, so it ends up in the waiting room (F2)
+ */
+async function join(
+  browser: Browser,
+  roomUrl: string,
+  name: string,
+  waits = false,
+): Promise<Member> {
   const context = await browser.newContext({
     locale: 'zh-TW',
     permissions: ['camera', 'microphone'],
@@ -173,7 +184,8 @@ async function join(browser: Browser, roomUrl: string, name: string): Promise<Me
   await page.goto(roomUrl)
   await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill(name)
   await page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
-  await expect(page.getByRole('region', { name: strings.room.grid })).toBeVisible()
+  if (waits) await expect(page.getByRole('heading', { name: strings.waiting.title })).toBeVisible()
+  else await expect(page.getByRole('region', { name: strings.room.grid })).toBeVisible()
   return { name, context, page }
 }
 
@@ -292,18 +304,26 @@ async function expectReceiving(viewer: Member, other: Member) {
  * A fresh room for the test, and the members who join it; afterwards every member leaves (which
  * closes their SFU session at once) and, after a failure, leaves a screenshot in the report
  */
-const interop = test.extend<{ room: { url: string; join: (name: string) => Promise<Member> } }>({
+const interop = test.extend<{
+  room: {
+    url: string
+    join: (name: string, waits?: boolean) => Promise<Member>
+    /** A browser context that is not a member (its own storage), closed by the caller */
+    newContext: () => Promise<BrowserContext>
+  }
+}>({
   room: async ({ browser }, provide, testInfo) => {
     const url = await openRoom(browser)
     testInfo.annotations.push({ type: 'room', description: url })
     const members: Member[] = []
     await provide({
       url,
-      join: async (name) => {
-        const member = await join(browser, url, name)
+      join: async (name, waits) => {
+        const member = await join(browser, url, name, waits)
         members.push(member)
         return member
       },
+      newContext: () => browser.newContext({ locale: 'zh-TW' }),
     })
     for (const member of members) {
       if (testInfo.status !== testInfo.expectedStatus && !member.page.isClosed()) {
@@ -535,6 +555,70 @@ interop(
           carol.page.getByRole('heading', { name: strings.left.removedTitle }),
         ).toBeVisible()
         await expect(tile(alice, carol)).toHaveCount(0)
+      },
+    )
+
+    const dave = await interop.step(
+      'Alice turns the waiting room on: Dave waits, Alice is told and admits him, he gets media (F2)',
+      async () => {
+        const panel = alice.page.getByRole('complementary', { name: strings.participants.title })
+        await panel.getByRole('switch', { name: strings.participants.waitingRoom }).click()
+        await expect(
+          panel.getByRole('switch', { name: strings.participants.waitingRoom }),
+        ).toHaveAttribute('aria-checked', 'true')
+        const dave = await room.join('Dave', true)
+        // The toast lasts a few seconds: checked first
+        await expect(
+          alice.page.getByText(strings.participants.waitingArrived('Dave')),
+        ).toBeVisible()
+        await expect(dave.page.getByText(strings.waiting.position(1, 1))).toBeVisible()
+        await expect(dave.page.getByText(strings.waiting.body)).toBeVisible()
+        await expect(toolbarButton(alice, strings.toolbar.participantsWaiting(2, 1))).toBeVisible()
+        // Nobody in the room sees Dave yet, and Dave sees nobody
+        await expect(tile(bob, dave)).toHaveCount(0)
+        await expect(dave.page.getByRole('region', { name: strings.room.grid })).toHaveCount(0)
+        await panel.getByRole('button', { name: strings.participants.admitLabel('Dave') }).click()
+        // Into the room on the same page, without the name asked again
+        await expect(dave.page.getByRole('region', { name: strings.room.grid })).toBeVisible()
+        await expect(dave.page.getByRole('heading', { name: strings.waiting.title })).toHaveCount(0)
+        await expectReceiving(alice, dave)
+        await expectReceiving(dave, alice)
+        // Bob is still muted (above): his camera only
+        await expect
+          .poll(() => framesPerSecond(dave, bob), {
+            message: "Dave decodes frames of Bob's camera",
+          })
+          .toBeGreaterThanOrEqual(VIDEO_FRAMES_PER_SECOND)
+        return dave
+      },
+    )
+
+    await interop.step(
+      'Alice locks the room: everyone sees the padlock, a newcomer gets the locked screen (F2)',
+      async () => {
+        const panel = alice.page.getByRole('complementary', { name: strings.participants.title })
+        await panel.getByRole('switch', { name: strings.participants.lock }).click()
+        for (const member of [alice, bob, dave]) {
+          await expect(
+            member.page.getByRole('img', { name: strings.topBar.lockedHint }),
+            `${member.name} sees the padlock`,
+          ).toBeVisible()
+        }
+        const context = await room.newContext()
+        try {
+          const page = await context.newPage()
+          await page.goto(room.url)
+          await expect(
+            page.getByRole('heading', { name: strings.turnedAway.lockedTitle }),
+          ).toBeVisible()
+          await expect(page.getByRole('textbox', { name: strings.prejoin.nameLabel })).toHaveCount(
+            0,
+          )
+        } finally {
+          await context.close()
+        }
+        // Alice closes the panel again, so the stage has its width
+        await toolbarButton(alice, strings.toolbar.participantsCount(3)).click()
       },
     )
 

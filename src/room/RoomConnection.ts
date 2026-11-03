@@ -17,6 +17,7 @@ import {
   viewAsJson,
   type ClientMessage,
   type ErrorCode,
+  type LobbyMessage,
   type NoticeMessage,
   type RoomView,
 } from '../../shared/protocol.ts'
@@ -31,6 +32,11 @@ import { Backoff } from './backoff.ts'
  * - `notFound`, `full`, `outdated`, `replaced`: the server closed with that reason; final
  * - `removed`: the host removed this member, or this browser is still banned (F1); final
  * - `ended`: the host ended the meeting (F1); final
+ * - `waiting`: in the waiting room (F2): `lobby` says where in the queue; the view is null
+ * - `locked`: the room is locked, nobody new gets in (F2); final
+ * - `denied`: the host turned us away from the waiting room, or we asked again too soon (F2);
+ *   final
+ * - `waitExpired`: waited WAIT_TIMEOUT_MS without being admitted (F2); final
  */
 export type RoomStatus =
   | 'connecting'
@@ -43,6 +49,13 @@ export type RoomStatus =
   | 'replaced'
   | 'removed'
   | 'ended'
+  | 'waiting'
+  | 'locked'
+  | 'denied'
+  | 'waitExpired'
+
+/** Where we are in the waiting room (F2): the latest `lobby` */
+export type LobbyState = Pick<LobbyMessage, 'position' | 'count' | 'room' | 'hostPresent'>
 
 export interface RoomConnectionState {
   status: RoomStatus
@@ -57,6 +70,11 @@ export interface RoomConnectionState {
   chat: ChatMessage[]
   /** The room has sent its chat history at least once (the messages before it are not new) */
   chatLoaded: boolean
+  /**
+   * In the waiting room (F2): the latest `lobby`, kept while the socket reconnects; null once
+   * the room welcomed us (admitted), and before
+   */
+  lobby: LobbyState | null
 }
 
 /** The bits of WebSocket the connection uses, so tests can pass a fake */
@@ -120,6 +138,12 @@ function finalStatus(code: number): RoomStatus | null {
       return 'removed'
     case CloseCode.ended:
       return 'ended'
+    case CloseCode.locked:
+      return 'locked'
+    case CloseCode.denied:
+      return 'denied'
+    case CloseCode.waitExpired:
+      return 'waitExpired'
     default:
       return null
   }
@@ -163,6 +187,7 @@ export class RoomConnection {
     welcomes: 0,
     chat: [],
     chatLoaded: false,
+    lobby: null,
   }
   /** The room's CHAT_RATE, checked here too so a refused message stays in the box */
   private readonly chatRate = new ChatRateLimit()
@@ -219,6 +244,7 @@ export class RoomConnection {
       welcomes: 0,
       chat: [],
       chatLoaded: false,
+      lobby: null,
     })
     this.open()
   }
@@ -364,8 +390,25 @@ export class RoomConnection {
           token: message.token,
           view: message.state,
           welcomes: this.state.welcomes + 1,
+          lobby: null,
         })
         return
+      case 'lobby': {
+        // In the waiting room (F2): the token brings us back to the same place after a reload
+        this.token = message.token
+        this.backoff.reset()
+        this.onToken(message.token)
+        const { position, count, room, hostPresent } = message
+        this.update({
+          ...this.state,
+          status: 'waiting',
+          you: message.you,
+          token: message.token,
+          view: null,
+          lobby: { position, count, room, hostPresent },
+        })
+        return
+      }
       case 'snapshot':
         if (this.rev < 0) return
         this.rev = message.rev

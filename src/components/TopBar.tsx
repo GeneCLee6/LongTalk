@@ -3,7 +3,7 @@ import styled from 'styled-components'
 import { strings } from '../strings.ts'
 import { color, fontSize, media, radius, size, space } from '../styles/tokens.ts'
 import { formatElapsed } from '../room/elapsed.ts'
-import { LinkIcon } from './icons.tsx'
+import { LinkIcon, LockIcon } from './icons.tsx'
 import { usePhoneLayout } from './layoutContext.ts'
 
 export interface TopBarProps {
@@ -15,6 +15,8 @@ export interface TopBarProps {
   status: string
   /** The status is something to act on (reconnecting, lost): amber, bold */
   warn: boolean
+  /** The room is locked (F2, e1-t09): a padlock after the name, for everyone */
+  locked?: boolean
   onCopyLink: () => void
   /** Leave the room: the button sits here on phones (e4-t07), in the toolbar elsewhere */
   onLeave?: () => void
@@ -49,6 +51,7 @@ export function TopBar({
   startedAt,
   status,
   warn,
+  locked = false,
   onCopyLink,
   onLeave,
   now = Date.now,
@@ -57,6 +60,12 @@ export function TopBar({
   return (
     <Bar aria-label={strings.topBar.label}>
       <Title title={title}>{title}</Title>
+      {locked && (
+        <Locked role="img" aria-label={strings.topBar.lockedHint} title={strings.topBar.lockedHint}>
+          <LockIcon />
+          <span aria-hidden="true">{strings.topBar.locked}</span>
+        </Locked>
+      )}
       {startedAt !== null && <Elapsed startedAt={startedAt} now={now} />}
       <Copy type="button" aria-label={strings.topBar.copyLink} onClick={onCopyLink}>
         <LinkIcon />
@@ -103,6 +112,28 @@ const Title = styled.h1`
   color: ${color.fg};
   text-overflow: ellipsis;
   white-space: nowrap;
+`
+
+/** The padlock and 「已鎖定」 (the word goes on phones, the padlock stays) */
+const Locked = styled.span`
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: ${space(1)};
+  color: ${color.warn};
+  font-weight: 600;
+  white-space: nowrap;
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  @media ${media.phone} {
+    span {
+      display: none;
+    }
+  }
 `
 
 const Time = styled.span`

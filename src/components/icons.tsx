@@ -187,3 +187,22 @@ export function SendIcon() {
     </svg>
   )
 }
+
+/** A padlock: the room is locked (F2) */
+export function LockIcon() {
+  return (
+    <svg {...common}>
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  )
+}
+
+/** An hourglass: the waiting room (F2) */
+export function HourglassIcon() {
+  return (
+    <svg {...common}>
+      <path d="M6 3h12M6 21h12M7 3v3a5 5 0 0 0 10 0V3M7 21v-3a5 5 0 0 1 10 0v3" />
+    </svg>
+  )
+}

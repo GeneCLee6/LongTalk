@@ -53,6 +53,8 @@ export const strings = {
       unknown: '無法開啟麥克風或鏡頭。',
     },
     loadFailed: '讀不到這間會議室的資訊，仍然可以試著加入。',
+    // The room has its waiting room on (F2)
+    waitingRoom: '這間會議室開了等候室：加入後，要等主持人讓你進來。',
   },
   room: {
     title: (roomId: string) => `會議室 ${roomId}`,
@@ -143,6 +145,9 @@ export const strings = {
     chat: '聊天',
     participants: '參與者',
     participantsCount: (count: number) => `參與者（${count} 人）`,
+    // For a host or co-host while someone waits (F2): the badge counts who waits
+    participantsWaiting: (count: number, waiting: number) =>
+      `參與者（${count} 人，${waiting} 人在等候室）`,
     // The chat button's accessible name with its unread badge (D3)
     chatUnread: (count: number) => (count > 0 ? `聊天（${count} 則未讀）` : '聊天'),
     more: '更多',
@@ -188,6 +193,30 @@ export const strings = {
     mutedAll: '已將所有人靜音',
     removed: (name: string) => `已將 ${name} 移出會議室`,
     forbidden: '你沒有權限做這件事。',
+    // The room's switches (F2: e1-t09, e1-t10), for a host or co-host
+    settings: '會議室設定',
+    lock: '鎖定會議室',
+    lockHint: '鎖定後，新的人不能加入，連等候室也進不來',
+    waitingRoom: '等候室',
+    waitingRoomHint: '新加入的人要等你放行才能進來',
+    waitingOffTitle: '關閉等候室？',
+    waitingOffBody: (count: number) => `等候中的 ${count} 人會一起進入會議室。`,
+    waitingOffConfirm: (count: number) => `放行 ${count} 人並關閉`,
+    lockedNow: '會議室已鎖定，新的人不能加入',
+    unlockedNow: '會議室已解鎖',
+    waitingOnNow: '已開啟等候室，新加入的人要等你放行',
+    waitingOffNow: '已關閉等候室',
+    // Who waits (F2, e1-t11)
+    waiting: (count: number) => `等候中 ${count}`,
+    waitingList: '等候室名單',
+    admit: '放行',
+    deny: '拒絕',
+    admitAll: '全部放行',
+    admitLabel: (name: string) => `讓 ${name} 進入會議室`,
+    denyLabel: (name: string) => `拒絕 ${name} 進入`,
+    waitingArrived: (name: string) => `${name} 在等候室，等你放行`,
+    waitingArrivedMany: (count: number) => `${count} 人在等候室，等你放行`,
+    denied: (name: string) => `已拒絕 ${name}`,
   },
   // What the person acted on sees (F1, AC-1.4): a toast that says who did what
   hostNotice: {
@@ -353,6 +382,40 @@ export const strings = {
     copyLink: '複製連結',
     copied: '已複製會議室連結，貼給朋友就能加入',
     copyFailed: (url: string) => `無法自動複製，請手動複製這個連結：${url}`,
+    // Everyone sees the room is locked (F2, e1-t09)
+    locked: '已鎖定',
+    lockedHint: '會議室已鎖定，新的人不能加入',
+  },
+  // The waiting room, as the one waiting sees it (F2, e1-t11)
+  waiting: {
+    label: '等候室',
+    title: '你在等候室',
+    body: '主持人會讓你進來，進去時不用再輸入名字。',
+    position: (position: number, count: number) =>
+      position === 1
+        ? count === 1
+          ? '你是下一位'
+          : `你是下一位，共 ${count} 人在等`
+        : `你排在第 ${position} 位，共 ${count} 人在等`,
+    hostAbsent: '主持人目前不在線上，回來後就能讓你進來。',
+    reconnecting: '連線中斷，正在重新連線…',
+    lost: '連不上會議室。請檢查網路，再按「重試」。',
+    preview: '你的鏡頭預覽',
+    camOff: '鏡頭已關閉',
+    leave: '離開等候室',
+  },
+  // Not let in (F2): the room is locked, the host turned us away, or we waited too long
+  turnedAway: {
+    lockedTitle: '這間會議室已鎖定',
+    lockedBody: '主持人鎖定了會議室，現在不能加入。請主持人解鎖後再試一次。',
+    deniedTitle: '主持人沒有讓你進入',
+    deniedBody: '主持人拒絕了這次加入。1 分鐘後可以再請求一次。',
+    expiredTitle: '等候太久了',
+    expiredBody: '你在等候室等了 15 分鐘，主持人還沒放行。可以再試一次，或聯絡主持人。',
+    leftTitle: '你已離開等候室',
+    leftBody: (room: string) => `你離開了「${room}」的等候室。`,
+    retry: '再試一次',
+    home: '回首頁',
   },
   // The room link, renaming (e1-t05)
   share: {

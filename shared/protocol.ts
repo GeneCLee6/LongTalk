@@ -66,6 +66,19 @@
 //    id every `join` carries) for BAN_MS: a `join` from it is closed with CloseCode.removed until
 //    then. `endMeeting` closes every socket with CloseCode.ended and the room at once (its id
 //    answers 404 / CloseCode.roomNotFound from then on, like a room closed when empty).
+// 13. Lock and waiting room (F2, e1-t09, e1-t10): `host` `lock` / `waitingRoom` with `on` switch
+//    `RoomInfo.locked` / `RoomInfo.waitingRoom` (worker/roles.ts `lockRoom`, `waitingRoom`).
+//    A locked room closes every `join` with a token it does not know with CloseCode.locked; a
+//    member coming back within RECONNECT_GRACE_MS (its token) still gets in, and so does
+//    someone already waiting. With the waiting room on, someone new joins as `waiting`: instead
+//    of `welcome` the room sends `lobby` (its id, token, place in the queue, the room's name and
+//    whether someone who can admit is connected), again whenever that changes, and nothing
+//    else: no view, no patch, no chat; the SFU proxy and TURN refuse it (`media`). Everyone in
+//    the room sees who waits in `RoomView.waiting`. `admit` (one), `admitAll` and `deny`
+//    (worker/roles.ts `admit`) decide: an admitted member gets its `welcome` and the chat
+//    history and is a participant from then on; a denied one is closed with CloseCode.denied
+//    and its browser cannot ask again for DENY_COOLDOWN_MS. Turning the waiting room off admits
+//    everyone in it. Someone waiting WAIT_TIMEOUT_MS is closed with CloseCode.waitExpired.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -77,6 +90,9 @@
 // v7 → v8 (D3): `chat` both ways, error code `rate_limited`; MAX_CLIENT_MESSAGE_CHARS 4096 → 16384.
 // v8 → v9 (F1): `join.client`, `host`, `notice`, roles `cohost` / `waiting`, close codes
 //   `removed`, `ended`.
+// v9 → v10 (F2): `RoomInfo.locked` / `waitingRoom`, `RoomView.waiting`, `lobby`, `host` actions
+//   `lock`, `waitingRoom`, `admit`, `admitAll`, `deny`, close codes `locked`, `denied`,
+//   `waitExpired`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -87,7 +103,7 @@ import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 9
+export const PROTOCOL_VERSION = 10
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -123,6 +139,10 @@ export const HOST_HANDOFF_MS = 60_000
 export const BAN_MS = 10 * 60_000
 /** The most browsers a room keeps banned at once (the oldest ban goes first) */
 export const MAX_BANS = 200
+/** A browser turned away from the waiting room cannot ask again for this long (F2) */
+export const DENY_COOLDOWN_MS = 60_000
+/** Someone waiting this long without being admitted is sent away (F2) */
+export const WAIT_TIMEOUT_MS = 15 * 60_000
 
 /**
  * WebSocket close codes the server uses. The browser does not reconnect after the 44xx ones but
@@ -144,6 +164,12 @@ export const CloseCode = {
   removed: 4403,
   /** The host ended the meeting: the room is closed (F1) */
   ended: 4411,
+  /** The room is locked: nobody new gets in, not even into the waiting room (F2) */
+  locked: 4423,
+  /** The host turned this browser away from the waiting room, or it asked again too soon (F2) */
+  denied: 4406,
+  /** Waited WAIT_TIMEOUT_MS without being admitted (F2) */
+  waitExpired: 4412,
 } as const
 
 /** What POST /api/rooms decides about a room */
@@ -162,6 +188,10 @@ export type RoomInfo = RoomInit & {
   startedAt: number | null
   /** Who shares the screen now (D1, one at a time); null when nobody does */
   share: ShareInfo | null
+  /** Nobody new may join, not even into the waiting room (F2, e1-t09) */
+  locked: boolean
+  /** Someone new waits until a host or co-host admits them (F2, e1-t10) */
+  waitingRoom: boolean
 }
 
 /** The room's one screen share (D1, e3-t02) */
@@ -169,6 +199,22 @@ export type ShareInfo = {
   memberId: string
   /** When the member was granted the share */
   since: number
+}
+
+/** Someone in the waiting room (F2), as the members in the room see them */
+export type WaitingEntry = {
+  id: string
+  name: string
+  /** When they started waiting: the queue's order; WAIT_TIMEOUT_MS counts from it */
+  since: number
+  reconnecting: boolean
+}
+
+/** The waiting room's queue in order: first come, first in (ties by id, so every end agrees) */
+export function waitingQueue(waiting: Readonly<Record<string, WaitingEntry>> | undefined) {
+  return Object.values(waiting ?? {}).sort(
+    (a, b) => a.since - b.since || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  )
 }
 
 /** What a member may do in the room: shared/roles.ts (F1, e1-t06) */
@@ -207,7 +253,7 @@ export type Member = {
   name: string
   /**
    * One member is the host whenever anyone is connected (C2, e1-t04); `cohost` comes with
-   * e1-t16, `waiting` with e1-t10
+   * e1-t16. Never `waiting` in the view: who waits is `RoomView.waiting` (F2)
    */
   role: Role
   joinedAt: number
@@ -221,6 +267,8 @@ export type Member = {
 export type RoomView = {
   room: RoomInfo
   members: Record<string, Member>
+  /** Who waits to be admitted (F2), by id; first come, first in (`since`) */
+  waiting: Record<string, WaitingEntry>
   /** The month's Realtime egress state (shared/usage.ts); `normal` until the room hears otherwise */
   usage: UsageState
 }
@@ -264,6 +312,23 @@ export type NoticeMessage = { t: 'notice'; notice: NoticeKind; by: string; all?:
 export type ErrorMessage = { t: 'error'; code: ErrorCode }
 
 /**
+ * What someone in the waiting room gets instead of `welcome` (F2), on joining and whenever it
+ * changes: its member id and token (a reload comes back to the same place), its place in the
+ * queue (1 is next) out of `count`, the room's name, and whether a host or co-host is connected
+ * to admit it.
+ */
+export type LobbyMessage = {
+  t: 'lobby'
+  v: typeof PROTOCOL_VERSION
+  you: string
+  token: string
+  position: number
+  count: number
+  room: Pick<RoomInfo, 'name' | 'createdBy'>
+  hostPresent: boolean
+}
+
+/**
  * Chat messages (D3, shared/chat.ts), oldest first. `reset`: the first frame of the history the
  * room sends after every `welcome`; replace every message you have with these (more frames of
  * the history may follow without it). Without `reset`: new messages, append them.
@@ -271,7 +336,13 @@ export type ErrorMessage = { t: 'error'; code: ErrorCode }
 export type ChatServerMessage = { t: 'chat'; messages: ChatMessage[]; reset?: true }
 
 export type ServerMessage =
-  WelcomeMessage | SnapshotMessage | PatchMessage | ErrorMessage | ChatServerMessage | NoticeMessage
+  | WelcomeMessage
+  | SnapshotMessage
+  | PatchMessage
+  | ErrorMessage
+  | ChatServerMessage
+  | NoticeMessage
+  | LobbyMessage
 
 // ── Browser → server ─────────────────────────────────────────────────────────────────────────
 
@@ -324,17 +395,28 @@ export type ChatClientMessage = { t: 'chat'; text: string }
 /** The host controls that act on one member (F1); `memberId` says who */
 export type HostMemberAction = 'muteMember' | 'camOff' | 'stopShare' | 'remove'
 
-/** The host controls that act on the whole room (F1) */
-export type HostRoomAction = 'muteAll' | 'endMeeting'
+/** The host controls that act on the whole room (F1; `admitAll` F2) */
+export type HostRoomAction = 'muteAll' | 'endMeeting' | 'admitAll'
 
-export type HostAction = HostMemberAction | HostRoomAction
+/** Admit or turn away one person in the waiting room (F2); `memberId` says who */
+export type HostWaitingAction = 'admit' | 'deny'
+
+/** The room's switches (F2): `on` says which way */
+export type HostSwitchAction = 'lock' | 'waitingRoom'
+
+export type HostAction = HostMemberAction | HostRoomAction | HostWaitingAction | HostSwitchAction
 
 const HOST_MEMBER_ACTIONS: readonly string[] = ['muteMember', 'camOff', 'stopShare', 'remove']
-const HOST_ROOM_ACTIONS: readonly string[] = ['muteAll', 'endMeeting']
+const HOST_ROOM_ACTIONS: readonly string[] = ['muteAll', 'endMeeting', 'admitAll']
+const HOST_WAITING_ACTIONS: readonly string[] = ['admit', 'deny']
+const HOST_SWITCH_ACTIONS: readonly string[] = ['lock', 'waitingRoom']
 
-/** A host control (F1, e1-t07); the room checks the member may (worker/roles.ts) */
+/** A host control (F1, e1-t07; F2); the room checks the member may (worker/roles.ts) */
 export type HostMessage =
-  { t: 'host'; action: HostMemberAction; memberId: string } | { t: 'host'; action: HostRoomAction }
+  | { t: 'host'; action: HostMemberAction; memberId: string }
+  | { t: 'host'; action: HostRoomAction }
+  | { t: 'host'; action: HostWaitingAction; memberId: string }
+  | { t: 'host'; action: HostSwitchAction; on: boolean }
 
 export type ClientMessage =
   | ChatClientMessage
@@ -460,6 +542,12 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       if (HOST_MEMBER_ACTIONS.includes(action) && isMemberId(value.memberId)) {
         return { t: 'host', action: action as HostMemberAction, memberId: value.memberId }
       }
+      if (HOST_WAITING_ACTIONS.includes(action) && isMemberId(value.memberId)) {
+        return { t: 'host', action: action as HostWaitingAction, memberId: value.memberId }
+      }
+      if (HOST_SWITCH_ACTIONS.includes(action) && typeof value.on === 'boolean') {
+        return { t: 'host', action: action as HostSwitchAction, on: value.on }
+      }
       return null
     }
     case 'stats':
@@ -542,6 +630,17 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     case 'notice':
       return typeof value.notice === 'string' && typeof value.by === 'string'
         ? (value as NoticeMessage)
+        : null
+    case 'lobby':
+      return value.v === PROTOCOL_VERSION &&
+        typeof value.you === 'string' &&
+        typeof value.token === 'string' &&
+        isRev(value.position) &&
+        isRev(value.count) &&
+        typeof value.room === 'object' &&
+        value.room !== null &&
+        typeof value.hostPresent === 'boolean'
+        ? (value as LobbyMessage)
         : null
     default:
       return null

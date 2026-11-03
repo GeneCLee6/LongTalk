@@ -48,6 +48,8 @@ const room = {
   createdBy: null,
   startedAt: null,
   share: null,
+  locked: false,
+  waitingRoom: false,
 }
 const member = (id: string) => ({
   id,
@@ -65,7 +67,7 @@ const welcome = (rev: number, members: Record<string, ReturnType<typeof member>>
     you: 'a',
     token: TOKEN,
     rev,
-    state: { room, members, usage: 'normal' as const },
+    state: { room, members, waiting: {}, usage: 'normal' as const },
   }) as const
 
 /** This browser's own id (F1) */
@@ -143,6 +145,43 @@ describe('RoomConnection', () => {
     expect(heard).toHaveBeenCalledTimes(1)
   })
 
+  it('waits in the lobby (F2): keeps its token and place, then follows the room once welcomed', () => {
+    const { connection, socket, onToken, latest } = connect()
+    socket.open()
+    const lobby = {
+      t: 'lobby',
+      v: PROTOCOL_VERSION,
+      you: 'a',
+      token: TOKEN,
+      position: 2,
+      count: 2,
+      room: { name: null, createdBy: 'Wei' },
+      hostPresent: true,
+    } as const
+    socket.receive(lobby)
+    expect(connection.getState()).toMatchObject({
+      status: 'waiting',
+      you: 'a',
+      token: TOKEN,
+      view: null,
+      welcomes: 0,
+      lobby: { position: 2, count: 2, room: { name: null, createdBy: 'Wei' }, hostPresent: true },
+    })
+    expect(onToken).toHaveBeenCalledWith(TOKEN)
+    // The socket drops: the lobby stays while it reconnects with the token
+    socket.serverClose(1006)
+    expect(connection.getState()).toMatchObject({ status: 'reconnecting', lobby: { position: 2 } })
+    vi.advanceTimersByTime(1000)
+    latest().open()
+    expect(JSON.parse(latest().sent[0])).toMatchObject({ t: 'join', token: TOKEN })
+    latest().receive({ ...lobby, position: 1, count: 1 })
+    expect(connection.getState().lobby).toMatchObject({ position: 1 })
+    // Admitted
+    latest().receive(welcome(4, { a: member('a') }))
+    expect(connection.getState()).toMatchObject({ status: 'open', lobby: null, welcomes: 1 })
+    expect(connection.getState().view?.members.a).toBeDefined()
+  })
+
   it('hands over the session token of every welcome', () => {
     const { socket, onToken } = connect()
     socket.open()
@@ -183,7 +222,7 @@ describe('RoomConnection', () => {
     socket.receive({
       t: 'snapshot',
       rev: 3,
-      state: { room, members: { c: member('c') }, usage: 'normal' },
+      state: { room, members: { c: member('c') }, waiting: {}, usage: 'normal' },
     })
     // An old patch already in the snapshot is ignored; the next one applies
     socket.receive({ t: 'patch', rev: 3, ops: [{ op: 'del', path: ['members', 'c'] }] })
@@ -215,6 +254,9 @@ describe('RoomConnection', () => {
     [CloseCode.replaced, 'replaced'],
     [CloseCode.removed, 'removed'],
     [CloseCode.ended, 'ended'],
+    [CloseCode.locked, 'locked'],
+    [CloseCode.denied, 'denied'],
+    [CloseCode.waitExpired, 'waitExpired'],
   ] as const)(
     'reports close code %i as %s, stops the heartbeat, does not reconnect',
     (code, status) => {

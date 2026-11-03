@@ -13,6 +13,8 @@ const TOKEN = 'S'.repeat(43)
  */
 class RoomSocket {
   static instances: RoomSocket[] = []
+  /** `lobby`: the room has its waiting room on and answers `join` with a lobby (F2) */
+  static answer: 'welcome' | 'lobby' = 'welcome'
   readyState = 0
   sent: string[] = []
   closedWith: number | undefined
@@ -33,6 +35,20 @@ class RoomSocket {
     this.sent.push(data)
     const message = JSON.parse(data) as { t: string; name?: string }
     if (message.t !== 'join') return
+    if (RoomSocket.answer === 'lobby') {
+      const lobby = {
+        t: 'lobby',
+        v: PROTOCOL_VERSION,
+        you: 'a',
+        token: TOKEN,
+        position: 1,
+        count: 1,
+        room: { name: '週五聊天', createdBy: 'Wei' },
+        hostPresent: true,
+      }
+      queueMicrotask(() => this.onmessage?.({ data: JSON.stringify(lobby) }))
+      return
+    }
     const roomId = /rooms\/([^/]+)\/ws/.exec(this.url)?.[1] ?? ''
     const members = {
       w: { id: 'w', name: 'Wei', role: 'participant', joinedAt: 1, reconnecting: true, tracks: [] },
@@ -65,7 +81,7 @@ class RoomSocket {
 }
 
 /** POST /api/rooms creates ROOM_ID; GET /api/rooms/<id> knows ROOM_ID only */
-function stubApi({ createStatus = 201 } = {}) {
+function stubApi({ createStatus = 201, locked = false, waitingRoom = false } = {}) {
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/rooms' && init?.method === 'POST') {
       return createStatus === 201
@@ -73,7 +89,7 @@ function stubApi({ createStatus = 201 } = {}) {
         : new Response('', { status: createStatus })
     }
     if (url === `/api/rooms/${ROOM_ID}`) {
-      return Response.json({ id: ROOM_ID, createdAt: 1, memberCount: 1 })
+      return Response.json({ id: ROOM_ID, createdAt: 1, memberCount: 1, locked, waitingRoom })
     }
     return Response.json({ error: 'not_found' }, { status: 404 })
   })
@@ -99,6 +115,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   RoomSocket.instances = []
+  RoomSocket.answer = 'welcome'
 })
 
 describe('home page', () => {
@@ -441,5 +458,216 @@ describe('host controls in the room (F1, e1-t07, e1-t08)', () => {
     expect(await screen.findByRole('heading', { name: '主持人已結束會議' })).toBeInTheDocument()
     expect(screen.getByText(`「會議室 ${ROOM_ID}」已經結束，會議室也關閉了。`)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '重新加入' })).toBeNull()
+  })
+})
+
+describe('lock and waiting room (F2, e1-t09 – e1-t11)', () => {
+  const push = (socket: RoomSocket, frame: unknown) =>
+    act(() => socket.onmessage?.({ data: JSON.stringify(frame) }))
+  const welcomeFrame = (rev = 1) => ({
+    t: 'welcome',
+    v: PROTOCOL_VERSION,
+    you: 'a',
+    token: TOKEN,
+    rev,
+    state: {
+      room: { id: ROOM_ID, createdAt: 1, name: '週五聊天', locked: false, waitingRoom: true },
+      members: {
+        w: { id: 'w', name: 'Wei', role: 'host', joinedAt: 1, reconnecting: false, tracks: [] },
+        a: {
+          id: 'a',
+          name: 'Gene',
+          role: 'participant',
+          joinedAt: 2,
+          reconnecting: false,
+          tracks: [],
+        },
+      },
+      waiting: {},
+      usage: 'normal',
+    },
+  })
+
+  async function enterWaiting() {
+    stubApi({ waitingRoom: true })
+    RoomSocket.answer = 'lobby'
+    localStorage.setItem('longtalk.name', 'Gene')
+    visit(`/r/${ROOM_ID}`)
+    expect(await screen.findByText(/開了等候室/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '加入' }))
+    expect(await screen.findByRole('heading', { name: '你在等候室' })).toBeInTheDocument()
+    return RoomSocket.instances.at(-1)!
+  }
+
+  it('waits with the room name and its place, then comes in when admitted, nothing asked again', async () => {
+    const socket = await enterWaiting()
+    expect(screen.getByText('週五聊天')).toBeInTheDocument()
+    expect(screen.getByText('你是下一位')).toBeInTheDocument()
+    expect(screen.getByText(/主持人會讓你進來/)).toBeInTheDocument()
+    // The token is kept, so a reload comes back to the same place in the queue
+    expect(sessionStorage.getItem(`longtalk.session.${ROOM_ID}`)).toBe(TOKEN)
+    await push(socket, {
+      t: 'lobby',
+      v: PROTOCOL_VERSION,
+      you: 'a',
+      token: TOKEN,
+      position: 1,
+      count: 1,
+      room: { name: '週五聊天', createdBy: 'Wei' },
+      hostPresent: false,
+    })
+    expect(screen.getByText(/主持人目前不在線上/)).toBeInTheDocument()
+    // Admitted: the room on the same socket, no pre-join screen, no name asked
+    await push(socket, welcomeFrame())
+    expect(await screen.findByText('目前 2 人在線')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '你在等候室' })).toBeNull()
+    expect(RoomSocket.instances).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: '週五聊天' })).toBeInTheDocument()
+  })
+
+  it('leaves the waiting room: tells the room, then offers to try again', async () => {
+    const socket = await enterWaiting()
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: '離開等候室' })))
+    expect(socket.sent.at(-1)).toBe('{"t":"leave"}')
+    expect(screen.getByRole('heading', { name: '你已離開等候室' })).toBeInTheDocument()
+    expect(sessionStorage.getItem(`longtalk.session.${ROOM_ID}`)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '再試一次' }))
+    expect(await screen.findByRole('heading', { name: '準備加入' })).toBeInTheDocument()
+  })
+
+  it('says the host did not let us in when denied, with a way to ask again', async () => {
+    const socket = await enterWaiting()
+    await act(async () => socket.onclose?.({ code: 4406 }))
+    expect(await screen.findByRole('heading', { name: '主持人沒有讓你進入' })).toBeInTheDocument()
+    expect(screen.getByText(/1 分鐘後可以再請求一次/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /分：/ })).toBeNull()
+    expect(sessionStorage.getItem(`longtalk.session.${ROOM_ID}`)).toBeNull()
+  })
+
+  it('says when waiting took too long', async () => {
+    const socket = await enterWaiting()
+    await act(async () => socket.onclose?.({ code: 4412 }))
+    expect(await screen.findByRole('heading', { name: '等候太久了' })).toBeInTheDocument()
+  })
+
+  it('shows the locked screen when the room locked between the pre-join screen and joining', async () => {
+    stubApi()
+    localStorage.setItem('longtalk.name', 'Gene')
+    sessionStorage.setItem(`longtalk.session.${ROOM_ID}`, TOKEN)
+    visit(`/r/${ROOM_ID}`)
+    await screen.findByText('目前 2 人在線')
+    await act(async () => RoomSocket.instances.at(-1)!.onclose?.({ code: 4423 }))
+    expect(await screen.findByRole('heading', { name: '這間會議室已鎖定' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '再試一次' }))
+    expect(await screen.findByRole('heading', { name: '準備加入' })).toBeInTheDocument()
+  })
+
+  it('says a room is locked before asking for the camera, and looks again on 再試一次', async () => {
+    const fetch = stubApi({ locked: true })
+    const getUserMedia = vi.fn()
+    vi.stubGlobal('navigator', { ...navigator, mediaDevices: { getUserMedia } })
+    visit(`/r/${ROOM_ID}`)
+    expect(await screen.findByRole('heading', { name: '這間會議室已鎖定' })).toBeInTheDocument()
+    expect(getUserMedia).not.toHaveBeenCalled()
+    expect(RoomSocket.instances).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: '再試一次' }))
+    await screen.findByRole('heading', { name: '這間會議室已鎖定' })
+    expect(fetch.mock.calls.filter(([url]) => url === `/api/rooms/${ROOM_ID}`)).toHaveLength(2)
+  })
+
+  it('host: a toast and a badge when someone waits, admit and deny, the switches', async () => {
+    stubApi()
+    localStorage.setItem('longtalk.name', 'Gene')
+    sessionStorage.setItem(`longtalk.session.${ROOM_ID}`, TOKEN)
+    visit(`/r/${ROOM_ID}`)
+    await screen.findByText('目前 2 人在線')
+    const socket = RoomSocket.instances.at(-1)!
+    await push(socket, {
+      t: 'patch',
+      rev: 2,
+      ops: [
+        { op: 'set', path: ['room', 'waitingRoom'], value: true },
+        {
+          op: 'set',
+          path: ['waiting'],
+          value: {
+            x: { id: 'x', name: '阿明', since: 5, reconnecting: false },
+            y: { id: 'y', name: '阿華', since: 6, reconnecting: false },
+          },
+        },
+      ],
+    })
+    expect(screen.getByText('2 人在等候室，等你放行')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '參與者（2 人，2 人在等候室）' }))
+    const panel = screen.getByRole('complementary', { name: '參與者' })
+    expect(within(panel).getByRole('heading', { name: '等候中 2' })).toBeInTheDocument()
+    const queue = within(panel).getByRole('list', { name: '等候室名單' })
+    expect(
+      within(queue)
+        .getAllByRole('listitem')
+        .map((item) => item.getAttribute('aria-label')),
+    ).toEqual(['阿明', '阿華'])
+    fireEvent.click(within(panel).getByRole('button', { name: '讓 阿明 進入會議室' }))
+    expect(socket.sent.at(-1)).toBe('{"t":"host","action":"admit","memberId":"x"}')
+    fireEvent.click(within(panel).getByRole('button', { name: '拒絕 阿華 進入' }))
+    expect(socket.sent.at(-1)).toBe('{"t":"host","action":"deny","memberId":"y"}')
+    fireEvent.click(within(panel).getByRole('button', { name: '全部放行' }))
+    expect(socket.sent.at(-1)).toBe('{"t":"host","action":"admitAll"}')
+    // A third one arrives: one toast with the name
+    await push(socket, {
+      t: 'patch',
+      rev: 3,
+      ops: [
+        {
+          op: 'set',
+          path: ['waiting', 'z'],
+          value: { id: 'z', name: '小美', since: 7, reconnecting: false },
+        },
+      ],
+    })
+    expect(screen.getByText('小美 在等候室，等你放行')).toBeInTheDocument()
+    // Lock
+    fireEvent.click(within(panel).getByRole('switch', { name: '鎖定會議室' }))
+    expect(socket.sent.at(-1)).toBe('{"t":"host","action":"lock","on":true}')
+    await push(socket, {
+      t: 'patch',
+      rev: 4,
+      ops: [{ op: 'set', path: ['room', 'locked'], value: true }],
+    })
+    expect(within(panel).getByRole('switch', { name: '鎖定會議室' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(screen.getByRole('img', { name: '會議室已鎖定，新的人不能加入' })).toBeInTheDocument()
+    // Turning the waiting room off with people in it asks first: they all come in
+    fireEvent.click(within(panel).getByRole('switch', { name: '等候室' }))
+    const ask = screen.getByRole('alertdialog', { name: '關閉等候室？' })
+    expect(ask).toHaveTextContent('等候中的 3 人會一起進入會議室。')
+    fireEvent.click(within(ask).getByRole('button', { name: '放行 3 人並關閉' }))
+    expect(socket.sent.at(-1)).toBe('{"t":"host","action":"waitingRoom","on":false}')
+  })
+
+  it('participant: sees the lock, not the waiting list or the switches', async () => {
+    const socket = await enterWaiting()
+    await push(socket, welcomeFrame())
+    await screen.findByText('目前 2 人在線')
+    await push(socket, {
+      t: 'patch',
+      rev: 2,
+      ops: [
+        { op: 'set', path: ['room', 'locked'], value: true },
+        {
+          op: 'set',
+          path: ['waiting'],
+          value: { x: { id: 'x', name: '阿明', since: 5, reconnecting: false } },
+        },
+      ],
+    })
+    expect(screen.getByRole('img', { name: '會議室已鎖定，新的人不能加入' })).toBeInTheDocument()
+    expect(screen.queryByText(/在等候室，等你放行/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '參與者（2 人）' }))
+    const panel = screen.getByRole('complementary', { name: '參與者' })
+    expect(within(panel).queryByRole('switch')).toBeNull()
+    expect(within(panel).queryByRole('list', { name: '等候室名單' })).toBeNull()
   })
 })
