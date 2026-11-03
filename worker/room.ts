@@ -19,6 +19,7 @@ import {
   type SfuTrackRef,
   type UsageCursor,
 } from './room-host.ts'
+import { addressKey, type GuessRecord, type PasswordRecord } from './password.ts'
 import type { Schedule } from './scheduler.ts'
 import { USAGE_OBJECT } from './usage.ts'
 
@@ -32,6 +33,10 @@ const USAGE_KEY = 'usage'
 const SCHEDULE_KEY = 'schedule'
 /** Removed browsers and until when (F1) */
 const BANS_KEY = 'bans'
+/** The room's password as a salted digest, wrong guesses, an ended meeting's tombstone (F3) */
+const PASSWORD_KEY = 'password'
+const GUESSES_KEY = 'guesses'
+const ENDED_KEY = 'ended'
 /** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
 const CHAT_PREFIX = 'chat:'
 const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
@@ -85,6 +90,10 @@ export class RoomDO extends DurableObject<Env> {
         saveChat: (message) => void storage.put(chatKey(message.id), message),
         dropChat: (id) => void storage.delete(chatKey(id)),
         saveBans: (bans) => void storage.put(BANS_KEY, bans),
+        savePassword: (record) =>
+          void (record === null ? storage.delete(PASSWORD_KEY) : storage.put(PASSWORD_KEY, record)),
+        saveGuesses: (guesses) => void storage.put(GUESSES_KEY, guesses),
+        saveEnded: (until) => void storage.put(ENDED_KEY, until),
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -93,7 +102,7 @@ export class RoomDO extends DurableObject<Env> {
     })
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG))
     void ctx.blockConcurrencyWhile(async () => {
-      const [info, rev, sessions, usage, schedule, alarm, chat, bans] = await Promise.all([
+      const [info, rev, sessions, usage, schedule, alarm, chat, bans, extras] = await Promise.all([
         storage.get<RoomInfo>(ROOM_KEY),
         storage.get<number>(REV_KEY),
         storage.get<SessionRecord[]>(SESSIONS_KEY),
@@ -102,6 +111,7 @@ export class RoomDO extends DurableObject<Env> {
         storage.getAlarm(),
         storage.list<ChatMessage>({ prefix: CHAT_PREFIX }),
         storage.get<Ban[]>(BANS_KEY),
+        storage.get<unknown>([PASSWORD_KEY, GUESSES_KEY, ENDED_KEY]),
       ])
       const sockets = ctx
         .getWebSockets()
@@ -117,6 +127,11 @@ export class RoomDO extends DurableObject<Env> {
         schedule ?? null,
         [...chat.values()],
         bans ?? [],
+        {
+          password: (extras.get(PASSWORD_KEY) as PasswordRecord | undefined) ?? null,
+          guesses: (extras.get(GUESSES_KEY) as GuessRecord[] | undefined) ?? [],
+          endedUntil: (extras.get(ENDED_KEY) as number | undefined) ?? null,
+        },
       )
       // A room stored before C2 has no schedule: restore made one
       await this.syncAlarm()
@@ -167,10 +182,12 @@ export class RoomDO extends DurableObject<Env> {
       server.close(admission.code, admission.reason)
       return new Response(null, { status: 101, webSocket: client })
     }
-    const attachment: Attachment = { conn: crypto.randomUUID(), openedAt: Date.now() }
+    // The guess limit (F3) counts per network address too: kept as a digest bound to this room
+    const ip = await addressKey(request.headers.get('CF-Connecting-IP'), this.roomId(request))
+    const attachment: Attachment = { conn: crypto.randomUUID(), openedAt: Date.now(), ip }
     this.ctx.acceptWebSocket(server, [attachment.conn])
     server.serializeAttachment(attachment)
-    this.host.opened(attachment.conn)
+    this.host.opened(attachment.conn, ip)
     await this.syncAlarm()
     return new Response(null, { status: 101, webSocket: client })
   }
@@ -184,7 +201,8 @@ export class RoomDO extends DurableObject<Env> {
     }
     // Normally answered by the auto-response without waking the object
     if (data === HEARTBEAT_PING) ws.send(HEARTBEAT_PONG)
-    this.host.message(conn, data)
+    // A `join` checking a password, or a password being set, finishes later (F3)
+    await this.host.message(conn, data)
     // `leave` may empty the room or hand the host on
     await this.syncAlarm()
   }
@@ -250,6 +268,11 @@ export class RoomDO extends DurableObject<Env> {
     this.alarmAt = next
     if (next === null) await this.ctx.storage.deleteAlarm()
     else await this.ctx.storage.setAlarm(next)
+  }
+
+  /** The room's id, from the WebSocket path the Worker forwarded (/api/rooms/<id>/ws) */
+  private roomId(request: Request): string {
+    return new URL(request.url).pathname.split('/')[3] ?? ''
   }
 
   private send(connId: string, message: ServerMessage) {

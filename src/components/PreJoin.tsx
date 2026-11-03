@@ -1,5 +1,6 @@
 import type { FormEvent } from 'react'
 import styled from 'styled-components'
+import { MAX_PASSWORD_CHARS, normalizePassword } from '../../shared/password.ts'
 import { normalizeName, MAX_NAME_CHARS } from '../../shared/protocol.ts'
 import type { DeviceLists, DeviceOption, MediaProblem } from '../media/devices.ts'
 import { strings } from '../strings.ts'
@@ -12,6 +13,18 @@ import { LevelMeter } from './LevelMeter.tsx'
 import { VideoPreview } from './VideoPreview.tsx'
 
 export type DeviceChoice = 'mic' | 'cam' | 'speaker'
+
+/** The room's password field (F3, e1-t15), shown when the room has one */
+export interface PasswordFieldProps {
+  value: string
+  onChange: (value: string) => void
+  /** Under the field: why it is asked, or that the link brought it */
+  hint: string
+  /** What went wrong last time (wrong, too many tries); null when nothing did */
+  error: string | null
+  /** Too many wrong tries: joining waits until this passes */
+  waiting?: boolean
+}
 
 export interface PreJoinProps {
   roomId: string
@@ -39,6 +52,8 @@ export interface PreJoinProps {
   onRetry: () => void
   joining?: boolean
   onJoin: () => void
+  /** The room has a password (F3): the field above 加入 */
+  password?: PasswordFieldProps | null
 }
 
 /** The message for what went wrong opening the devices, most actionable first */
@@ -99,7 +114,9 @@ export function PreJoin(props: PreJoinProps) {
     props
   const problem = problemMessage(props.micProblem, props.camProblem)
   const showVideo = cam && stream !== null && stream.getVideoTracks().length > 0
-  const canJoin = normalizeName(name) !== null && !props.joining
+  const pwd = props.password ?? null
+  const passwordReady = pwd === null || (normalizePassword(pwd.value) !== null && !pwd.waiting)
+  const canJoin = normalizeName(name) !== null && !props.joining && passwordReady
 
   function onSubmit(event: FormEvent) {
     event.preventDefault()
@@ -186,6 +203,29 @@ export function PreJoin(props: PreJoinProps) {
           required
           onChange={(event) => props.onNameChange(event.target.value)}
         />
+        {pwd && (
+          <div>
+            <TextField
+              label={strings.prejoin.passwordLabel}
+              placeholder={strings.prejoin.passwordPlaceholder}
+              type="password"
+              value={pwd.value}
+              // Room for full-width input: folded to ASCII before it is sent (shared/password.ts)
+              maxLength={MAX_PASSWORD_CHARS * 2}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              required
+              aria-invalid={pwd.error !== null}
+              onChange={(event) => pwd.onChange(event.target.value.normalize('NFKC'))}
+            />
+            {pwd.error ? (
+              <ErrorText role="alert">{pwd.error}</ErrorText>
+            ) : (
+              <Muted>{pwd.hint}</Muted>
+            )}
+          </div>
+        )}
         <Button type="submit" block disabled={!canJoin}>
           {props.joining ? strings.prejoin.joining : strings.prejoin.join}
         </Button>
@@ -285,6 +325,12 @@ const Form = styled.form`
     margin: 0 0 ${space(1)};
     font-size: 22px;
   }
+`
+
+const ErrorText = styled.p`
+  margin: ${space(1)} 0 0;
+  font-size: ${fontSize.small};
+  color: ${color.danger};
 `
 
 const Muted = styled.p`

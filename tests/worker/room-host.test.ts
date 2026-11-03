@@ -6,6 +6,7 @@ import {
   CloseCode,
   DENY_COOLDOWN_MS,
   EMPTY_ROOM_TTL_MS,
+  ENDED_TOMBSTONE_MS,
   HOST_HANDOFF_MS,
   JOIN_TIMEOUT_MS,
   MAX_MEMBERS,
@@ -41,6 +42,7 @@ const INFO = {
   share: null,
   locked: false,
   waitingRoom: false,
+  passwordSetAt: null,
   spotlight: null,
 }
 
@@ -112,6 +114,9 @@ function setup(prefix = 'm') {
       saveBans: (bans) => {
         saved.bans = structuredClone(bans)
       },
+      savePassword: () => {},
+      saveGuesses: () => {},
+      saveEnded: () => {},
       clear: () => {
         saved.cleared++
       },
@@ -1506,8 +1511,18 @@ describe('RoomHost host controls (F1, e1-t07)', () => {
     expect(t.host.exists).toBe(false)
     expect(t.host.summary()).toBeNull()
     expect(t.host.chatHistory).toEqual([])
-    expect(t.host.nextAlarm()).toBeNull()
     expect(t.saved.cleared).toBe(1)
+    // F3: for ENDED_TOMBSTONE_MS a socket opening learns the meeting ended, then it is not found
+    expect(t.host.nextAlarm()).toBe(t.now() + ENDED_TOMBSTONE_MS)
+    expect(t.host.admit(String(PROTOCOL_VERSION))).toEqual({
+      ok: false,
+      code: CloseCode.ended,
+      reason: 'ended',
+    })
+    t.tick(ENDED_TOMBSTONE_MS)
+    t.host.alarm()
+    expect(t.saved.cleared).toBe(2)
+    expect(t.host.nextAlarm()).toBeNull()
     expect(t.host.admit(String(PROTOCOL_VERSION))).toEqual({
       ok: false,
       code: CloseCode.roomNotFound,

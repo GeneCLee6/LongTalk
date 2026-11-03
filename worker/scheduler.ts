@@ -9,7 +9,9 @@ export type Schedule = Record<string, number>
  *
  * Keys in RoomHost: `sweep` (heartbeats, reconnect grace, usage flush), `close` (empty room),
  * `handoff` (host reconnecting too long), `bans` (the next ban of a removed browser runs out, F1;
- * a denied one, F2), `waiting` (the next one in the waiting room to wait too long, F2).
+ * a denied one, F2), `waiting` (the next one in the waiting room to wait too long, F2),
+ * `guesses` (the next wrong password guess to stop counting, F3), `ended` (an ended meeting's
+ * tombstone runs out, F3).
  */
 export class Scheduler {
   private readonly due = new Map<string, number>()

@@ -21,6 +21,7 @@ import {
   type NoticeMessage,
   type RoomView,
 } from '../../shared/protocol.ts'
+import { PASSWORD_WAIT_MS } from '../../shared/password.ts'
 import { Backoff } from './backoff.ts'
 
 /**
@@ -37,6 +38,9 @@ import { Backoff } from './backoff.ts'
  * - `denied`: the host turned us away from the waiting room, or we asked again too soon (F2);
  *   final
  * - `waitExpired`: waited WAIT_TIMEOUT_MS without being admitted (F2); final
+ * - `passwordRequired`, `passwordWrong`: the room has a password, and the join carried none or a
+ *   wrong one (F3); final (the pre-join screen asks again)
+ * - `passwordWait`: too many wrong passwords; `passwordWaitUntil` says until when (F3); final
  */
 export type RoomStatus =
   | 'connecting'
@@ -53,6 +57,9 @@ export type RoomStatus =
   | 'locked'
   | 'denied'
   | 'waitExpired'
+  | 'passwordRequired'
+  | 'passwordWrong'
+  | 'passwordWait'
 
 /** Where we are in the waiting room (F2): the latest `lobby` */
 export type LobbyState = Pick<LobbyMessage, 'position' | 'count' | 'room' | 'hostPresent'>
@@ -75,6 +82,8 @@ export interface RoomConnectionState {
    * the room welcomed us (admitted), and before
    */
   lobby: LobbyState | null
+  /** After `passwordWait` (F3): when this browser may try a password again (epoch ms) */
+  passwordWaitUntil: number | null
 }
 
 /** The bits of WebSocket the connection uses, so tests can pass a fake */
@@ -95,6 +104,11 @@ export interface JoinAs {
   name: string
   token: string | null
   client: string | null
+  /**
+   * The room's password (F3), for someone new to a room that has one; sent only in `join`.
+   * A member coming back with its token does not need it.
+   */
+  password?: string | null
 }
 
 export interface RoomConnectionOptions {
@@ -144,6 +158,12 @@ function finalStatus(code: number): RoomStatus | null {
       return 'denied'
     case CloseCode.waitExpired:
       return 'waitExpired'
+    case CloseCode.passwordRequired:
+      return 'passwordRequired'
+    case CloseCode.passwordWrong:
+      return 'passwordWrong'
+    case CloseCode.passwordWait:
+      return 'passwordWait'
     default:
       return null
   }
@@ -170,6 +190,7 @@ export class RoomConnection {
   private name: string
   private token: string | null
   private readonly client: string | null
+  private readonly password: string | null
   private socket: SocketLike | null = null
   private heartbeat: ReturnType<typeof setInterval> | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
@@ -188,6 +209,7 @@ export class RoomConnection {
     chat: [],
     chatLoaded: false,
     lobby: null,
+    passwordWaitUntil: null,
   }
   /** The room's CHAT_RATE, checked here too so a refused message stays in the box */
   private readonly chatRate = new ChatRateLimit()
@@ -205,6 +227,7 @@ export class RoomConnection {
     this.name = join.name
     this.token = join.token
     this.client = join.client
+    this.password = join.password ?? null
   }
 
   getState = (): RoomConnectionState => this.state
@@ -245,6 +268,7 @@ export class RoomConnection {
       chat: [],
       chatLoaded: false,
       lobby: null,
+      passwordWaitUntil: null,
     })
     this.open()
   }
@@ -252,14 +276,18 @@ export class RoomConnection {
   /**
    * Closes the socket. With `leave`, tells the room first so the member is removed at once;
    * without, the room keeps the member as reconnecting for a while (a page reload does this).
+   * `host` (F3): a host leaving names who takes over.
    */
-  stop({ leave = false }: { leave?: boolean } = {}): void {
+  stop({ leave = false, host }: { leave?: boolean; host?: string } = {}): void {
     this.running = false
     this.clearTimers()
     const socket = this.socket
     if (!socket) return
     this.socket = null
-    if (leave && socket.readyState === OPEN) socket.send(JSON.stringify({ t: 'leave' }))
+    if (leave && socket.readyState === OPEN) {
+      const message: ClientMessage = host === undefined ? { t: 'leave' } : { t: 'leave', host }
+      socket.send(JSON.stringify(message))
+    }
     socket.onopen = socket.onmessage = socket.onclose = null
     socket.close(1000, leave ? 'left' : 'closed')
   }
@@ -299,7 +327,14 @@ export class RoomConnection {
     const socket = this.createSocket(this.url)
     this.socket = socket
     socket.onopen = () => {
-      this.send({ t: 'join', name: this.name, token: this.token, client: this.client })
+      this.send({
+        t: 'join',
+        name: this.name,
+        token: this.token,
+        client: this.client,
+        // Only someone new needs it; the room ignores it for a token it knows
+        ...(this.password !== null && this.token === null ? { password: this.password } : {}),
+      })
       this.heartbeat = setInterval(() => this.beat(socket), HEARTBEAT_INTERVAL_MS)
     }
     socket.onmessage = (event) => {
@@ -311,7 +346,12 @@ export class RoomConnection {
       this.socket = null
       this.clearTimers()
       const final = finalStatus(event.code)
-      if (final) this.update({ ...this.state, status: final })
+      if (final === 'passwordWait') {
+        // The reason is how long to wait; a malformed one waits the usual time
+        const left = Number(event.reason)
+        const ms = Number.isFinite(left) && left > 0 ? left : PASSWORD_WAIT_MS
+        this.update({ ...this.state, status: final, passwordWaitUntil: Date.now() + ms })
+      } else if (final) this.update({ ...this.state, status: final })
       else this.reconnectLater()
     }
   }

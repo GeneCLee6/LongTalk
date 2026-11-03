@@ -85,6 +85,24 @@
 //    One at a time: a new spotlight replaces the old. It ends when the member leaves or is
 //    removed, not while they reconnect. Each browser decides how to show it: a member's own pin
 //    (local, never sent) wins over the spotlight, and a share keeps the main area (shared/layout.ts).
+// 15. Password (F3, e1-t15): `host` `setPassword` (worker/roles.ts `setPassword`: the host) sets,
+//    changes or clears (null) the room's password; the room keeps only a salted digest
+//    (worker/password.ts) and everyone sees when it was set (`RoomInfo.passwordSetAt`, null for
+//    none). Someone new sends the password in `join` (never in a URL). The order a `join` is
+//    checked in: a ban; a token the room knows (a member within RECONNECT_GRACE_MS, or someone
+//    waiting: no password asked again); the lock; the password; then the waiting room. No
+//    password: CloseCode.passwordRequired; a wrong one: CloseCode.passwordWrong;
+//    PASSWORD_MAX_FAILS wrong ones in a row from a browser or a network address:
+//    CloseCode.passwordWait, the close reason being the milliseconds left to wait.
+// 16. Co-hosts and handing over (F3, e1-t16): `host` `setCohost` (`on`) makes a participant a
+//    co-host or a co-host a participant again; `makeHost` hands the host role to a connected
+//    member, the previous host becoming a co-host (worker/roles.ts: the host only). The member
+//    gets `notice` (`madeCohost`, `cohostRevoked`, `madeHost`) before the patch that shows it.
+//    A host leaving hands the role to whom `leave.host` names, else to the earliest-joined
+//    connected co-host, else member.
+// 17. Ending (F3, e1-t17): after `endMeeting` the room remembers for ENDED_TOMBSTONE_MS that it
+//    ended: a socket opening then (a member coming back from a dropped connection) is closed with
+//    CloseCode.ended instead of CloseCode.roomNotFound.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -100,17 +118,21 @@
 //   `lock`, `waitingRoom`, `admit`, `admitAll`, `deny`, close codes `locked`, `denied`,
 //   `waitExpired`.
 // v10 → v11 (G2): `RoomInfo.spotlight`, `spotlight`.
+// v11 → v12 (F3): `join.password`, `RoomInfo.passwordSetAt`, `host` actions `setPassword`,
+//   `setCohost`, `makeHost`, `leave.host`, notices `madeCohost`, `cohostRevoked`, `madeHost`,
+//   close codes `passwordRequired`, `passwordWrong`, `passwordWait`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
 // View types are `type` aliases, not interfaces, so they stay assignable to JsonValue.
 import { isChatMessage, normalizeChatText, type ChatMessage } from './chat.ts'
 import type { JsonValue, PatchOp } from './patch.ts'
+import { normalizePassword } from './password.ts'
 import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 11
+export const PROTOCOL_VERSION = 12
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -150,6 +172,8 @@ export const MAX_BANS = 200
 export const DENY_COOLDOWN_MS = 60_000
 /** Someone waiting this long without being admitted is sent away (F2) */
 export const WAIT_TIMEOUT_MS = 15 * 60_000
+/** An ended meeting's room answers CloseCode.ended, not roomNotFound, for this long (F3) */
+export const ENDED_TOMBSTONE_MS = 10 * 60_000
 
 /**
  * WebSocket close codes the server uses. The browser does not reconnect after the 44xx ones but
@@ -177,6 +201,12 @@ export const CloseCode = {
   denied: 4406,
   /** Waited WAIT_TIMEOUT_MS without being admitted (F2) */
   waitExpired: 4412,
+  /** The room has a password and `join` carried none (F3) */
+  passwordRequired: 4401,
+  /** The password in `join` is wrong (F3) */
+  passwordWrong: 4402,
+  /** Too many wrong passwords: wait; the close reason is the milliseconds left (F3) */
+  passwordWait: 4429,
 } as const
 
 /** What POST /api/rooms decides about a room */
@@ -201,6 +231,11 @@ export type RoomInfo = RoomInit & {
   waitingRoom: boolean
   /** The member a host or co-host put in everyone's main area (G2, e4-t11); null for nobody */
   spotlight: string | null
+  /**
+   * When the host last set the password (F3, e1-t15); null when the room has none. The password
+   * itself never leaves the room (only a digest is kept)
+   */
+  passwordSetAt: number | null
 }
 
 /** The room's one screen share (D1, e3-t02) */
@@ -261,8 +296,8 @@ export type Member = {
   id: string
   name: string
   /**
-   * One member is the host whenever anyone is connected (C2, e1-t04); `cohost` comes with
-   * e1-t16. Never `waiting` in the view: who waits is `RoomView.waiting` (F2)
+   * One member is the host whenever anyone is connected (C2, e1-t04); co-hosts are named by the
+   * host (F3, e1-t16). Never `waiting` in the view: who waits is `RoomView.waiting` (F2)
    */
   role: Role
   joinedAt: number
@@ -314,7 +349,14 @@ export type ErrorCode = 'bad_message' | 'forbidden' | 'share_busy' | 'audio_only
  * or camera off on `muted` / `camOff` (the room already lists the track muted) and says what
  * happened.
  */
-export type NoticeKind = 'muted' | 'camOff' | 'shareStopped'
+export type NoticeKind =
+  | 'muted'
+  | 'camOff'
+  | 'shareStopped'
+  // F3 (e1-t16): the host made this member a co-host, a participant again, or the host
+  | 'madeCohost'
+  | 'cohostRevoked'
+  | 'madeHost'
 
 export type NoticeMessage = { t: 'notice'; notice: NoticeKind; by: string; all?: true }
 
@@ -358,14 +400,25 @@ export type ServerMessage =
 /**
  * The first message on every socket; `token` is null for someone new. `client` is this browser's
  * own random id (localStorage, src/room/session.ts), what a ban is kept against (F1); null when
- * missing or malformed.
+ * missing or malformed. `password` (F3): the room's password as typed (shared/password.ts), for
+ * someone new to a room that has one; null otherwise. Only ever sent here, never in a URL.
  */
-export type JoinMessage = { t: 'join'; name: string; token: string | null; client: string | null }
+export type JoinMessage = {
+  t: 'join'
+  name: string
+  token: string | null
+  client: string | null
+  password?: string | null
+}
 
 export type ResyncMessage = { t: 'resync' }
 
-/** Leaving on purpose: the member is removed at once instead of waiting for RECONNECT_GRACE_MS */
-export type LeaveMessage = { t: 'leave' }
+/**
+ * Leaving on purpose: the member is removed at once instead of waiting for RECONNECT_GRACE_MS.
+ * `host` (F3): a host leaving names who takes over (a connected member); without it, the room's
+ * own rule decides (the earliest-joined connected co-host, else member).
+ */
+export type LeaveMessage = { t: 'leave'; host?: string }
 
 /**
  * Everything this member publishes now on its SFU session (replaces the previous list). Ignored
@@ -416,7 +469,23 @@ export type HostWaitingAction = 'admit' | 'deny'
 /** The room's switches (F2): `on` says which way */
 export type HostSwitchAction = 'lock' | 'waitingRoom'
 
-export type HostAction = HostMemberAction | HostRoomAction | HostWaitingAction | HostSwitchAction
+/** The room's password (F3): a new one, or null to clear it */
+export type HostPasswordAction = 'setPassword'
+
+/** Making a member a co-host (`on`) or a participant again (F3) */
+export type HostCohostAction = 'setCohost'
+
+/** Handing the host role to a member (F3) */
+export type HostHandoverAction = 'makeHost'
+
+export type HostAction =
+  | HostMemberAction
+  | HostRoomAction
+  | HostWaitingAction
+  | HostSwitchAction
+  | HostPasswordAction
+  | HostCohostAction
+  | HostHandoverAction
 
 const HOST_MEMBER_ACTIONS: readonly string[] = ['muteMember', 'camOff', 'stopShare', 'remove']
 const HOST_ROOM_ACTIONS: readonly string[] = ['muteAll', 'endMeeting', 'admitAll']
@@ -429,6 +498,9 @@ export type HostMessage =
   | { t: 'host'; action: HostRoomAction }
   | { t: 'host'; action: HostWaitingAction; memberId: string }
   | { t: 'host'; action: HostSwitchAction; on: boolean }
+  | { t: 'host'; action: HostPasswordAction; password: string | null }
+  | { t: 'host'; action: HostCohostAction; memberId: string; on: boolean }
+  | { t: 'host'; action: HostHandoverAction; memberId: string }
 
 export type ClientMessage =
   | ChatClientMessage
@@ -517,17 +589,20 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       if (name === null) return null
       // A malformed token is someone new, not an error: the browser may hold one from an
       // older version
+      // A malformed password is no password: the room asks for it
+      const password = normalizePassword(value.password)
       return {
         t: 'join',
         name,
         token: isSessionToken(value.token) ? value.token : null,
         client: isClientId(value.client) ? value.client : null,
+        ...(password === null ? {} : { password }),
       }
     }
     case 'resync':
       return { t: 'resync' }
     case 'leave':
-      return { t: 'leave' }
+      return isMemberId(value.host) ? { t: 'leave', host: value.host } : { t: 'leave' }
     case 'tracks':
       return parseTracks(value)
     case 'rename': {
@@ -564,6 +639,17 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       }
       if (HOST_SWITCH_ACTIONS.includes(action) && typeof value.on === 'boolean') {
         return { t: 'host', action: action as HostSwitchAction, on: value.on }
+      }
+      if (action === 'setPassword') {
+        if (value.password === null) return { t: 'host', action, password: null }
+        const password = normalizePassword(value.password)
+        return password === null ? null : { t: 'host', action, password }
+      }
+      if (action === 'setCohost' && isMemberId(value.memberId) && typeof value.on === 'boolean') {
+        return { t: 'host', action, memberId: value.memberId, on: value.on }
+      }
+      if (action === 'makeHost' && isMemberId(value.memberId)) {
+        return { t: 'host', action, memberId: value.memberId }
       }
       return null
     }

@@ -6,8 +6,11 @@ import { clearSession, loadClientId, loadSession, saveSession } from './session.
 
 export interface RoomConnectionHandle {
   state: RoomConnectionState
-  /** Leaves the room on purpose: the member is removed at once and the session forgotten */
-  leave: () => void
+  /**
+   * Leaves the room on purpose: the member is removed at once and the session forgotten. A host
+   * may name who takes over (F3, e1-t17)
+   */
+  leave: (host?: string) => void
   /** Sends a message to the room (dropped while the socket is not open) */
   send: (message: ClientMessage) => void
   /** After `lost`: try to reconnect again */
@@ -28,15 +31,20 @@ export interface RoomConnectionHandle {
  * Reconnects on its own (RoomConnection), sooner when the browser comes online or to the
  * foreground.
  */
-export function useRoomConnection(roomId: string, name: string): RoomConnectionHandle {
+export function useRoomConnection(
+  roomId: string,
+  name: string,
+  /** The room's password (F3), for joining a room that has one as someone new */
+  password: string | null = null,
+): RoomConnectionHandle {
   const connection = useMemo(
     () =>
       new RoomConnection(
         roomId,
-        { name, token: loadSession(roomId), client: loadClientId() },
+        { name, token: loadSession(roomId), client: loadClientId(), password },
         { onToken: (token) => saveSession(roomId, token) },
       ),
-    [roomId, name],
+    [roomId, name, password],
   )
   useEffect(() => {
     connection.start()
@@ -51,10 +59,13 @@ export function useRoomConnection(roomId: string, name: string): RoomConnectionH
     }
   }, [connection])
   const state = useSyncExternalStore(connection.subscribe, connection.getState)
-  const leave = useCallback(() => {
-    connection.stop({ leave: true })
-    clearSession(roomId)
-  }, [connection, roomId])
+  const leave = useCallback(
+    (host?: string) => {
+      connection.stop({ leave: true, host })
+      clearSession(roomId)
+    },
+    [connection, roomId],
+  )
   return {
     state,
     leave,

@@ -19,7 +19,12 @@ import { strings } from '../src/strings.ts'
 // admits it and it sees and hears the room; then the host locks the room, everyone sees the
 // padlock, and a fifth browser is shown the locked screen at once. After the share, the stage
 // (G2): the host spotlights a member and everyone sees them big, another pins someone else for
-// herself only, and she hides her own tile and shows it again. Runs against a
+// herself only, and she hides her own tile and shows it again.
+// A second, shorter test (F3)
+// covers the password, co-hosts and ending: the host sets a password; a newcomer tries a wrong
+// one and is asked again, then gets in with the right one; another comes through a link with
+// ?pwd= (filled in, gone from the address bar); the host makes the first a co-host, who mutes
+// the other; the host leaves choosing 結束會議（所有人）, and everyone sees the ended screen. Runs against a
 // deployed Worker (playwright.config.ts): in CI the pull request's preview (preview.yml, job
 // `e2e`).
 //
@@ -62,14 +67,18 @@ async function openRoom(browser: Browser): Promise<string> {
 }
 
 /**
- * A new browser (its own storage: a different member) that joins through the pre-join screen;
- * `waits`: the room has its waiting room on, so it ends up in the waiting room (F2)
+ * How a member joins: `waits`, the room has its waiting room on, so it ends up in the waiting
+ * room (F2); `passwords` (F3), typed one after the other on the pre-join screen, every one but
+ * the last refused as wrong; `link`, the address to open instead of the room's (?pwd=)
  */
+type JoinOptions = { waits?: boolean; passwords?: string[]; link?: string }
+
+/** A new browser (its own storage: a different member) that joins through the pre-join screen */
 async function join(
   browser: Browser,
   roomUrl: string,
   name: string,
-  waits = false,
+  { waits = false, passwords = [], link }: JoinOptions = {},
 ): Promise<Member> {
   const context = await browser.newContext({
     locale: 'zh-TW',
@@ -183,9 +192,17 @@ async function join(
         `${errors ? ` ${errors}` : ''}${body.requiresImmediateRenegotiation ? ' rir' : ''} ${tracks}`,
     )
   })
-  await page.goto(roomUrl)
+  await page.goto(link ?? roomUrl)
   await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill(name)
-  await page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
+  for (const [index, password] of passwords.entries()) {
+    await page.getByLabel(strings.prejoin.passwordLabel, { exact: true }).fill(password)
+    await page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
+    if (index === passwords.length - 1) break
+    await expect(page.getByText(strings.prejoin.passwordWrong)).toBeVisible()
+  }
+  if (passwords.length === 0) {
+    await page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
+  }
   if (waits) await expect(page.getByRole('heading', { name: strings.waiting.title })).toBeVisible()
   else await expect(page.getByRole('region', { name: strings.room.grid })).toBeVisible()
   return { name, context, page }
@@ -312,7 +329,7 @@ async function expectReceiving(viewer: Member, other: Member) {
 const interop = test.extend<{
   room: {
     url: string
-    join: (name: string, waits?: boolean) => Promise<Member>
+    join: (name: string, options?: JoinOptions) => Promise<Member>
     /** A browser context that is not a member (its own storage), closed by the caller */
     newContext: () => Promise<BrowserContext>
   }
@@ -323,8 +340,8 @@ const interop = test.extend<{
     const members: Member[] = []
     await provide({
       url,
-      join: async (name, waits) => {
-        const member = await join(browser, url, name, waits)
+      join: async (name, options) => {
+        const member = await join(browser, url, name, options)
         members.push(member)
         return member
       },
@@ -628,7 +645,7 @@ interop(
         await expect(
           panel.getByRole('switch', { name: strings.participants.waitingRoom }),
         ).toHaveAttribute('aria-checked', 'true')
-        const dave = await room.join('Dave', true)
+        const dave = await room.join('Dave', { waits: true })
         // The toast lasts a few seconds: checked first
         await expect(
           alice.page.getByText(strings.participants.waitingArrived('Dave')),
@@ -708,5 +725,78 @@ interop(
         await expect(tile(alice, bob), 'Alice sees Bob leave').toHaveCount(0)
       },
     )
+  },
+)
+
+interop(
+  'the host sets a password, names a co-host who mutes someone, and ends the meeting for all (F3)',
+  async ({ room }) => {
+    const password = 'tea4two'
+    const alice = await room.join('Alice')
+
+    await interop.step('Alice sets a password from the participants panel (e1-t15)', async () => {
+      await toolbarButton(alice, strings.toolbar.participantsCount(1)).click()
+      const panel = alice.page.getByRole('complementary', { name: strings.participants.title })
+      await panel.getByRole('button', { name: strings.password.setTitle }).click()
+      const dialog = alice.page.getByRole('dialog', { name: strings.password.setTitle })
+      await dialog.getByLabel(strings.password.label, { exact: true }).fill(password)
+      await dialog.getByRole('button', { name: strings.password.save }).click()
+      await expect(panel.getByText(strings.participants.passwordOn)).toBeVisible()
+    })
+
+    const bob = await interop.step(
+      'Bob tries a wrong password, is asked again, then gets in with the right one',
+      () => room.join('Bob', { passwords: ['nope99', password] }),
+    )
+
+    const carol = await interop.step(
+      'Carol comes through a link with ?pwd=: filled in, and gone from the address bar',
+      async () => {
+        const link = `${room.url}?pwd=${password}`
+        const carol = await room.join('Carol', { link, passwords: [] })
+        expect(carol.page.url()).not.toContain('pwd=')
+        return carol
+      },
+    )
+
+    await interop.step(
+      'Alice makes Bob a co-host; Bob is told and mutes Carol (e1-t16)',
+      async () => {
+        const panel = alice.page.getByRole('complementary', { name: strings.participants.title })
+        await panel.getByRole('button', { name: strings.participants.actions(bob.name) }).click()
+        await alice.page.getByRole('menuitem', { name: strings.participants.makeCohost }).click()
+        const aliceAsHost = strings.hostNotice.actor(strings.participants.host, 'Alice')
+        await expect(bob.page.getByText(strings.hostNotice.madeCohost(aliceAsHost))).toBeVisible()
+        await toolbarButton(bob, strings.toolbar.participantsCount(3)).click()
+        const bobPanel = bob.page.getByRole('complementary', { name: strings.participants.title })
+        // Carol's microphone is on once her browser published it
+        await expect(async () => {
+          await bobPanel
+            .getByRole('button', { name: strings.participants.actions(carol.name) })
+            .click()
+          await bob.page.getByRole('menuitem', { name: strings.participants.mute }).click({
+            timeout: 2_000,
+          })
+        }).toPass()
+        const bobAsCohost = strings.hostNotice.actor(strings.participants.cohost, 'Bob')
+        await expect(carol.page.getByText(strings.hostNotice.muted(bobAsCohost))).toBeVisible()
+        await expect(toolbarButton(carol, strings.toolbar.micOff)).toBeVisible()
+      },
+    )
+
+    await interop.step('Alice leaves choosing to end it for everyone (e1-t17)', async () => {
+      await toolbarButton(alice, strings.toolbar.leave).click()
+      const dialog = alice.page.getByRole('dialog', { name: strings.leave.title })
+      await dialog.getByRole('button', { name: strings.leave.endForAll }).click()
+      await expect(
+        alice.page.getByRole('heading', { name: strings.left.endedSelfTitle }),
+      ).toBeVisible()
+      for (const member of [bob, carol]) {
+        await expect(
+          member.page.getByRole('heading', { name: strings.left.endedTitle }),
+          `${member.name} sees the ended screen`,
+        ).toBeVisible()
+      }
+    })
   },
 )

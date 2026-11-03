@@ -79,6 +79,8 @@ export function scrubErrorText(text: string, max: number = MAX_ERROR_MESSAGE_CHA
   const scrubbed = text
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"]+/gi, '<url>')
     .replace(/[^\s@'"]+@[^\s@'"]+\.[a-z]{2,}/gi, '<email>')
+    // A room password from a link (F3), should one ever end up in an error's text
+    .replace(/\bpwd=[^\s&'"]*/gi, 'pwd=<password>')
     .replace(/\d{6,}/g, '<n>')
     .replace(/\/r\/[1-9A-HJ-NP-Za-km-z]{10}\b/g, '/r/<room>')
     .replace(/\p{Cc}/gu, ' ')
