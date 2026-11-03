@@ -41,7 +41,7 @@
 | 瀏覽器的安裝對話框（`beforeinstallprompt`） | `installPrompt` | ○ | ○ | ✕ | ✕ | ✕ | ○ | 首頁不顯示「安裝 LongTalk」；iOS／iPadOS Safari 改顯示「分享 › 加入主畫面」的一次性提示，其他瀏覽器什麼都不顯示（G4） |
 | 從分享選單加入主畫面（`navigator.standalone`，只有 iOS／iPadOS Safari） | `homeScreenHint` | ✕ | ✕ | ✕ | ✕ | ○ | ✕ | 不是 iOS Safari 就不顯示這個提示（G4） |
 | 電量（Battery Status API，`navigator.getBattery`） | `battery` | ○ | ○ | ✕ | ✕ | ✕ | ○ | 不提示「電量不多了，可以開省電模式」；省電模式本身在每個瀏覽器都能用（`e6-t05`） |
-| 本機錄影（`MediaRecorder` 能寫 `src/record/format.ts` 的一種格式、`canvas.captureStream`、`createMediaStreamDestination`、`indexedDB`） | `localRecording` | ● CI | ○ | ○ | ○ | ○ | ○ | 「更多 › 開始錄影」是灰的並說明「這個瀏覽器不能錄影…」（`e8-t03`）；別人錄影時照樣看得到紅燈與告知。格式：Chromium、Firefox 寫 WebM（VP9 或 VP8＋Opus），Safari 寫 MP4（H.264＋AAC；Safari 18.4 起也會寫 WebM，照偵測挑第一個）。CI：headless Chromium 實際錄影並下載（`e2e/local/recording.spec.ts`）；Firefox、WebKit 只比偵測。Safari、iOS 要實機確認下載與播放 |
+| 本機錄影（`MediaRecorder` 能寫 `src/record/format.ts` 的一種格式、`canvas.captureStream`、`createMediaStreamDestination`、`indexedDB`） | `localRecording` | ● CI | ○ | ○ | ○ | ○ | ○ | 「更多 › 開始錄影」是灰的並說明「這個瀏覽器不能錄影…」（`e8-t03`）；別人錄影時照樣看得到紅燈與告知。格式：Chromium、Firefox 寫 WebM（VP9 或 VP8＋Opus），Safari 寫 MP4（H.264＋AAC；Safari 18.4 起也會寫 WebM，照偵測挑第一個）。CI：headless Chromium 實際錄影並下載（`e2e/local/recording.spec.ts`）；Firefox 只比偵測；Playwright 的 Linux WebKit 偵測為否（它的 MediaRecorder 不寫這些格式，`ENGINE_DIFFERENCES` 不比這格）。Safari、iOS 要實機確認下載與播放 |
 
 **CI 每次跑什麼**（都不是必過的檢查，`DEPLOY.md` §7）：
 
