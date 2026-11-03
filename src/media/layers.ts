@@ -114,7 +114,9 @@ const lower = (kind: LayeredKind, layer: Layer): Layer | null => {
 
 /**
  * The layer for every received video: by size and visibility, then stepped down to fit the
- * budget (smallest tiles first, cameras before the screen), and an upgrade only with headroom
+ * budget one step at a time, and an upgrade only with headroom. Each step goes to the camera
+ * that loses least by it (small tiles before big ones; equal tiles share the cut), and to the
+ * screen only once no camera can go lower.
  */
 export function chooseLayers(inputs: readonly LayerInput[], budgetBps: number): Map<string, Layer> {
   const chosen = new Map<string, Layer>()
@@ -123,35 +125,51 @@ export function chooseLayers(inputs: readonly LayerInput[], budgetBps: number): 
     chosen.set(input.key, layerForSize(input.kind, input.demand, current))
   }
   const total = () => inputs.reduce((sum, i) => sum + bitrate(i.kind, chosen.get(i.key)!), 0)
-  const area = (i: LayerInput) =>
-    i.demand?.visible ? Math.max(0, i.demand.width) * Math.max(0, i.demand.height) : 0
-  // Who steps down first: cameras before the screen, then the smallest drawn, then by key
-  const byPriority = [...inputs].sort(
-    (a, b) =>
-      (a.kind === 'screen' ? 1 : 0) - (b.kind === 'screen' ? 1 : 0) ||
-      area(a) - area(b) ||
-      a.key.localeCompare(b.key),
-  )
-  const fit = (budget: number, among: readonly LayerInput[]) => {
-    while (total() > budget) {
-      // One step at a time, the one first in line that can still go down
-      const next = among.find((i) => lower(i.kind, chosen.get(i.key)!) !== null)
-      if (!next) return
-      chosen.set(next.key, lower(next.kind, chosen.get(next.key)!)!)
-    }
+  /** How much of what the tile shows a layer covers (1: all of it) */
+  const coverage = (i: LayerInput, layer: Layer) => {
+    const needed = i.demand?.visible ? shownShortSide(i.kind, i.demand) : 0
+    const side = ladder(i.kind).find((l) => l.layer === layer)?.shortSide ?? 0
+    return needed > 0 ? Math.min(1, side / needed) : 1
   }
-  fit(budgetBps, byPriority)
-  // Upgrades must leave headroom: take them back (smallest first) to no more than current
+  const area = (i: LayerInput) => (i.demand?.visible ? i.demand.width * i.demand.height : 0)
+  /**
+   * The next one to step down among `candidates`: the camera whose step loses the fewest drawn
+   * pixels' worth of detail (its area times the coverage it gives up), the screen only when no
+   * camera can go lower; null when none can
+   */
+  const nextDown = (candidates: readonly LayerInput[]): LayerInput | null => {
+    for (const kind of ['cam', 'screen'] as const) {
+      let best: { input: LayerInput; loss: number } | null = null
+      for (const input of candidates) {
+        if (input.kind !== kind) continue
+        const now = chosen.get(input.key)!
+        const step = lower(input.kind, now)
+        if (step === null) continue
+        const loss = area(input) * (coverage(input, now) - coverage(input, step))
+        if (!best || loss < best.loss || (loss === best.loss && input.key < best.input.key)) {
+          best = { input, loss }
+        }
+      }
+      if (best) return best.input
+    }
+    return null
+  }
+  const stepDown = (input: LayerInput) =>
+    chosen.set(input.key, lower(input.kind, chosen.get(input.key)!)!)
+  for (let next = nextDown(inputs); next && total() > budgetBps; next = nextDown(inputs)) {
+    stepDown(next)
+  }
+  // Upgrades must leave headroom: take them back, no lower than the layer asked for now
   const upgraded = () =>
-    byPriority.filter(
+    inputs.filter(
       (i) => i.current !== null && ORDER[chosen.get(i.key)!] > ORDER[clampLayer(i.kind, i.current)],
     )
-  while (total() > budgetBps * UPGRADE_HEADROOM) {
-    const next = upgraded()[0]
-    if (!next) break
-    const step = lower(next.kind, chosen.get(next.key)!)
-    if (step === null) break
-    chosen.set(next.key, step)
+  for (
+    let next = nextDown(upgraded());
+    next && total() > budgetBps * UPGRADE_HEADROOM;
+    next = nextDown(upgraded())
+  ) {
+    stepDown(next)
   }
   return chosen
 }

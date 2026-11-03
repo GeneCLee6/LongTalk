@@ -10,7 +10,9 @@ import { RoomMedia } from '../../../src/room/RoomMedia.ts'
 //   session waits for our answer to its offer, gets 406 (Realtime: "expecting a remote answer");
 // - a pushed track carries no packets until its sender has sent some; pulling it before that
 //   asks for a renegotiation and fails the track with empty_track_error;
-// - a pulled track goes on a mid the SFU picks, given in the result for that track.
+// - a pulled track goes on a mid the SFU picks, given in the result for that track;
+// - simulcast (H1): a pull may carry a layer preference, and tracks/update changes it for a mid
+//   the session really pulled (an unknown mid is a per-track error), a mutation like any other.
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -19,7 +21,13 @@ const LATENCY_MS = 3
 let firstPacketsMs = 30
 
 interface TracksBody {
-  tracks: { location?: string; mid?: string; sessionId?: string; trackName?: string }[]
+  tracks: {
+    location?: string
+    mid?: string
+    sessionId?: string
+    trackName?: string
+    simulcast?: { preferredRid?: string; priorityOrdering?: string; ridNotAvailable?: string }
+  }[]
 }
 
 interface MockTransceiver {
@@ -33,6 +41,8 @@ interface SfuSession {
   busy: boolean
   awaitingAnswer: boolean
   nextMid: number
+  /** Pulled tracks by mid, and the rid each one prefers */
+  pulled: Map<string, string | undefined>
 }
 
 class ScriptedSfu {
@@ -53,7 +63,12 @@ class ScriptedSfu {
     const match = /\/sessions(?:\/([^/]+)(\/.*)?)?$/.exec(url)!
     if (!match[1]) {
       const sessionId = `s${this.#nextSession++}`
-      this.sessions.set(sessionId, { busy: false, awaitingAnswer: false, nextMid: 0 })
+      this.sessions.set(sessionId, {
+        busy: false,
+        awaitingAnswer: false,
+        nextMid: 0,
+        pulled: new Map(),
+      })
       return Response.json({ sessionId }, { status: 201 })
     }
     const session = this.sessions.get(match[1])!
@@ -83,6 +98,17 @@ class ScriptedSfu {
     }
     if (route === 'PUT /tracks/close') {
       return Response.json({ sessionDescription: { type: 'answer', sdp: 'closed' }, tracks: [] })
+    }
+    if (route === 'PUT /tracks/update') {
+      const [update] = body.tracks
+      if (!update.mid || !session.pulled.has(update.mid)) {
+        this.log.push(`${sessionId} update ${update.mid} not_found`)
+        return Response.json({ tracks: [{ mid: update.mid, errorCode: 'track_not_found' }] })
+      }
+      const rid = update.simulcast?.preferredRid
+      session.pulled.set(update.mid, rid)
+      this.log.push(`${sessionId} update ${update.trackName} ${rid}`)
+      return Response.json({ requiresImmediateRenegotiation: false, tracks: [{ mid: update.mid }] })
     }
     const [track] = body.tracks
     if (track.location === 'local') {
@@ -125,7 +151,9 @@ class ScriptedSfu {
       })
     }
     const mid = `r${session.nextMid++}`
-    this.log.push(`${sessionId} pull ${track.trackName} ok`)
+    const rid = track.simulcast?.preferredRid
+    session.pulled.set(mid, rid)
+    this.log.push(`${sessionId} pull ${track.trackName} ok${rid ? ` ${rid}` : ''}`)
     return Response.json({
       requiresImmediateRenegotiation: true,
       sessionDescription: { type: 'offer', sdp: `pull-mid-${mid}` },
@@ -376,7 +404,12 @@ describe('CloudflareRealtimeTransport in a busy room', () => {
     const bob = transport(sfu)
     await bob.connect()
     // Pushed by a client that did not wait for its first packets
-    sfu.sessions.set('early', { busy: false, awaitingAnswer: false, nextMid: 0 })
+    sfu.sessions.set('early', {
+      busy: false,
+      awaitingAnswer: false,
+      nextMid: 0,
+      pulled: new Map(),
+    })
     const pushed = { sending: false }
     sfu.tracks.set('early/cam-1', pushed)
     const ref = { sessionId: 'early', trackName: 'cam-1' }
@@ -435,6 +468,44 @@ describe('CloudflareRealtimeTransport in a busy room', () => {
     await vi.advanceTimersByTimeAsync(5_000)
     await settled
     expect(bob.state).toBe('failed')
+  })
+})
+
+describe('CloudflareRealtimeTransport: simulcast layers in a busy room (H1)', () => {
+  it('asks for layers between pulls and pushes, one exchange at a time, no 406', async () => {
+    const sfu = new ScriptedSfu()
+    const alice = transport(sfu)
+    await alice.connect()
+    const cam = await alice.publish(video, { kind: 'cam', simulcast: true })
+    const screen = await alice.publish(video, { kind: 'screen', simulcast: true })
+    const mic = await alice.publish(audio, { kind: 'mic' })
+    const bob = transport(sfu)
+    await bob.connect()
+    await Promise.all([
+      bob.subscribe(cam, { layer: 'medium' }),
+      bob.setPreferredLayer(cam, 'high'),
+      bob.subscribe(mic),
+      bob.publish(video, { kind: 'cam', simulcast: true }),
+      bob.subscribe(screen, { layer: 'high' }),
+      bob.setPreferredLayer(cam, 'low'),
+      bob.setPreferredLayer(screen, 'medium'),
+    ])
+    expect(sfu.conflicts).toBe(0)
+    expect(sfu.log.filter((l) => l.startsWith('s2') && !l.endsWith('renegotiate'))).toEqual([
+      `s2 pull ${cam.trackName} ok h`,
+      `s2 update ${cam.trackName} f`,
+      `s2 pull ${mic.trackName} ok`,
+      expect.stringMatching(/^s2 push cam-/),
+      `s2 pull ${screen.trackName} ok f`,
+      `s2 update ${cam.trackName} q`,
+      `s2 update ${screen.trackName} h`,
+    ])
+    // The same layer again asks nothing; a track not subscribed is refused without a call
+    await bob.setPreferredLayer(cam, 'low')
+    await expect(
+      bob.setPreferredLayer({ sessionId: 's1', trackName: 'cam-gone' }, 'low'),
+    ).rejects.toMatchObject({ code: 'not_found' })
+    expect(sfu.log.filter((l) => l.includes(' update '))).toHaveLength(3)
   })
 })
 
