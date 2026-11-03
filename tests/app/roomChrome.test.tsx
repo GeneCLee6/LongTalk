@@ -67,7 +67,7 @@ describe('Toolbar', () => {
     canShareScreen: true,
     onToggleShare: vi.fn(),
     onToggleChat: vi.fn(),
-    onComingSoon: vi.fn(),
+    onToggleParticipants: vi.fn(),
     moreItems: [{ id: 'rename-self', label: strings.rename.self, onSelect: vi.fn() }],
     onLeave: vi.fn(),
     ...overrides,
@@ -88,14 +88,20 @@ describe('Toolbar', () => {
     ])
   })
 
-  it('shows participants as coming soon, and says so when pressed', () => {
+  it('opens the participants, with the member count as the badge (F1, e1-t08)', () => {
     const p = props()
-    render(<Toolbar {...p} />)
+    const { rerender } = render(<Toolbar {...p} />)
     const button = screen.getByRole('button', { name: '參與者（3 人）' })
-    expect(button).toHaveAttribute('aria-disabled', 'true')
+    expect(button).not.toHaveAttribute('aria-disabled')
+    expect(button).toHaveAttribute('aria-expanded', 'false')
+    expect(button).toHaveTextContent('3')
     fireEvent.click(button)
-    expect(p.onComingSoon).toHaveBeenCalledWith('參與者')
-    expect(strings.toolbar.comingSoon('參與者')).toBe('「參與者」即將推出')
+    expect(p.onToggleParticipants).toHaveBeenCalledTimes(1)
+    rerender(<Toolbar {...p} participantsOpen />)
+    expect(screen.getByRole('button', { name: '參與者（3 人）' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
   })
 
   it('opens the chat, with the unread count as the badge and in its name (D3, e5-t02)', () => {
@@ -106,7 +112,6 @@ describe('Toolbar', () => {
     expect(chat).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(chat)
     expect(p.onToggleChat).toHaveBeenCalledTimes(1)
-    expect(p.onComingSoon).not.toHaveBeenCalled()
     rerender(<Toolbar {...p} chatUnread={3} />)
     const unread = screen.getByRole('button', { name: '聊天（3 則未讀）' })
     expect(unread).toHaveTextContent('3')
@@ -124,7 +129,6 @@ describe('Toolbar', () => {
     rerender(<Toolbar {...p} sharing />)
     fireEvent.click(screen.getByRole('button', { name: '停止分享' }))
     expect(p.onToggleShare).toHaveBeenCalledTimes(2)
-    expect(p.onComingSoon).not.toHaveBeenCalled()
   })
 
   it('hides screen sharing where the browser cannot (phones)', () => {

@@ -1,11 +1,13 @@
 import { CHAT_CHUNK, CHAT_HISTORY, ChatRateLimit, type ChatMessage } from '../shared/chat.ts'
 import { diff } from '../shared/patch.ts'
 import {
+  BAN_MS,
   CloseCode,
   EMPTY_ROOM_TTL_MS,
   HEARTBEAT_PING,
   HOST_HANDOFF_MS,
   JOIN_TIMEOUT_MS,
+  MAX_BANS,
   MAX_MEMBERS,
   MAX_PENDING_SOCKETS,
   PROTOCOL_VERSION,
@@ -14,8 +16,10 @@ import {
   SWEEP_INTERVAL_MS,
   parseClientMessage,
   viewAsJson,
+  type HostMessage,
   type Member,
   type MemberTrack,
+  type NoticeMessage,
   type RoomInfo,
   type RoomInit,
   type RoomSummary,
@@ -31,6 +35,7 @@ import {
   RELAY_OVERHEAD,
   type UsageState,
 } from '../shared/usage.ts'
+import { authorize, type Action } from './roles.ts'
 import { Scheduler, type Schedule } from './scheduler.ts'
 
 /**
@@ -63,7 +68,15 @@ export type SessionRecord = {
   awaySince: number | null
   /** The SFU session the member created through the proxy last (absent in rooms stored by v2) */
   sfu?: string | null
+  /** The browser's own id from `join` (F1; absent in rooms stored before v9): what a ban is on */
+  client?: string | null
 }
+
+/**
+ * A removed member's browser (F1, AC-1.4): `client` is the id its `join` carried. Kept until
+ * `until` (BAN_MS after the removal) in the room's storage, so it outlasts an eviction.
+ */
+export type Ban = { client: string; until: number }
 
 /**
  * What the SFU proxy may do for a session token (worker/sfu.ts): the member's id and the kind of
@@ -106,6 +119,8 @@ export interface RoomStorage {
   saveChat(message: ChatMessage): void
   /** A chat message that fell out of the last CHAT_HISTORY */
   dropChat(id: number): void
+  /** The banned browsers (F1), saved whenever the list changes */
+  saveBans(bans: Ban[]): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -145,6 +160,8 @@ type Session = {
   conn: string | null
   awaySince: number | null
   sfu: string | null
+  /** The browser's own id from its last `join`, null when it sent none */
+  client: string | null
 }
 
 /** The last `stats` a member sent on its current SFU session */
@@ -188,6 +205,8 @@ export class RoomHost {
   private chatId = 0
   /** CHAT_RATE per member; in memory only (an eviction forgets it) */
   private readonly chatRate = new ChatRateLimit()
+  /** Removed browsers and until when (F1), by client id */
+  private readonly bans = new Map<string, number>()
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -207,6 +226,7 @@ export class RoomHost {
     usage: UsageCursor | null = null,
     schedule: Schedule | null = null,
     chat: readonly ChatMessage[] = [],
+    bans: readonly Ban[] = [],
   ): void {
     // Rooms stored before v6 have no name, creator or start time
     this.info = info ? { name: null, createdBy: null, startedAt: null, share: null, ...info } : null
@@ -220,6 +240,8 @@ export class RoomHost {
     this.baselines.clear()
     this.relayed.clear()
     this.chatRate.clear()
+    this.bans.clear()
+    for (const ban of bans) this.bans.set(ban.client, ban.until)
     this.chat = [...chat].sort((a, b) => a.id - b.id).slice(-CHAT_HISTORY)
     this.chatId = this.chat.at(-1)?.id ?? 0
     this.reported = 0
@@ -241,6 +263,7 @@ export class RoomHost {
         conn: record.conn,
         awaySince: record.awaySince,
         sfu: record.sfu ?? null,
+        client: record.client ?? null,
       })
       this.byToken.set(record.token, record.member.id)
     }
@@ -312,6 +335,8 @@ export class RoomHost {
       } else if (job === 'handoff') {
         // publish hands the role over (assignHost) and sends the change
         this.publish()
+      } else if (job === 'bans') {
+        this.pruneBans()
       } else if (job === 'close' && this.info && !this.active) {
         this.close()
         result.closed = true
@@ -375,7 +400,7 @@ export class RoomHost {
     }
     switch (message.t) {
       case 'join':
-        this.join(connId, message.name, message.token)
+        this.join(connId, message.name, message.token, message.client)
         return
       case 'resync':
         this.deps.sockets.send(connId, {
@@ -412,7 +437,150 @@ export class RoomHost {
       case 'chat':
         this.addChat(connId, conn.member!, message.text)
         return
+      case 'host':
+        this.control(connId, conn.member!, message)
+        return
     }
+  }
+
+  /** Whether `memberId` may do `action` (to `targetId`), by worker/roles.ts */
+  private allowed(memberId: string, action: Action, targetId: string | null = null): boolean {
+    const actor = this.members.get(memberId)
+    if (!actor) return false
+    const target = targetId === null ? null : (this.members.get(targetId) ?? null)
+    return authorize(memberId, actor.role, action, target)
+  }
+
+  /**
+   * `host` (F1, e1-t07): a host control, allowed or not by worker/roles.ts (CLAUDE.md rule 1);
+   * refused with `forbidden`. A target that already left is refused the same way (the panel
+   * that showed it is out of date).
+   */
+  private control(connId: string, memberId: string, message: HostMessage): void {
+    const targetId = 'memberId' in message ? message.memberId : null
+    if (!this.allowed(memberId, message.action, targetId)) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    switch (message.action) {
+      case 'muteMember':
+        if (this.muteTrack(message.memberId, 'mic')) {
+          this.notify(message.memberId, { t: 'notice', notice: 'muted', by: memberId })
+        }
+        this.publish()
+        return
+      case 'camOff':
+        if (this.muteTrack(message.memberId, 'cam')) {
+          this.notify(message.memberId, { t: 'notice', notice: 'camOff', by: memberId })
+        }
+        this.publish()
+        return
+      case 'stopShare':
+        if (this.stopShare(memberId, message.memberId)) {
+          this.notify(message.memberId, { t: 'notice', notice: 'shareStopped', by: memberId })
+        }
+        return
+      case 'remove':
+        this.removeMember(message.memberId)
+        return
+      case 'muteAll':
+        // Everyone the actor may mute: everyone ranked below (a host also mutes co-hosts)
+        for (const id of [...this.members.keys()]) {
+          if (!this.allowed(memberId, 'muteMember', id) || !this.muteTrack(id, 'mic')) continue
+          this.notify(id, { t: 'notice', notice: 'muted', by: memberId, all: true })
+        }
+        this.publish()
+        return
+      case 'endMeeting':
+        this.endMeeting()
+        return
+    }
+  }
+
+  /**
+   * Marks the member's microphone or camera muted, as its browser will once the notice arrives
+   * (the room does not wait: everyone sees it at once). False when there is no such track or it
+   * is muted already: nothing to tell the member.
+   */
+  private muteTrack(memberId: string, kind: 'mic' | 'cam'): boolean {
+    const member = this.members.get(memberId)
+    const track = member?.tracks.find((t) => t.kind === kind)
+    if (!member || !track || track.muted) return false
+    this.setMember(memberId, {
+      tracks: member.tracks.map((t) => (t === track ? { ...t, muted: true } : t)),
+    })
+    return true
+  }
+
+  /** Sends a notice to the member, if it is connected (a reconnecting member misses it) */
+  private notify(memberId: string, notice: NoticeMessage): void {
+    const conn = this.sessions.get(memberId)?.conn
+    if (conn) this.deps.sockets.send(conn, notice)
+  }
+
+  /**
+   * `remove` (AC-1.4): the member is gone at once (its share with it), its socket is closed with
+   * CloseCode.removed, and its browser is banned for BAN_MS. A browser that sent no client id
+   * cannot be banned: only its session ends (its token is forgotten, so it joins as someone new).
+   */
+  private removeMember(memberId: string): void {
+    const session = this.sessions.get(memberId)
+    if (!session) return
+    if (session.client !== null) this.ban(session.client)
+    if (session.conn !== null) {
+      this.conns.delete(session.conn)
+      this.deps.sockets.close(session.conn, CloseCode.removed, 'removed')
+    }
+    this.remove(memberId)
+    this.publish()
+  }
+
+  private ban(client: string): void {
+    this.bans.delete(client)
+    this.bans.set(client, this.deps.now() + BAN_MS)
+    // The oldest ban goes first (a Map keeps insertion order)
+    while (this.bans.size > MAX_BANS) this.bans.delete(this.bans.keys().next().value!)
+    this.saveBans()
+  }
+
+  /** Whether the browser is banned now */
+  private banned(client: string | null): boolean {
+    if (client === null) return false
+    const until = this.bans.get(client)
+    return until !== undefined && until > this.deps.now()
+  }
+
+  /** Drops the bans that ran out (the `bans` job, e1-t04's scheduler) */
+  private pruneBans(): void {
+    const now = this.deps.now()
+    let changed = false
+    for (const [client, until] of this.bans) {
+      if (until > now) continue
+      this.bans.delete(client)
+      changed = true
+    }
+    if (changed) this.saveBans()
+  }
+
+  private saveBans(): void {
+    this.deps.storage.saveBans([...this.bans].map(([client, until]) => ({ client, until })))
+  }
+
+  /** The banned browsers now (for tests and the adapter) */
+  get banList(): Ban[] {
+    return [...this.bans].map(([client, until]) => ({ client, until }))
+  }
+
+  /**
+   * `endMeeting` (AC-1.4): every socket is closed with CloseCode.ended and the room closes at
+   * once, like an empty room after EMPTY_ROOM_TTL_MS (everything stored is gone, the id is 404).
+   */
+  private endMeeting(): void {
+    for (const id of [...this.conns.keys()]) {
+      this.deps.sockets.close(id, CloseCode.ended, 'ended')
+    }
+    this.conns.clear()
+    this.close()
   }
 
   /**
@@ -422,6 +590,10 @@ export class RoomHost {
    * CHAT_HISTORY; older ones leave storage.
    */
   private addChat(connId: string, memberId: string, text: string): void {
+    if (!this.allowed(memberId, 'chat')) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
     const now = this.deps.now()
     if (!this.chatRate.take(memberId, now)) {
       this.deps.sockets.send(connId, { t: 'error', code: 'rate_limited' })
@@ -470,6 +642,10 @@ export class RoomHost {
   private startShare(connId: string, memberId: string, takeOver: boolean): void {
     const current = this.info!.share
     if (current?.memberId === memberId) return
+    if (!this.allowed(memberId, 'shareScreen')) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
     if (this.usage === 'audioOnly') {
       this.deps.sockets.send(connId, { t: 'error', code: 'audio_only' })
       return
@@ -485,15 +661,14 @@ export class RoomHost {
   }
 
   /**
-   * Stops `memberId`'s share on someone else's behalf: the host's control over any share (E1
-   * AC-1.4). The entry point for F1, which puts it on the wire (a host message, permissions in
-   * worker/roles.ts, e1-t06); until then nothing sends it. False when `by` may not (not the host,
-   * nor the sharer) or `memberId` does not share.
+   * Stops `memberId`'s share on someone else's behalf (E1 AC-1.4): the `host` message's
+   * `stopShare` (F1). False when `by` may not (worker/roles.ts `stopShare`, unless it is the
+   * sharer itself) or `memberId` does not share.
    */
   stopShare(by: string, memberId: string): boolean {
     const share = this.info?.share
     if (!share || share.memberId !== memberId) return false
-    if (by !== memberId && this.members.get(by)?.role !== 'host') return false
+    if (by !== memberId && !this.allowed(by, 'stopShare', memberId)) return false
     this.endShare()
     return true
   }
@@ -516,12 +691,9 @@ export class RoomHost {
     if (tracks.length !== member.tracks.length) this.setMember(memberId, { tracks })
   }
 
-  /**
-   * `renameRoom`. Who may: the host only. The permission table is worker/roles.ts from e1-t06
-   * (F1); until then this is the one check, here on the server (CLAUDE.md rule 1).
-   */
+  /** `renameRoom`: who may is worker/roles.ts' `renameRoom` (the host, and co-hosts) */
   private renameRoom(connId: string, memberId: string, name: string): void {
-    if (this.members.get(memberId)?.role !== 'host') {
+    if (!this.allowed(memberId, 'renameRoom')) {
       this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
       return
     }
@@ -539,6 +711,8 @@ export class RoomHost {
   sfuAccess(token: string, sessionId: string | null, pulls: readonly SfuTrackRef[]): SfuAccess {
     const memberId = this.info ? this.byToken.get(token) : undefined
     if (memberId === undefined) return { ok: false, reason: 'unauthorized' }
+    // In the room, not (from e1-t10) in the waiting room: worker/roles.ts `media`
+    if (!this.allowed(memberId, 'media')) return { ok: false, reason: 'forbidden' }
     if (sessionId !== null && this.sessions.get(memberId)!.sfu !== sessionId) {
       return { ok: false, reason: 'forbidden' }
     }
@@ -714,9 +888,16 @@ export class RoomHost {
 
   /**
    * `join` on a connection: a token the room knows brings back its member (taking it over from
-   * another connection still holding it), anything else makes a new member if there is room.
+   * another connection still holding it), anything else makes a new member if there is room. A
+   * banned browser (F1) is closed with CloseCode.removed.
    */
-  private join(connId: string, name: string, token: string | null): void {
+  private join(connId: string, name: string, token: string | null, client: string | null): void {
+    if (this.banned(client)) {
+      this.conns.delete(connId)
+      this.deps.sockets.close(connId, CloseCode.removed, 'removed')
+      this.reschedule()
+      return
+    }
     const known = token === null ? undefined : this.byToken.get(token)
     let memberId: string
     if (known !== undefined) {
@@ -728,6 +909,7 @@ export class RoomHost {
       }
       session.conn = connId
       session.awaySince = null
+      session.client = client ?? session.client
       this.setMember(memberId, { name, reconnecting: false })
     } else {
       if (this.members.size >= MAX_MEMBERS) {
@@ -753,7 +935,13 @@ export class RoomHost {
         tracks: [],
       }
       this.members.set(memberId, member)
-      this.sessions.set(memberId, { token: newToken, conn: connId, awaySince: null, sfu: null })
+      this.sessions.set(memberId, {
+        token: newToken,
+        conn: connId,
+        awaySince: null,
+        sfu: null,
+        client,
+      })
       this.byToken.set(newToken, memberId)
     }
     this.conns.get(connId)!.member = memberId
@@ -805,6 +993,7 @@ export class RoomHost {
       conn: session.conn,
       awaySince: session.awaySince,
       sfu: session.sfu,
+      client: session.client,
     }))
   }
 
@@ -860,6 +1049,11 @@ export class RoomHost {
     const someoneConnected = [...this.members.values()].some((member) => !member.reconnecting)
     if (away !== null && someoneConnected) this.schedule.set('handoff', away + HOST_HANDOFF_MS)
     else this.schedule.clear('handoff')
+    // The next ban to run out (F1); none left, no job
+    let banEnds: number | null = null
+    for (const until of this.bans.values()) if (banEnds === null || until < banEnds) banEnds = until
+    if (banEnds === null) this.schedule.clear('bans')
+    else this.schedule.set('bans', banEnds)
     const stored = JSON.stringify(this.schedule)
     if (stored !== this.storedSchedule) {
       this.storedSchedule = stored
@@ -867,7 +1061,10 @@ export class RoomHost {
     }
   }
 
-  /** Nobody came back for EMPTY_ROOM_TTL_MS: the room and everything stored are gone */
+  /**
+   * The room is gone with everything stored: nobody came back for EMPTY_ROOM_TTL_MS, or the host
+   * ended the meeting
+   */
   private close(): void {
     this.info = null
     this.rev = 0
@@ -880,6 +1077,7 @@ export class RoomHost {
     this.chat = []
     this.chatId = 0
     this.chatRate.clear()
+    this.bans.clear()
     this.schedule.clearAll()
     this.storedSchedule = '{}'
     this.deps.storage.clear()

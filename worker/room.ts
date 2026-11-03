@@ -12,6 +12,7 @@ import {
 import type { Env } from './app.ts'
 import {
   RoomHost,
+  type Ban,
   type OpenSocket,
   type SessionRecord,
   type SfuAccess,
@@ -29,6 +30,8 @@ const REV_KEY = 'rev'
 const SESSIONS_KEY = 'sessions'
 const USAGE_KEY = 'usage'
 const SCHEDULE_KEY = 'schedule'
+/** Removed browsers and until when (F1) */
+const BANS_KEY = 'bans'
 /** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
 const CHAT_PREFIX = 'chat:'
 const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
@@ -45,8 +48,8 @@ const USAGE_REFRESH_MS = 60_000
  * sweep reads when each socket last pinged.
  *
  * One alarm for every timed job (e1-t04): RoomHost keeps the jobs (sweep, empty-room close, host
- * handoff; worker/scheduler.ts) and after anything that may change them the object moves its
- * alarm to `host.nextAlarm()` (`syncAlarm`).
+ * handoff, ban expiry; worker/scheduler.ts) and after anything that may change them the object
+ * moves its alarm to `host.nextAlarm()` (`syncAlarm`).
  */
 export class RoomDO extends DurableObject<Env> {
   private readonly host: RoomHost
@@ -81,6 +84,7 @@ export class RoomDO extends DurableObject<Env> {
         saveSchedule: (schedule) => void storage.put(SCHEDULE_KEY, schedule),
         saveChat: (message) => void storage.put(chatKey(message.id), message),
         dropChat: (id) => void storage.delete(chatKey(id)),
+        saveBans: (bans) => void storage.put(BANS_KEY, bans),
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -89,7 +93,7 @@ export class RoomDO extends DurableObject<Env> {
     })
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG))
     void ctx.blockConcurrencyWhile(async () => {
-      const [info, rev, sessions, usage, schedule, alarm, chat] = await Promise.all([
+      const [info, rev, sessions, usage, schedule, alarm, chat, bans] = await Promise.all([
         storage.get<RoomInfo>(ROOM_KEY),
         storage.get<number>(REV_KEY),
         storage.get<SessionRecord[]>(SESSIONS_KEY),
@@ -97,6 +101,7 @@ export class RoomDO extends DurableObject<Env> {
         storage.get<Schedule>(SCHEDULE_KEY),
         storage.getAlarm(),
         storage.list<ChatMessage>({ prefix: CHAT_PREFIX }),
+        storage.get<Ban[]>(BANS_KEY),
       ])
       const sockets = ctx
         .getWebSockets()
@@ -111,6 +116,7 @@ export class RoomDO extends DurableObject<Env> {
         usage ?? null,
         schedule ?? null,
         [...chat.values()],
+        bans ?? [],
       )
       // A room stored before C2 has no schedule: restore made one
       await this.syncAlarm()

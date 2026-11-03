@@ -3,6 +3,7 @@ import {
   MAX_CLIENT_MESSAGE_CHARS,
   MAX_NAME_CHARS,
   PROTOCOL_VERSION,
+  isClientId,
   isSessionToken,
   newSessionToken,
   normalizeName,
@@ -13,9 +14,23 @@ import {
 } from '../../shared/protocol.ts'
 
 const state = {
-  room: { id: 'abcdefghij', createdAt: 1, name: null, createdBy: null, startedAt: null, share: null },
+  room: {
+    id: 'abcdefghij',
+    createdAt: 1,
+    name: null,
+    createdBy: null,
+    startedAt: null,
+    share: null,
+  },
   members: {
-    m1: { id: 'm1', name: 'Gene', role: 'host' as const, joinedAt: 2, reconnecting: false, tracks: [] },
+    m1: {
+      id: 'm1',
+      name: 'Gene',
+      role: 'host' as const,
+      joinedAt: 2,
+      reconnecting: false,
+      tracks: [],
+    },
   },
   usage: 'normal' as const,
 }
@@ -27,7 +42,10 @@ describe('protocol', () => {
   })
 
   it('parses renames: a display name up to 40 characters, a room name up to 60 (C2)', () => {
-    expect(parseClientMessage('{"t":"rename","name":" 阿明 "}')).toEqual({ t: 'rename', name: '阿明' })
+    expect(parseClientMessage('{"t":"rename","name":" 阿明 "}')).toEqual({
+      t: 'rename',
+      name: '阿明',
+    })
     expect(parseClientMessage(JSON.stringify({ t: 'rename', name: 'x'.repeat(41) }))).toBeNull()
     expect(parseClientMessage(JSON.stringify({ t: 'renameRoom', name: 'x'.repeat(60) }))).toEqual({
       t: 'renameRoom',
@@ -59,6 +77,7 @@ describe('protocol', () => {
       t: 'join',
       name: 'Gene',
       token: TOKEN,
+      client: null,
     })
   })
 
@@ -68,6 +87,7 @@ describe('protocol', () => {
         t: 'join',
         name: 'Gene',
         token: null,
+        client: null,
       })
     }
     expect(parseClientMessage('{"t":"join","name":"   ","token":null}')).toBeNull()
@@ -173,5 +193,55 @@ describe('protocol', () => {
     ]
     for (const message of bad) expect(parseServerMessage(JSON.stringify(message))).toBeNull()
     expect(parseServerMessage('pong')).toBeNull()
+  })
+
+  it('parses the host controls (F1): one member or the whole room', () => {
+    expect(parseClientMessage('{"t":"host","action":"muteMember","memberId":"m-1"}')).toEqual({
+      t: 'host',
+      action: 'muteMember',
+      memberId: 'm-1',
+    })
+    for (const action of ['camOff', 'stopShare', 'remove']) {
+      expect(parseClientMessage(JSON.stringify({ t: 'host', action, memberId: 'x' }))).toEqual({
+        t: 'host',
+        action,
+        memberId: 'x',
+      })
+    }
+    // A room action drops a stray member id
+    expect(parseClientMessage('{"t":"host","action":"muteAll","memberId":"x"}')).toEqual({
+      t: 'host',
+      action: 'muteAll',
+    })
+    expect(parseClientMessage('{"t":"host","action":"endMeeting"}')).toEqual({
+      t: 'host',
+      action: 'endMeeting',
+    })
+    for (const bad of [
+      '{"t":"host","action":"muteMember"}',
+      '{"t":"host","action":"remove","memberId":""}',
+      '{"t":"host","action":"remove","memberId":"a b"}',
+      '{"t":"host","action":"unmute","memberId":"x"}',
+      '{"t":"host"}',
+    ]) {
+      expect(parseClientMessage(bad), bad).toBeNull()
+    }
+  })
+
+  it("carries the browser's own id in join, when it looks like one (F1)", () => {
+    const client = 'browser-id-0123456789'
+    expect(isClientId(client)).toBe(true)
+    for (const bad of ['short', 'x'.repeat(65), 'has space in it here', 42, null]) {
+      expect(isClientId(bad)).toBe(false)
+    }
+    expect(
+      parseClientMessage(JSON.stringify({ t: 'join', name: 'Gene', token: null, client })),
+    ).toEqual({ t: 'join', name: 'Gene', token: null, client })
+  })
+
+  it('parses a notice (F1)', () => {
+    const notice = { t: 'notice', notice: 'muted', by: 'm1', all: true }
+    expect(parseServerMessage(JSON.stringify(notice))).toEqual(notice)
+    expect(parseServerMessage('{"t":"notice","notice":"muted"}')).toBeNull()
   })
 })

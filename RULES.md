@@ -9,7 +9,7 @@
 | `shared/` | 前後端共用的型別與純函式（通訊協定、id、版面計算） | React、DOM、Cloudflare API |
 | `worker/app.ts` | HTTP 路由：`/api/*`，其餘交給靜態資產 | 房間狀態（屬於 RoomDO） |
 | `worker/room.ts` | `RoomDO`：每房一個，房間狀態與權限的唯一真相 | 前端邏輯 |
-| `worker/roles.ts`（F1） | 誰能做什麼的權限表 | — |
+| `worker/roles.ts`（F1） | 誰能做什麼：伺服器的判斷（`authorize`）；表本身在 `shared/roles.ts`，前端只拿來決定顯示哪些按鈕 | 在其他地方判斷權限 |
 | `worker/index.ts` | Worker 入口：匯出 handler 與 DO class | 其他邏輯 |
 | `src/media/` | `MediaTransport` 介面與實作（A2 起） | 元件直接碰 `RTCPeerConnection` 或 SFU API |
 | `src/pages/` | 組合：取狀態、接路由 | 樣式細節以外的規則判斷 |

@@ -147,8 +147,56 @@ export const strings = {
     chatUnread: (count: number) => (count > 0 ? `聊天（${count} 則未讀）` : '聊天'),
     more: '更多',
     leave: '離開',
-    // Buttons whose feature lands in a later batch (F1)
+    // Buttons whose feature lands in a later batch (reactions, E5)
     comingSoon: (feature: string) => `「${feature}」即將推出`,
+  },
+  // The participants panel and the host controls (F1: e1-t07, e1-t08)
+  participants: {
+    title: '參與者',
+    close: '關閉參與者',
+    // The side panel's switch between chat and participants (DESIGN.md mockup)
+    tabs: '側欄內容',
+    tabParticipants: (count: number) => `參與者 ${count}`,
+    list: '參與者名單',
+    host: '主持人',
+    cohost: '共同主持人',
+    you: '你',
+    reconnecting: '重新連線中',
+    sharing: '正在分享畫面',
+    micOn: '麥克風開著',
+    micOff: '麥克風已關',
+    camOn: '鏡頭開著',
+    camOff: '鏡頭沒開',
+    // The per-person menu (only what the viewer's role may do; RoomDO checks again)
+    actions: (name: string) => `對 ${name} 的動作`,
+    mute: '靜音',
+    camOffAction: '關閉鏡頭',
+    stopShare: '停止分享',
+    remove: '移出會議室',
+    muteAll: '全員靜音',
+    muteAllHint: '每個人都可以自己再打開麥克風',
+    endMeeting: '結束會議',
+    // Confirmations
+    removeTitle: (name: string) => `把 ${name} 移出會議室？`,
+    removeBody: (name: string) =>
+      `${name} 會立即離開，而且 10 分鐘內不能用同一個瀏覽器再加入這間會議室。`,
+    removeConfirm: '移出',
+    endTitle: '結束會議？',
+    endBody: '每個人都會離開，會議室也會立即關閉，聊天訊息一併刪除。',
+    endConfirm: '結束會議',
+    // What the actor sees after acting
+    mutedAll: '已將所有人靜音',
+    removed: (name: string) => `已將 ${name} 移出會議室`,
+    forbidden: '你沒有權限做這件事。',
+  },
+  // What the person acted on sees (F1, AC-1.4): a toast that says who did what
+  hostNotice: {
+    // 「主持人 Gene」: who did it, with their role (participants.host / cohost)
+    actor: (role: string, name: string) => `${role} ${name}`,
+    muted: (actor: string) => `${actor} 將你靜音了。要說話時，請自己打開麥克風。`,
+    mutedAll: (actor: string) => `${actor} 將所有人靜音了。要說話時，請自己打開麥克風。`,
+    camOff: (actor: string) => `${actor} 關閉了你的鏡頭。要開鏡頭時，請自己再打開。`,
+    shareStopped: (actor: string) => `${actor} 停止了你的分享畫面。`,
   },
   // Screen sharing (D1: e3-t01 – e3-t03, e3-t05)
   screenShare: {
@@ -276,6 +324,13 @@ export const strings = {
     body: (room: string) => `你離開了「${room}」。`,
     closedTitle: '這間會議室已經關閉',
     closedBody: '房間沒有人超過 10 分鐘就會自動關閉。要繼續聊，回首頁開一間新的房。',
+    // The host ended the meeting (F1)
+    endedTitle: '主持人已結束會議',
+    endedBody: (room: string) => `「${room}」已經結束，會議室也關閉了。`,
+    // The host removed us, or this browser is still banned (F1)
+    removedTitle: '你已被移出會議室',
+    removedBody: (room: string) =>
+      `主持人把你移出了「${room}」。10 分鐘內不能用這個瀏覽器再加入這間會議室。`,
     question: '這次通話的品質如何？',
     scores: { 1: '很差', 2: '不太好', 3: '普通', 4: '不錯', 5: '很好' },
     scoreLabel: (score: number, label: string) => `${score} 分：${label}`,
@@ -323,7 +378,6 @@ export const strings = {
     region: '通知',
     joined: (name: string) => `${name} 加入了`,
     left: (name: string) => `${name} 離開了`,
-    mutedByHost: '你被主持人靜音',
   },
   errors: {
     sfuNotConfigured: '媒體伺服器尚未設定（缺少 Realtime 的 App ID 或 App Secret）。',

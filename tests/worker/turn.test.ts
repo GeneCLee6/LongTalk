@@ -40,6 +40,7 @@ function setup(answer: unknown = CLOUDFLARE_ANSWER, status = 201) {
       saveSchedule() {},
       saveChat() {},
       dropChat() {},
+      saveBans() {},
       clear() {},
     },
     now: () => 1000,

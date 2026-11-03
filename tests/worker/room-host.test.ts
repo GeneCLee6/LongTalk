@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { CHAT_CHUNK, CHAT_HISTORY, CHAT_RATE, type ChatMessage } from '../../shared/chat.ts'
 import { applyPatch } from '../../shared/patch.ts'
 import {
+  BAN_MS,
   CloseCode,
   EMPTY_ROOM_TTL_MS,
   HOST_HANDOFF_MS,
@@ -21,6 +22,7 @@ import { ASSUMED_BITRATE, MAX_REPORTED_BITRATE, RELAY_OVERHEAD } from '../../sha
 import {
   MAX_USAGE_GAP_MS,
   RoomHost,
+  type Ban,
   type SessionRecord,
   type UsageCursor,
 } from '../../worker/room-host.ts'
@@ -63,6 +65,7 @@ function setup(prefix = 'm') {
     usage: null as UsageCursor | null,
     schedule: {} as Schedule,
     chat: new Map<number, ChatMessage>(),
+    bans: [] as Ban[],
     cleared: 0,
   }
   const host = new RoomHost({
@@ -94,6 +97,9 @@ function setup(prefix = 'm') {
       },
       dropChat: (id) => {
         saved.chat.delete(id)
+      },
+      saveBans: (bans) => {
+        saved.bans = structuredClone(bans)
       },
       clear: () => {
         saved.cleared++
@@ -394,6 +400,7 @@ describe('RoomHost', () => {
         conn: a.conn,
         awaySince: null,
         sfu: null,
+        client: null,
       },
     ])
     t.tick(10)
@@ -405,6 +412,7 @@ describe('RoomHost', () => {
         conn: null,
         awaySince: t.now(),
         sfu: null,
+        client: null,
       },
     ])
   })
@@ -1275,5 +1283,233 @@ describe('RoomHost chat (e5-t01): history, rate limit, storage', () => {
     expect(t.host.exists).toBe(false)
     expect(t.host.chatHistory).toEqual([])
     expect(t.saved.cleared).toBe(1)
+  })
+})
+
+describe('RoomHost host controls (F1, e1-t07)', () => {
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    t = setup()
+    t.host.create(ROOM)
+  })
+
+  /** Joins with this browser's own id (what a ban is on) */
+  function joinAs(name: string, client: string | null) {
+    const socket = t.open()
+    t.host.message(socket.conn, JSON.stringify({ t: 'join', name, token: null, client }))
+    const welcome = socket.client.received.find((message) => message.t === 'welcome')
+    const id = welcome?.t === 'welcome' ? welcome.you : ''
+    const token = welcome?.t === 'welcome' ? welcome.token : ''
+    return { ...socket, id, token }
+  }
+  function publish(who: { conn: string; token: string }, session: string, kinds: string[]) {
+    t.host.bindSfu(who.token, session)
+    t.host.message(
+      who.conn,
+      JSON.stringify({
+        t: 'tracks',
+        sessionId: session,
+        tracks: kinds.map((kind) => ({ trackName: `${kind}-1`, kind, muted: false })),
+      }),
+    )
+  }
+  /** Gene (the host), 小潔 and 阿明, each publishing an unmuted microphone and camera */
+  function three() {
+    const a = joinAs('Gene', 'browser-gene-000000')
+    const b = joinAs('小潔', 'browser-xiaojie-0000')
+    const c = joinAs('阿明', 'browser-aming-000000')
+    publish(a, 'sa', ['mic', 'cam'])
+    publish(b, 'sb', ['mic', 'cam'])
+    publish(c, 'sc', ['mic', 'cam'])
+    return { a, b, c }
+  }
+  const host = (conn: string, action: string, memberId?: string) =>
+    t.host.message(conn, JSON.stringify({ t: 'host', action, memberId }))
+  const muted = (view: RoomView | null, id: string, kind: string) =>
+    view!.members[id].tracks.find((track) => track.kind === kind)?.muted
+  const notices = (client: FakeClient) => client.received.filter((m) => m.t === 'notice')
+  const forbidden = { t: 'error', code: 'forbidden' }
+
+  it('mutes one member: everyone sees it at once, the member is told who did it', () => {
+    const { a, b, c } = three()
+    host(a.conn, 'muteMember', b.id)
+    expect(muted(c.client.view, b.id, 'mic')).toBe(true)
+    expect(muted(c.client.view, b.id, 'cam')).toBe(false)
+    expect(notices(b.client)).toEqual([{ t: 'notice', notice: 'muted', by: a.id }])
+    expect(notices(c.client)).toEqual([])
+    // Already muted: nothing more to tell
+    host(a.conn, 'muteMember', b.id)
+    expect(notices(b.client)).toHaveLength(1)
+    // Only the member turns it back on
+    publish(b, 'sb2', ['mic', 'cam'])
+    expect(muted(a.client.view, b.id, 'mic')).toBe(false)
+  })
+
+  it('refuses every control from a participant, and changes nothing', () => {
+    const { a, b, c } = three()
+    t.host.message(b.conn, JSON.stringify({ t: 'share', takeOver: false }))
+    const before = structuredClone(a.client.view)
+    for (const action of ['muteMember', 'camOff', 'stopShare', 'remove']) {
+      host(c.conn, action, a.id)
+      expect(c.client.received.at(-1)).toEqual(forbidden)
+      host(c.conn, action, b.id)
+      expect(c.client.received.at(-1)).toEqual(forbidden)
+    }
+    host(c.conn, 'muteAll')
+    expect(c.client.received.at(-1)).toEqual(forbidden)
+    host(c.conn, 'endMeeting')
+    expect(c.client.received.at(-1)).toEqual(forbidden)
+    expect(a.client.view).toEqual(before)
+    expect(notices(a.client)).toEqual([])
+    expect(notices(b.client)).toEqual([])
+    expect(t.host.exists).toBe(true)
+  })
+
+  it('refuses a control on oneself or on someone who is not there', () => {
+    const { a } = three()
+    host(a.conn, 'muteMember', a.id)
+    expect(a.client.received.at(-1)).toEqual(forbidden)
+    host(a.conn, 'remove', 'nobody')
+    expect(a.client.received.at(-1)).toEqual(forbidden)
+    expect(a.client.view!.members[a.id]).toBeDefined()
+    // A malformed one is not a control at all
+    host(a.conn, 'muteMember')
+    expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+    host(a.conn, 'unmute', a.id)
+    expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+  })
+
+  it('turns a camera off the same way', () => {
+    const { a, b } = three()
+    host(a.conn, 'camOff', b.id)
+    expect(muted(a.client.view, b.id, 'cam')).toBe(true)
+    expect(muted(a.client.view, b.id, 'mic')).toBe(false)
+    expect(notices(b.client)).toEqual([{ t: 'notice', notice: 'camOff', by: a.id }])
+  })
+
+  it('mutes everyone but the host, telling each one who had a microphone on', () => {
+    const { a, b, c } = three()
+    host(a.conn, 'muteMember', c.id)
+    host(a.conn, 'muteAll')
+    expect(muted(b.client.view, a.id, 'mic')).toBe(false)
+    expect(muted(b.client.view, b.id, 'mic')).toBe(true)
+    expect(muted(b.client.view, c.id, 'mic')).toBe(true)
+    expect(notices(b.client)).toEqual([{ t: 'notice', notice: 'muted', by: a.id, all: true }])
+    // 阿明 was muted already: only the first notice
+    expect(notices(c.client)).toEqual([{ t: 'notice', notice: 'muted', by: a.id }])
+    expect(notices(a.client)).toEqual([])
+  })
+
+  it('stops a share (RoomHost.stopShare on the wire) and tells the sharer', () => {
+    const { a, b, c } = three()
+    t.host.message(b.conn, JSON.stringify({ t: 'share', takeOver: false }))
+    publish(b, 'sb', ['mic', 'cam', 'screen'])
+    host(a.conn, 'stopShare', c.id)
+    expect(notices(c.client)).toEqual([])
+    host(a.conn, 'stopShare', b.id)
+    expect(c.client.view!.room.share).toBeNull()
+    expect(c.client.view!.members[b.id].tracks.map((track) => track.kind)).toEqual(['mic', 'cam'])
+    expect(notices(b.client)).toEqual([{ t: 'notice', notice: 'shareStopped', by: a.id }])
+  })
+
+  it('removes a member: closed with `removed`, gone for everyone, its share with it', () => {
+    const { a, b, c } = three()
+    t.host.message(b.conn, JSON.stringify({ t: 'share', takeOver: false }))
+    host(a.conn, 'remove', b.id)
+    expect(b.client.closed).toEqual({ code: CloseCode.removed, reason: 'removed' })
+    expect(c.client.view!.members[b.id]).toBeUndefined()
+    expect(c.client.view!.room.share).toBeNull()
+    expect(t.host.banList).toEqual([{ client: 'browser-xiaojie-0000', until: t.now() + BAN_MS }])
+    expect(t.saved.bans).toEqual(t.host.banList)
+    // Its session is over: the SFU proxy no longer knows its token
+    expect(t.host.sfuAccess(b.token, 'sb', [])).toEqual({ ok: false, reason: 'unauthorized' })
+  })
+
+  it('keeps the removed browser out for BAN_MS, then lets it back in (fake clock)', () => {
+    const { a, b } = three()
+    host(a.conn, 'remove', b.id)
+    // Straight back, as someone new or with the old token: refused
+    const again = joinAs('小潔', 'browser-xiaojie-0000')
+    expect(again.id).toBe('')
+    expect(again.client.closed).toEqual({ code: CloseCode.removed, reason: 'removed' })
+    const withToken = t.open()
+    t.host.message(
+      withToken.conn,
+      JSON.stringify({ t: 'join', name: '小潔', token: b.token, client: 'browser-xiaojie-0000' }),
+    )
+    expect(withToken.client.closed?.code).toBe(CloseCode.removed)
+    // Another browser is someone else
+    expect(joinAs('小潔', 'browser-other-000000').id).not.toBe('')
+    // The ban's expiry is a job of the room's one alarm
+    expect(t.saved.schedule.bans).toBe(t.now() + BAN_MS)
+    t.tick(BAN_MS - 1)
+    expect(joinAs('小潔', 'browser-xiaojie-0000').id).toBe('')
+    t.tick(1)
+    t.host.message(a.conn, 'ping')
+    t.host.alarm()
+    expect(t.host.banList).toEqual([])
+    expect(t.saved.bans).toEqual([])
+    expect(t.saved.schedule.bans).toBeUndefined()
+    expect(joinAs('小潔', 'browser-xiaojie-0000').id).not.toBe('')
+  })
+
+  it('removes a reconnecting member too: it cannot come back with its token', () => {
+    const { a, b } = three()
+    t.host.closed(b.conn)
+    host(a.conn, 'remove', b.id)
+    expect(a.client.view!.members[b.id]).toBeUndefined()
+    const back = t.open()
+    t.host.message(
+      back.conn,
+      JSON.stringify({ t: 'join', name: '小潔', token: b.token, client: 'browser-xiaojie-0000' }),
+    )
+    expect(back.client.closed?.code).toBe(CloseCode.removed)
+  })
+
+  it('keeps the bans across the object being evicted', () => {
+    const { a, b } = three()
+    host(a.conn, 'remove', b.id)
+    const woken = setup('w')
+    woken.host.restore(
+      t.saved.room as RoomInfo,
+      t.saved.rev,
+      t.saved.sessions,
+      [{ conn: a.conn, openedAt: woken.now() }],
+      null,
+      t.saved.schedule,
+      [],
+      t.saved.bans,
+    )
+    expect(woken.host.banList).toEqual(t.host.banList)
+  })
+
+  it('ends the meeting: every socket closed with `ended`, the room gone at once', () => {
+    const { a, b, c } = three()
+    const pending = t.open()
+    t.host.message(a.conn, JSON.stringify({ t: 'chat', text: 'bye' }))
+    host(a.conn, 'endMeeting')
+    for (const client of [a.client, b.client, c.client, pending.client]) {
+      expect(client.closed).toEqual({ code: CloseCode.ended, reason: 'ended' })
+    }
+    expect(t.host.exists).toBe(false)
+    expect(t.host.summary()).toBeNull()
+    expect(t.host.chatHistory).toEqual([])
+    expect(t.host.nextAlarm()).toBeNull()
+    expect(t.saved.cleared).toBe(1)
+    expect(t.host.admit(String(PROTOCOL_VERSION))).toEqual({
+      ok: false,
+      code: CloseCode.roomNotFound,
+      reason: 'room not found',
+    })
+  })
+
+  it('moves the controls with the host role (AC-1.3 handoff)', () => {
+    const { a, b, c } = three()
+    t.host.message(a.conn, '{"t":"leave"}')
+    expect(b.client.view!.members[b.id].role).toBe('host')
+    host(c.conn, 'muteMember', b.id)
+    expect(c.client.received.at(-1)).toEqual(forbidden)
+    host(b.conn, 'muteMember', c.id)
+    expect(muted(b.client.view, c.id, 'mic')).toBe(true)
   })
 })

@@ -68,6 +68,9 @@ const welcome = (rev: number, members: Record<string, ReturnType<typeof member>>
     state: { room, members, usage: 'normal' as const },
   }) as const
 
+/** This browser's own id (F1) */
+const CLIENT = 'browser-id-0123456789'
+
 /** No jitter in tests: the delays are exactly 1, 2, 4, 8, 8… s */
 const steadyBackoff = () => new Backoff({ random: () => 0.5, giveUpAfterMs: RECONNECT_GRACE_MS })
 
@@ -76,7 +79,7 @@ function connect(token: string | null = null) {
   const onToken = vi.fn()
   const connection = new RoomConnection(
     'abcdefghij',
-    { name: 'Gene', token },
+    { name: 'Gene', token, client: CLIENT },
     {
       origin: 'wss://longtalk.test',
       createSocket: (url) => {
@@ -117,10 +120,14 @@ describe('RoomConnection', () => {
     const { socket } = connect(TOKEN)
     expect(socket.sent).toEqual([])
     socket.open()
-    expect(socket.sent).toEqual([JSON.stringify({ t: 'join', name: 'Gene', token: TOKEN })])
+    expect(socket.sent).toEqual([
+      JSON.stringify({ t: 'join', name: 'Gene', token: TOKEN, client: CLIENT }),
+    ])
     const fresh = connect()
     fresh.socket.open()
-    expect(fresh.socket.sent).toEqual(['{"t":"join","name":"Gene","token":null}'])
+    expect(fresh.socket.sent).toEqual([
+      `{"t":"join","name":"Gene","token":null,"client":"${CLIENT}"}`,
+    ])
   })
 
   it("tells its error listeners about the room's refusals (D1: share_busy)", () => {
@@ -206,6 +213,8 @@ describe('RoomConnection', () => {
     [CloseCode.roomFull, 'full'],
     [CloseCode.versionMismatch, 'outdated'],
     [CloseCode.replaced, 'replaced'],
+    [CloseCode.removed, 'removed'],
+    [CloseCode.ended, 'ended'],
   ] as const)(
     'reports close code %i as %s, stops the heartbeat, does not reconnect',
     (code, status) => {
@@ -224,7 +233,7 @@ describe('RoomConnection', () => {
     const sockets: FakeSocket[] = []
     const connection = new RoomConnection(
       'abcdefghij',
-      { name: 'Gene', token: null },
+      { name: 'Gene', token: null, client: CLIENT },
       {
         origin: 'ws://x',
         createSocket: (url) => {
@@ -298,7 +307,9 @@ describe('RoomConnection reconnect (e2-t08)', () => {
     expect(t.created).toHaveLength(4)
     // This one gets through: joins with the token from the welcome
     t.latest().open()
-    expect(t.latest().sent).toEqual([JSON.stringify({ t: 'join', name: 'Gene', token: TOKEN })])
+    expect(t.latest().sent).toEqual([
+      JSON.stringify({ t: 'join', name: 'Gene', token: TOKEN, client: CLIENT }),
+    ])
     t.latest().receive(welcome(7, { a: member('a'), b: member('b') }))
     expect(t.connection.getState()).toMatchObject({ status: 'open', you: 'a', welcomes: 2 })
     // The backoff starts again from 1 s after a success
@@ -314,7 +325,9 @@ describe('RoomConnection reconnect (e2-t08)', () => {
     t.socket.serverClose(1006)
     vi.advanceTimersByTime(1000)
     t.latest().open()
-    expect(t.latest().sent).toEqual([JSON.stringify({ t: 'join', name: '阿明', token: TOKEN })])
+    expect(t.latest().sent).toEqual([
+      JSON.stringify({ t: 'join', name: '阿明', token: TOKEN, client: CLIENT }),
+    ])
   })
 
   it('caps the delay at 8 s and gives up after the grace window, until retry', () => {

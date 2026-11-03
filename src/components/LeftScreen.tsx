@@ -11,9 +11,10 @@ const text = strings.left
 export interface LeftScreenProps {
   /**
    * `left`: the person pressed 「離開」 (rejoin offered); `closed`: the room closed while they were
-   * away from it (nothing to rejoin)
+   * away from it; `ended`: the host ended the meeting; `removed`: the host removed them, or their
+   * browser is still banned (F1). Nothing to rejoin but after `left`.
    */
-  reason: 'left' | 'closed'
+  reason: 'left' | 'closed' | 'ended' | 'removed'
   /** The room's name as the top bar showed it */
   roomName: string
   /** The one question's answer, given at most once (the page sends it as telemetry) */
@@ -29,7 +30,19 @@ export interface LeftScreenProps {
  */
 export function LeftScreen({ reason, roomName, onRate, onRejoin, onHome }: LeftScreenProps) {
   const [rated, setRated] = useState<RatingScore | null>(null)
-  const closed = reason === 'closed'
+  const closed = reason !== 'left'
+  const heading = {
+    left: text.title,
+    closed: text.closedTitle,
+    ended: text.endedTitle,
+    removed: text.removedTitle,
+  }[reason]
+  const body = {
+    left: text.body(roomName),
+    closed: text.closedBody,
+    ended: text.endedBody(roomName),
+    removed: text.removedBody(roomName),
+  }[reason]
   const rate = (score: RatingScore) => {
     if (rated !== null) return
     setRated(score)
@@ -38,8 +51,8 @@ export function LeftScreen({ reason, roomName, onRate, onRejoin, onHome }: LeftS
   return (
     <Card aria-labelledby="left-title">
       <LogoMark size={40} />
-      <h1 id="left-title">{closed ? text.closedTitle : text.title}</h1>
-      <Body>{closed ? text.closedBody : text.body(roomName)}</Body>
+      <h1 id="left-title">{heading}</h1>
+      <Body>{body}</Body>
 
       <Rating role="group" aria-labelledby="left-question">
         <h2 id="left-question">{text.question}</h2>
