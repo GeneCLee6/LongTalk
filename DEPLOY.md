@@ -47,7 +47,7 @@ LongTalk 是**一個 Cloudflare Worker**：同一個 Worker 回答 `/api/*`、�
 | `preview.yml` | PR 開啟、更新 | 部署 `longtalk-pr-<號>`（`CLOUDFLARE_ENV=preview`），smoke test，把網址留言在 PR；接著 `e2e` job 在這個預覽跑三個瀏覽器的互通測試（§7）；PR 關閉時刪除該 Worker 與它的資料 |
 | `deploy.yml` | CI 在 `main` 綠了之後 | 部署正式站 `longtalk`，smoke test 確認它正在提供這個 commit |
 
-smoke test（`scripts/smoke.sh`）檢查三件事：首頁 `<meta name="app-version">` 是這個 commit、`/api/health` 回這個 commit、`/r/<id>` 回 200（SPA fallback）。
+smoke test（`scripts/smoke.sh`）檢查：首頁 `<meta name="app-version">` 是這個 commit、`/api/health` 回這個 commit、`/r/<id>` 回 200（SPA fallback）、品牌檔案（§9），以及 `/sw.js` 是 JavaScript、`Cache-Control: no-cache`、`appVersion` 是這個 commit、預先快取清單裡沒有 `/api`（§10）。
 
 建議在 GitHub 把 `main` 設為受保護分支：要求 PR、要求 `CI / verify` 通過。
 
@@ -225,6 +225,13 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
     - 預先加入頁最下面「語言」選 English：整頁換英文、重新整理還是英文；進房後工具列、參與者、聊天都是英文，「更多 › 語言 › 繁體中文」切回，**通話不斷**（對方沒有看到你離開再進來）。聊天時間：繁中 21:04、英文 9:04 pm。換一台瀏覽器語言只有英文的電腦（或私密視窗、Chrome 設定把中文刪掉）第一次打開：是英文；有中文就是繁中。
     - 把裝置的系統、瀏覽器版本與結果寫進 PR；通過才勾 AC-4.2。
 
+18. **PWA 與快捷鍵（G4，AC-4.7、AC-4.9 的快捷鍵部分）**：一台電腦（Chrome 或 Edge）、一支 Android（Chrome）、一支 iPhone（Safari）：
+    - **安裝**：電腦 Chrome 打開首頁，「加入」下方出現「安裝 LongTalk」卡片 › 按「安裝」› 瀏覽器自己的安裝對話框 › 安裝：桌面或「應用程式」有藍綠方塊的 LongTalk，打開是**沒有網址列的獨立視窗**（standalone），再開首頁不再出現卡片。另一台（或清除網站資料後）按「不用了」：重新整理不再出現。Android Chrome 同樣有「安裝」（或選單裡的「安裝應用程式」），裝好從主畫面打開是全螢幕的 App。iPhone Safari 第一次打開首頁看到「把 LongTalk 加到主畫面」的提示（「分享」›「加入主畫面」），照做：主畫面圖示是 LongTalk、打開沒有 Safari 的網址列；**第二次打開首頁不再出現提示**。會議室裡從不出現安裝卡片。
+    - **離線殼**：裝好的 App（或開過一次首頁的瀏覽器）關掉 Wi-Fi 與行動網路再打開：首頁照樣出現，寫「你目前離線…」；點一個房間連結：「你目前離線」＋「再試一次」，打開網路後**自己重試**、進到預先加入頁。
+    - **新版本**：開著一個房間（電腦與手機都在裡面），合併任何改到程式的 PR（部署完成後）：幾分鐘內或切回分頁時，兩邊左下角出現「有新版本。重新整理後會直接回到這場會議…」卡片，**通話不會自己中斷**；按「稍後」卡片消失、繼續開會；離開會議回首頁時（換頁）才自動換新版。另一台按「重新整理」：約幾秒回到同一場會議、同一格。只改文件的 PR 合併後**不應該**出現卡片。
+    - **快捷鍵**（電腦）：在房間裡按 M（靜音／解除）、V、C（聊天打開）、在聊天框打字 m、v、空白不觸發、Esc 關聊天、P、R（舉手）、?（清單）、L（先問「要離開會議室嗎？」）；用注音輸入法在聊天框選字時按空白或 Enter 不觸發。靜音時**按住空白鍵**：另一台聽得到、名牌的紅色麥克風消失，放開立即靜音；按住時切到別的視窗也會恢復靜音。Ctrl／Cmd＋C、V、R、L 這些照舊是瀏覽器的。把滑鼠移到工具列按鈕上，提示寫「靜音（M）」。
+    - 把裝置的系統、瀏覽器版本與結果寫進 PR；安裝與 standalone 三台都通過才勾 AC-4.7（AC-4.9 還要 G5 的 Lighthouse）。
+
 常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「媒體伺服器不認得這個分頁」＝ session token 過期（房間把成員移除了），重新整理；一直沒有對方的畫面 ＝ 網路擋 UDP，檢查 TURN secret 有沒有設（`/api/turn` 的 `turn` 要是 `true`）。
 
 ## 6. Realtime 免費額度保護（e11-t13，B1）
@@ -341,5 +348,17 @@ curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engin
 - **重新產生**：改了 `docs/design/logo/*.svg`、`src/brand.ts` 或 `tokens.ts` 的顏色後跑 `npm run brand`（用 Playwright 已安裝的 Chromium 把 SVG 畫成 PNG；沒有的話先 `npx playwright install chromium`），把 `public/` 的變動一起提交。OG 圖的字用品牌字體 `Inter`，沒有就用系統的無襯線字，所以不同電腦產生的 OG 圖可能有一點差異；其他圖示只有圖形，結果一樣。`tests/shared/brand.test.ts` 會檢查 `public/` 與 `index.html` 跟 `src/brand.ts` 一致（manifest、每張圖的尺寸、meta 標籤、名稱沒有中文字）。
 - **`index.html` 的標籤**：`favicon.ico`＋`favicon.svg`、`apple-touch-icon`、`manifest`、兩個 `theme-color`（淺色／深色跟系統，取 `tokens.ts` 的 `bg`）、`description`、`og:*`、`twitter:card`（`summary_large_image`）。**`og:image` 必須是絕對網址**，寫死正式站 `https://longtalk.genelee-pro.workers.dev/og-image.png`（PR 預覽也指向正式站的圖）；換網域時改 `src/brand.ts` 的 `SITE_URL` 與 `index.html`，測試會比對兩者。
 - **快取**（`public/_headers`，Workers Static Assets 會讀它、不會把它當檔案送出）：圖示與 OG 圖 1 天、manifest 1 小時（並明確給 `Content-Type: application/manifest+json`）；其他檔案維持預設（每次用 ETag 驗證）。**不給 `/assets/*` 長快取**：雖然 Vite 的檔名帶雜湊，但部署後舊分頁要的舊 chunk 已經不在，會落到 single-page-application 的 `index.html`，那個回應不能用 chunk 的名字快取一年。
-- **沒有 service worker**：有 manifest 與圖示，Chrome／Edge／Android 可以「安裝」或「加到主畫面」，iOS 用 `apple-touch-icon`；離線殼、安裝提示、新版本提示是 M1 的 `e4-t12`（AC-4.7）。
+- **service worker**（G4 起）：離線殼、安裝提示、新版本提示見 §10。`/sw.js` 由 build 產生（不在 `public/`），`_headers` 給它 `Cache-Control: no-cache`。
 - **部署後檢查**：`scripts/smoke.sh` 在每次預覽與正式部署後確認這些檔案回 200 且型別正確（`image/svg+xml`、`image/png`、`application/manifest+json`），manifest 寫的是 LongTalk，首頁連到 manifest。
+
+## 10. PWA：service worker、安裝與新版本提示（e4-t12，G4）
+
+**只是 App 殼**：讓首頁與房間連結在離線時也打得開（進房仍然需要網路），並在部署後讓還開著的分頁知道有新版本。它不碰任何即時的東西。
+
+- **怎麼產生**：`src/pwa/sw.ts`（handler 在 `swWorker.ts`、規則在 `swRouting.ts`，純函式、`tests/app/pwa.test.tsx` 測）由 `scripts/swPlugin.ts` 在 `vite build` 時打包成 `dist/client/sw.js`（經典 script，不是 module worker），前面加一行 `self.__LT_SW__={version, appVersion, precache}`。`precache` 是 `/`（`index.html`）、這一版 `assets/` 下所有 JS／CSS、`favicon.svg`、`favicon.ico`、`manifest.webmanifest`，排序後固定；`version` 是「清單＋拿掉 app-version 的 `index.html`＋worker 程式」的雜湊，**同樣的原始碼得到同樣的 `sw.js`**（只有 `appVersion` 跟著 commit 變）。手寫而不用 vite-plugin-pwa／Workbox：只需要三種策略、約 2.6 kB、沒有新相依（不用追 Vite 8 與 Cloudflare 外掛的相容性），「不碰 `/api`」這條規則在自己的測試裡。`swRouting.ts`、`swWorker.ts` 只能被 `sw.ts` 匯入（app 匯入會被拆成共用 chunk，build 會失敗並說明）。
+- **策略**：頁面載入（`navigate`）**網路優先**，連不上才給這一版快取的 `/`；`/assets/*` 快取優先（檔名帶雜湊，同名永遠同內容）；其他同網域檔案網路優先、離線用快取。**一律不碰**：`/api/*`（開房、房間資訊、SFU 代理、TURN 憑證、遙測、`/api/health`）、WebSocket（瀏覽器本來就不經過 service worker）、其他網域、非 GET、`/sw.js` 本身；也從不把 `/api` 的回應存進快取（`mayCache`）。
+- **版本與快取**：每一版一個 `longtalk-shell-<version>` 快取。新版**不自動接手**（沒有 `skipWaiting`），等使用者按「重新整理」或舊版的分頁全部關掉；接手（activate）時刪掉「這一版與前一版」以外的 shell 快取，**前一版多留一代**：部署後還在開會的舊分頁，之後要載入的 lazy chunk 伺服器上已經沒有了，仍可從前一版的快取拿到（不會跳出「載入失敗」）。真的拿不到時照舊是 `e4-t20` 的「載入失敗，請重新整理」。
+- **新版本提示**（`src/pwa/update.ts`）：分頁回到前景、網路恢復、每 30 分鐘請瀏覽器檢查 `/sw.js`；新的 worker 裝好在等待時，問它帶來哪個 build：**頁面已經是那一版**（例如剛從網路載入新的 `index.html`）或**檔案完全一樣**（只改文件的部署）就安靜地接手，否則顯示「有新版本，重新整理」卡片（左下角、不擋畫面、會議室裡說「重新整理後會直接回到這場會議」）。**從不自己重新整理**；「稍後」之後，下一次在 app 裡換頁（例如離開會議回首頁）才套用。沒有 service worker 的瀏覽器（Firefox 私密視窗、http）改比對 `/api/health` 與 `<meta name="app-version">`。本機 `local` 版本不提示。
+- **安裝提示**（`src/pwa/install.ts`）：只在首頁。Chromium 的 `beforeinstallprompt` 被留下來給自己的「安裝」按鈕；iPhone／iPad Safari（`navigator.standalone` 存在）顯示一次「分享 › 加入主畫面」；已經以 App 打開（`display-mode: standalone`）、按過「不用了」、或瀏覽器回報已安裝就不再出現（`localStorage` 的 `longtalk.installDismissed`）。
+- **PR 預覽**：每個預覽是自己的 `longtalk-pr-<號>` 網域，service worker 與快取各自獨立，不會和正式站互相影響；`vite dev` 不註冊 service worker（`import.meta.env.PROD`）。e2e 的 `e2e/pwa.spec.ts` 在預覽上檢查：worker 註冊並接管、快取裡有殼而沒有 `/api`、`/api/health` 不經過 worker、離線時首頁與房間連結的畫面；`scripts/smoke.sh` 檢查 `/sw.js`（§2）。
+- **出問題時**：要讓所有人立刻丟掉 service worker，部署一版 `sw.ts` 只在 `activate` 時刪掉全部 `longtalk-shell-*` 並 `self.registration.unregister()`（瀏覽器每次載入都會重新檢查 `/sw.js`，`no-cache`）。使用者端：網站設定 › 清除資料，或 DevTools › Application › Service workers › Unregister。
