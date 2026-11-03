@@ -261,6 +261,7 @@ describe('RoomConnection', () => {
     [CloseCode.locked, 'locked'],
     [CloseCode.denied, 'denied'],
     [CloseCode.waitExpired, 'waitExpired'],
+    [CloseCode.rateLimited, 'rateLimited'],
   ] as const)(
     'reports close code %i as %s, stops the heartbeat, does not reconnect',
     (code, status) => {

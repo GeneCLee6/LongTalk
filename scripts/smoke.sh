@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Smoke test after a deploy: the site serves the expected commit, the API answers, a room URL
 # falls through to the app, the brand files are served with their types (e4-t19), and the
-# service worker is this commit's, never cached long, and precaches no /api path (e4-t12).
+# service worker is this commit's, never cached long, and precaches no /api path (e4-t12); the
+# security headers are on the pages and the API (e11-t06).
 # Usage: scripts/smoke.sh <site-url> <commit>
 set -euo pipefail
 url="${1:?site url}"
@@ -67,3 +68,15 @@ grep -q "\"appVersion\":\"$sha\"" "$sw_file" \
 if grep -o '"precache":\[[^]]*\]' "$sw_file" | grep -q '"/api'; then
   echo "::error::/sw.js precaches an /api path"; exit 1
 fi
+
+# Security headers (I1, e11-t06): the pages from public/_headers, the API from the Worker
+page_headers=$(curl -fsS -D - -o /dev/null "$url/" | tr -d '\r')
+for want in "content-security-policy: default-src 'self'" "frame-ancestors 'none'" \
+  "strict-transport-security: max-age=" "permissions-policy: camera=(self)" \
+  "cross-origin-opener-policy: same-origin" "x-content-type-options: nosniff"; do
+  echo "$page_headers" | grep -qiF "$want" || { echo "::error::/ is missing the header: $want"; exit 1; }
+done
+api_headers=$(curl -fsS -D - -o /dev/null "$url/api/health" | tr -d '\r')
+echo "$api_headers" | grep -qiF "content-security-policy: default-src 'none'" \
+  || { echo "::error::/api/health is missing its Content-Security-Policy"; exit 1; }
+echo "security headers ok"

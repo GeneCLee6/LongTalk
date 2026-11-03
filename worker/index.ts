@@ -4,6 +4,7 @@ import { handleRequest, type Env } from './app.ts'
 export { RoomDO } from './room.ts'
 export { TelemetryDO } from './telemetry-do.ts'
 export { UsageDO } from './usage-do.ts'
+export { GuardDO } from './guard-do.ts'
 
 export default {
   fetch: handleRequest,

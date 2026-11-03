@@ -1,26 +1,43 @@
 import type { HealthResponse } from '../shared/health.ts'
+import { ADMIN_BLOCKS_PATH } from '../shared/abuse.ts'
 import { EVENTS_PATH } from '../shared/telemetry.ts'
 import type { UsageState } from '../shared/usage.ts'
-import { handleAdmin, handleEvents, TELEMETRY_OBJECT, type TelemetryEnv } from './events.ts'
+import type { GuardDeps } from './abuse.ts'
+import { handleAdminBlocks } from './admin-blocks.ts'
+import type { ClientKeyEnv } from './client-key.ts'
+import { handleCspReport } from './csp-report.ts'
+import {
+  clientKey,
+  handleAdmin,
+  handleEvents,
+  TELEMETRY_OBJECT,
+  type TelemetryEnv,
+} from './events.ts'
+import type { GuardDO } from './guard-do.ts'
+import { GUARD_OBJECT } from './guard.ts'
+import { CSP_REPORT_PATH, withApiHeaders } from './headers.ts'
 import type { RoomDO } from './room.ts'
 import { handleRooms } from './rooms.ts'
 import { handleSfu, type SfuEnv } from './sfu.ts'
 import { handleTurn, type TurnEnv } from './turn.ts'
 import type { TelemetryDO } from './telemetry-do.ts'
+import { turnstileSiteKey, type TurnstileEnv } from './turnstile.ts'
 import type { UsageDO } from './usage-do.ts'
 import { USAGE_OBJECT, type UsageEnv } from './usage.ts'
 
-export interface Env extends SfuEnv, TurnEnv, UsageEnv, TelemetryEnv {
+export interface Env
+  extends SfuEnv, TurnEnv, UsageEnv, TelemetryEnv, TurnstileEnv, ClientKeyEnv {
   ASSETS: Fetcher
   ROOM: DurableObjectNamespace<RoomDO>
   /** One object for the whole deployment: the month's Realtime egress (e11-t13) */
   USAGE: DurableObjectNamespace<UsageDO>
   /** One object for the whole deployment: the telemetry counters behind /admin (e11-t03) */
   TELEMETRY: DurableObjectNamespace<TelemetryDO>
+  /** One object for the whole deployment: room-creation limits, IP blocklist (e11-t05) */
+  GUARD: DurableObjectNamespace<GuardDO>
   // Set at deploy time (wrangler deploy --var APP_VERSION:<commit>)
   APP_VERSION?: string
 }
-
 const noStore = { 'cache-control': 'no-store' }
 
 /** The SFU proxy reads the month's state at most this often per isolate */
@@ -52,17 +69,50 @@ export function resetUsageCache(): void {
   usageCache = null
 }
 
+/** GuardDO's RPC as the Worker uses it (worker/abuse.ts) */
+export function guardDeps(env: Pick<Env, 'GUARD'>): GuardDeps {
+  const stub = () => env.GUARD.get(env.GUARD.idFromName(GUARD_OBJECT))
+  return {
+    create: (key) => stub().create(key),
+    note: (key, kind) => stub().note(key, kind),
+    blocked: () => stub().blocked(),
+    block: (key, hours, note) => stub().block(key, hours, note),
+    unblock: (key) => stub().unblock(key),
+    summary: () => stub().summary(),
+  }
+}
+
+type WaitUntil = Pick<ExecutionContext, 'waitUntil'>
+
 // The Worker answers /api/* and hands everything else to the static assets (the React app).
 // /r/:roomId is a client route: assets answer it with index.html (single-page-application);
-// the room's WebSocket is /api/rooms/<id>/ws (worker/rooms.ts).
-export async function handleRequest(request: Request, env: Env): Promise<Response> {
+// the room's WebSocket is /api/rooms/<id>/ws (worker/rooms.ts). Every answer of its own carries
+// the API security headers (worker/headers.ts); the pages get theirs from public/_headers.
+export async function handleRequest(
+  request: Request,
+  env: Env,
+  ctx?: WaitUntil,
+): Promise<Response> {
   const url = new URL(request.url)
+  if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request)
+  return withApiHeaders(await handleApi(request, env, url, ctx))
+}
+
+async function handleApi(
+  request: Request,
+  env: Env,
+  url: URL,
+  ctx: WaitUntil | undefined,
+): Promise<Response> {
   if (url.pathname === '/api/health') {
     const body: HealthResponse = { ok: true, version: env.APP_VERSION ?? 'local' }
     return Response.json(body, { headers: noStore })
   }
   if (url.pathname === '/api/rooms' || url.pathname.startsWith('/api/rooms/')) {
-    return handleRooms(request, env, url)
+    return handleRooms(request, env, url, {
+      guard: guardDeps(env),
+      waitUntil: (promise) => ctx?.waitUntil(promise),
+    })
   }
   if (url.pathname.startsWith('/api/sfu/')) {
     return handleSfu(request, env, {
@@ -82,20 +132,28 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     }
     return Response.json(await usageStub(env).status(), { headers: noStore })
   }
+  const telemetry = () => env.TELEMETRY.get(env.TELEMETRY.idFromName(TELEMETRY_OBJECT))
+  const record = (client: string, events: Parameters<TelemetryDO['record']>[1]) =>
+    telemetry().record(client, events)
+  if (url.pathname === CSP_REPORT_PATH) return handleCspReport(request, record, clientKey)
+  if (url.pathname === ADMIN_BLOCKS_PATH || url.pathname.startsWith(`${ADMIN_BLOCKS_PATH}/`)) {
+    return handleAdminBlocks(request, env, url, guardDeps(env))
+  }
   if (url.pathname === EVENTS_PATH || url.pathname.startsWith('/api/admin/')) {
-    const telemetry = () => env.TELEMETRY.get(env.TELEMETRY.idFromName(TELEMETRY_OBJECT))
+    const guard = guardDeps(env)
     const deps = {
-      record: (client: string, events: Parameters<TelemetryDO['record']>[1]) =>
-        telemetry().record(client, events),
+      record,
       summary: () => telemetry().summary(),
       usage: () => usageStub(env).status(),
+      abuse: async () => ({
+        ...(await guard.summary()),
+        turnstile: turnstileSiteKey(env) !== null,
+        pepper: Boolean(env.IP_HASH_PEPPER),
+      }),
     }
     return url.pathname === EVENTS_PATH
       ? handleEvents(request, env, url, deps)
       : handleAdmin(request, env, url, deps)
   }
-  if (url.pathname.startsWith('/api/')) {
-    return Response.json({ error: 'not_found' }, { status: 404 })
-  }
-  return env.ASSETS.fetch(request)
+  return Response.json({ error: 'not_found' }, { status: 404 })
 }

@@ -6,6 +6,7 @@ import {
   type ClientEvent,
   type TelemetrySummary,
 } from '../shared/telemetry.ts'
+import type { AbuseSummary } from '../shared/abuse.ts'
 import type { UsageStatus } from '../shared/usage.ts'
 
 // POST /api/events and GET /api/admin/summary (e11-t03). What may be reported and the privacy
@@ -26,6 +27,8 @@ export interface TelemetryDeps {
   record: (client: string, events: ClientEvent[]) => Promise<ClientEvent[]>
   summary: () => Promise<TelemetrySummary>
   usage: () => Promise<UsageStatus>
+  /** The blocklist and recent offenders (I1), for the dashboard */
+  abuse?: () => Promise<AbuseSummary>
 }
 
 const noStore = { 'cache-control': 'no-store' }
@@ -106,7 +109,7 @@ function detail(event: ClientEvent): string {
 }
 
 /** A short hash of the client's IP: enough to rate-limit, not to recover the address */
-async function clientKey(ip: string): Promise<string> {
+export async function clientKey(ip: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`events:${ip}`))
   return [...new Uint8Array(digest).slice(0, 12)]
     .map((byte) => byte.toString(16).padStart(2, '0'))
@@ -148,13 +151,36 @@ export async function handleAdmin(
 ): Promise<Response> {
   if (url.pathname !== ADMIN_SUMMARY_PATH) return json({ error: 'not_found' }, 404)
   if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405, { allow: 'GET' })
+  const refused = await authorizeAdmin(request, env)
+  if (refused) return refused
+  const [telemetry, usage, abuse] = await Promise.all([
+    deps.summary(),
+    deps.usage().catch(() => null),
+    deps.abuse ? deps.abuse().catch(() => null) : null,
+  ])
+  const body: AdminSummary = {
+    telemetry,
+    usage,
+    analyticsEngine: env.EVENTS !== undefined,
+    abuse,
+  }
+  return json(body)
+}
+
+/**
+ * The owner's password check for every /api/admin/* call: null when the request carries the
+ * Worker secret ADMIN_TOKEN as `Authorization: Bearer <token>` (compared in constant time), else
+ * the answer to give (503 while the secret is not set, 401 for anything else)
+ */
+export async function authorizeAdmin(
+  request: Request,
+  env: Pick<TelemetryEnv, 'ADMIN_TOKEN'>,
+): Promise<Response | null> {
   if (!env.ADMIN_TOKEN) return json({ error: 'admin_not_configured' }, 503)
   const header = request.headers.get('Authorization') ?? ''
   const given = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : ''
   if (!given || !(await sameSecret(given, env.ADMIN_TOKEN))) {
     return json({ error: 'unauthorized' }, 401, { 'www-authenticate': 'Bearer' })
   }
-  const [telemetry, usage] = await Promise.all([deps.summary(), deps.usage().catch(() => null)])
-  const body: AdminSummary = { telemetry, usage, analyticsEngine: env.EVENTS !== undefined }
-  return json(body)
+  return null
 }
