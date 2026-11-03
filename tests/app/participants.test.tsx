@@ -75,13 +75,19 @@ describe('ParticipantsPanel (e1-t08)', () => {
       '靜音',
       '關閉鏡頭',
       '停止分享',
+      // F3 (e1-t16): the host names co-hosts and hands over
+      '設為共同主持人',
+      '設為主持人',
       '移出會議室',
     ])
     fireEvent.click(screen.getByRole('menuitem', { name: '停止分享' }))
     expect(p.onAction).toHaveBeenCalledWith('stopShare', 'x')
-    // Wei is muted with no camera: only removing applies
+    // Wei is muted with no camera and reconnecting: only the co-host role and removing apply
     fireEvent.click(screen.getByRole('button', { name: '對 Wei 的動作' }))
-    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['移出會議室'])
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      '設為共同主持人',
+      '移出會議室',
+    ])
   })
 
   it('asks before removing, and before ending the meeting', () => {

@@ -12,6 +12,7 @@ import {
   type Role,
   type WaitingEntry,
 } from '../../shared/protocol.ts'
+import { normalizePassword } from '../../shared/password.ts'
 import { can } from '../../shared/roles.ts'
 import { pickSpeaker } from '../../shared/layout.ts'
 import { isRoomId } from '../../shared/room-id.ts'
@@ -22,6 +23,7 @@ import { Button } from '../components/Button.tsx'
 import { ChatPanel } from '../components/ChatPanel.tsx'
 import { ChatPreview } from '../components/ChatPreview.tsx'
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx'
+import { LeaveDialog, PasswordDialog } from '../components/HostDialogs.tsx'
 import { Drawer } from '../components/Drawer.tsx'
 import { LeftScreen } from '../components/LeftScreen.tsx'
 import {
@@ -32,8 +34,8 @@ import {
 import { MemberAudio } from '../components/MemberAudio.tsx'
 import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
-import { ParticipantsPanel } from '../components/ParticipantsPanel.tsx'
-import { PreJoin } from '../components/PreJoin.tsx'
+import { ParticipantsPanel, type RoleChange } from '../components/ParticipantsPanel.tsx'
+import { PreJoin, type PasswordFieldProps } from '../components/PreJoin.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
 import { ShareTile } from '../components/ShareTile.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
@@ -75,6 +77,13 @@ import { useRoomMedia } from '../room/useRoomMedia.ts'
 import type { ShareNotice } from '../room/ScreenShare.ts'
 import { useScreenShare } from '../room/useScreenShare.ts'
 import { copyRoomLink, roomUrl, shareRoomLink, type LinkOutcome } from '../room/shareLink.ts'
+import {
+  linkPassword,
+  linkWithPassword,
+  loadKnownPassword,
+  saveKnownPassword,
+} from '../room/roomPassword.ts'
+import { useKnownPassword } from '../room/useKnownPassword.ts'
 import { useSpeaking } from '../room/useSpeaking.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
 import { telemetry } from '../telemetry.ts'
@@ -88,7 +97,16 @@ export interface JoinChoices {
   cam: boolean
   /** The devices chosen (also remembered in localStorage, session.ts) */
   devices: DeviceChoices
+  /** The room's password (F3), when it has one and we join as someone new */
+  password: string | null
 }
+
+/**
+ * Why the room did not take our password (F3, e1-t15): none was given, a wrong one, or too many
+ * wrong ones (wait until `until`)
+ */
+export type PasswordProblem =
+  { kind: 'required' | 'wrong'; until?: undefined } | { kind: 'wait'; until: number }
 
 /**
  * A tab that joined this room before (it still holds the session token) and knows its name goes
@@ -96,7 +114,9 @@ export interface JoinChoices {
  */
 function resume(roomId: string): JoinChoices | null {
   const name = loadName()
-  return loadSession(roomId) && name ? { name, mic: true, cam: true, devices: loadDevices() } : null
+  return loadSession(roomId) && name
+    ? { name, mic: true, cam: true, devices: loadDevices(), password: null }
+    : null
 }
 
 export default function RoomPage() {
@@ -113,7 +133,7 @@ export default function RoomPage() {
 
 /** Where this tab is with the room: deciding to join, in it, or out of it again (e4-t18) */
 type Stage =
-  | { at: 'prejoin' }
+  | { at: 'prejoin'; problem?: PasswordProblem }
   | { at: 'room'; choices: JoinChoices }
   | { at: 'left'; reason: LeftReason | TurnedAwayReason; roomName: string }
 
@@ -121,10 +141,14 @@ type Stage =
  * `left`: pressed 「離開」; `closed`: the room was gone when we came back to it; `ended`, `removed`:
  * the host ended the meeting or removed us (F1)
  */
-export type LeftReason = 'left' | 'closed' | 'ended' | 'removed'
+export type LeftReason = 'left' | 'closed' | 'ended' | 'endedSelf' | 'removed'
 
 const isLeftReason = (reason: LeftReason | TurnedAwayReason): reason is LeftReason =>
-  reason === 'left' || reason === 'closed' || reason === 'ended' || reason === 'removed'
+  reason === 'left' ||
+  reason === 'closed' ||
+  reason === 'ended' ||
+  reason === 'endedSelf' ||
+  reason === 'removed'
 
 function RoomEntry({ roomId }: { roomId: string }) {
   const navigate = useNavigate()
@@ -148,6 +172,7 @@ function RoomEntry({ roomId }: { roomId: string }) {
           roomId={roomId}
           choices={stage.choices}
           onLeft={(reason, roomName) => setStage({ at: 'left', reason, roomName })}
+          onPasswordRefused={(problem) => setStage({ at: 'prejoin', problem })}
         />
       </Shell>
     )
@@ -188,6 +213,7 @@ function RoomEntry({ roomId }: { roomId: string }) {
     <Page>
       <PreJoinGate
         roomId={roomId}
+        problem={stage.at === 'prejoin' ? (stage.problem ?? null) : null}
         onHome={() => navigate('/')}
         onJoin={(choices) => {
           saveName(choices.name)
@@ -199,11 +225,16 @@ function RoomEntry({ roomId }: { roomId: string }) {
 }
 
 type Summary =
-  | { status: 'loading' | 'missing' | 'error'; memberCount: null; waitingRoom: false }
-  | { status: 'ok'; memberCount: number; waitingRoom: boolean }
-  | { status: 'locked'; memberCount: null; waitingRoom: false }
+  | {
+      status: 'loading' | 'missing' | 'error' | 'locked'
+      memberCount: null
+      waitingRoom: false
+      password: false
+    }
+  | { status: 'ok'; memberCount: number; waitingRoom: boolean; password: boolean }
 
-const LOADING: Summary = { status: 'loading', memberCount: null, waitingRoom: false }
+const NONE = { memberCount: null, waitingRoom: false, password: false } as const
+const LOADING: Summary = { status: 'loading', ...NONE }
 
 /**
  * Checks the room exists before the pre-join screen asks for the camera; a locked room (F2) says
@@ -211,10 +242,13 @@ const LOADING: Summary = { status: 'loading', memberCount: null, waitingRoom: fa
  */
 function PreJoinGate({
   roomId,
+  problem,
   onJoin,
   onHome,
 }: {
   roomId: string
+  /** The room did not take our password last time (F3) */
+  problem: PasswordProblem | null
   onJoin: (choices: JoinChoices) => void
   onHome: () => void
 }) {
@@ -227,14 +261,20 @@ function PreJoinGate({
         if (cancelled) return
         setSummary(
           !room
-            ? { status: 'missing', memberCount: null, waitingRoom: false }
+            ? { status: 'missing', ...NONE }
             : room.locked
-              ? { status: 'locked', memberCount: null, waitingRoom: false }
-              : { status: 'ok', memberCount: room.memberCount, waitingRoom: !!room.waitingRoom },
+              ? { status: 'locked', ...NONE }
+              : {
+                  status: 'ok',
+                  memberCount: room.memberCount,
+                  waitingRoom: !!room.waitingRoom,
+                  // A room from before v11 has no password time: none
+                  password: room.passwordSetAt != null,
+                },
         )
       },
       () => {
-        if (!cancelled) setSummary({ status: 'error', memberCount: null, waitingRoom: false })
+        if (!cancelled) setSummary({ status: 'error', ...NONE })
       },
     )
     return () => {
@@ -259,17 +299,19 @@ function PreJoinGate({
         />
       )
     default:
-      return <PreJoinScreen roomId={roomId} summary={summary} onJoin={onJoin} />
+      return <PreJoinScreen roomId={roomId} summary={summary} problem={problem} onJoin={onJoin} />
   }
 }
 
 function PreJoinScreen({
   roomId,
   summary,
+  problem,
   onJoin,
 }: {
   roomId: string
   summary: Summary
+  problem: PasswordProblem | null
   onJoin: (choices: JoinChoices) => void
 }) {
   const [name, setName] = useState(loadName)
@@ -279,6 +321,7 @@ function PreJoinScreen({
   const preview = useLocalPreview({ mic, cam, micId: devices.mic, camId: devices.cam })
   const level = useMicLevel(preview.stream)
   const [speakerSupported] = useState(canChooseSpeaker)
+  const passwordField = usePasswordField(roomId, summary.password, problem)
 
   return (
     <PreJoin
@@ -314,22 +357,75 @@ function PreJoinScreen({
       micProblem={preview.micProblem}
       camProblem={preview.camProblem}
       onRetry={preview.retry}
+      password={passwordField}
       onJoin={() => {
         const normalized = normalizeName(name)
-        if (normalized) onJoin({ name: normalized, mic, cam, devices })
+        const password = passwordField ? normalizePassword(passwordField.value) : null
+        if (!normalized || (passwordField && password === null)) return
+        // Kept in this tab (sessionStorage) for 「複製含密碼的連結」; the room confirms it
+        if (password !== null) saveKnownPassword(roomId, { password, setAt: null })
+        onJoin({ name: normalized, mic, cam, devices, password })
       }}
     />
   )
+}
+
+/**
+ * The pre-join screen's password field (F3, e1-t15): shown when the room has a password or did
+ * not take ours; filled from the link's ?pwd= or what this tab knew; after too many wrong tries
+ * it counts down and joining waits.
+ */
+function usePasswordField(
+  roomId: string,
+  roomHasPassword: boolean,
+  problem: PasswordProblem | null,
+): PasswordFieldProps | null {
+  const [fromLink] = useState(() => linkPassword(roomId))
+  const [value, setValue] = useState(() => fromLink ?? loadKnownPassword(roomId)?.password ?? '')
+  const [edited, setEdited] = useState(false)
+  const [now, setNow] = useState(Date.now)
+  const waitUntil = problem?.kind === 'wait' ? problem.until : null
+  useEffect(() => {
+    if (waitUntil === null) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [waitUntil])
+  if (!roomHasPassword && problem === null) return null
+  const waitSeconds = waitUntil === null ? 0 : Math.max(0, Math.ceil((waitUntil - now) / 1000))
+  const invalid = edited && value.trim() !== '' && normalizePassword(value) === null
+  const error = invalid
+    ? strings.prejoin.passwordInvalid
+    : waitSeconds > 0
+      ? strings.prejoin.passwordWait(waitSeconds)
+      : !edited && problem?.kind === 'wrong'
+        ? strings.prejoin.passwordWrong
+        : null
+  return {
+    value,
+    onChange: (next) => {
+      setValue(next)
+      setEdited(true)
+    },
+    hint:
+      fromLink !== null && value === fromLink
+        ? strings.prejoin.passwordFromLink
+        : strings.prejoin.passwordNeeded,
+    error,
+    waiting: waitSeconds > 0,
+  }
 }
 
 function Room({
   roomId,
   choices,
   onLeft,
+  onPasswordRefused,
 }: {
   roomId: string
   choices: JoinChoices
   onLeft: (reason: LeftReason | TurnedAwayReason, roomName: string) => void
+  /** The room did not take our password (F3): back to the pre-join screen, which says why */
+  onPasswordRefused: (problem: PasswordProblem) => void
 }) {
   const {
     state,
@@ -340,7 +436,7 @@ function Room({
     onError,
     onNotice: onHostControl,
     sendChat,
-  } = useRoomConnection(roomId, choices.name)
+  } = useRoomConnection(roomId, choices.name, choices.password)
   const toasts = useToasts()
   const { show } = toasts
   const roomInfo = state.view?.room ?? null
@@ -373,16 +469,35 @@ function Room({
   useEffect(() => {
     if (gone) onGone()
   }, [gone])
+  // We ended the meeting ourselves (F3): the after-leave screen says so
+  const endingSelf = useRef(false)
   const onOutcome = useEffectEvent((reason: NonNullable<typeof outcome>) => {
     clearSession(roomId)
-    onLeft(reason, title)
+    onLeft(reason === 'ended' && endingSelf.current ? 'endedSelf' : reason, title)
   })
   useEffect(() => {
     if (outcome) onOutcome(outcome)
   }, [outcome])
+  // The room did not take our password (F3): the pre-join screen asks again
+  const onPasswordProblem = useEffectEvent(() => {
+    clearSession(roomId)
+    onPasswordRefused(
+      state.status === 'passwordWait'
+        ? { kind: 'wait', until: state.passwordWaitUntil ?? Date.now() }
+        : { kind: state.status === 'passwordWrong' ? 'wrong' : 'required' },
+    )
+  })
+  const passwordRefused =
+    state.status === 'passwordRequired' ||
+    state.status === 'passwordWrong' ||
+    state.status === 'passwordWait'
+  useEffect(() => {
+    if (passwordRefused) onPasswordProblem()
+  }, [passwordRefused])
   const self = state.you ? state.view?.members[state.you] : undefined
   const role: Role = self?.role ?? 'participant'
-  useHostNotice(self?.role, show)
+  // A handover's notice says who gave us the role (F3): the generic 「你現在是主持人」 stays quiet
+  const announceHost = useHostNotice(self?.role, show)
   useEffect(() => {
     document.title = `${title} · ${strings.appName}`
     return () => {
@@ -418,11 +533,30 @@ function Room({
   const [webShare] = useState(canWebShare)
   const [screenShareSupported] = useState(canShareScreen)
   const link = roomUrl(roomId)
-  const onLinkOutcome = (outcome: LinkOutcome) => {
-    if (outcome === 'copied') show(strings.topBar.copied)
-    else if (outcome === 'failed') show(strings.topBar.copyFailed(link), 'warn')
+  // The room's password (F3, e1-t15): what this tab knows of it, for the link with it
+  const passwordSetAt = roomInfo?.passwordSetAt
+  const knownPassword = useKnownPassword(roomId, state.view ? (passwordSetAt ?? null) : undefined)
+  const roomHasPassword = passwordSetAt != null
+  const onLinkOutcome = (outcome: LinkOutcome, url: string = link, copied?: string) => {
+    if (outcome === 'copied') {
+      show(copied ?? (roomHasPassword ? strings.password.copiedWithout : strings.topBar.copied))
+    } else if (outcome === 'failed') show(strings.topBar.copyFailed(url), 'warn')
   }
+  const passwordLink =
+    knownPassword.current === null ? null : linkWithPassword(link, knownPassword.current)
   const moreItems: MenuItem[] = [
+    ...(passwordLink
+      ? [
+          {
+            id: 'copy-with-password',
+            label: strings.password.copyWith,
+            onSelect: () =>
+              void copyRoomLink(passwordLink, title, strings.share.text).then((outcome) =>
+                onLinkOutcome(outcome, passwordLink, strings.password.copiedWith),
+              ),
+          },
+        ]
+      : []),
     ...(webShare
       ? [
           {
@@ -557,6 +691,17 @@ function Room({
       case 'shareStopped':
         show(strings.hostNotice.shareStopped(who), 'warn')
         return
+      // F3 (e1-t16)
+      case 'madeCohost':
+        show(strings.hostNotice.madeCohost(who))
+        return
+      case 'cohostRevoked':
+        show(strings.hostNotice.cohostRevoked(who))
+        return
+      case 'madeHost':
+        announceHost()
+        show(strings.hostNotice.madeHost(who))
+        return
     }
   })
   useEffect(() => onHostControl((notice) => onHostNotice(notice)), [onHostControl])
@@ -571,7 +716,36 @@ function Room({
     send({ t: 'host', action: 'muteAll' })
     show(strings.participants.mutedAll)
   }
-  const onEndMeeting = () => send({ t: 'host', action: 'endMeeting' })
+  const onEndMeeting = () => {
+    endingSelf.current = true
+    send({ t: 'host', action: 'endMeeting' })
+  }
+  // Co-hosts and handing over (F3, e1-t16): RoomDO decides (worker/roles.ts)
+  const onRole = (change: RoleChange, memberId: string) => {
+    const name = viewMembers?.[memberId]?.name ?? ''
+    if (change === 'makeHost') {
+      send({ t: 'host', action: 'makeHost', memberId })
+      show(strings.participants.madeHost(name))
+      return
+    }
+    const on = change === 'makeCohost'
+    send({ t: 'host', action: 'setCohost', memberId, on })
+    show(on ? strings.participants.madeCohost(name) : strings.participants.revokedCohost(name))
+  }
+  // The room's password (F3, e1-t15): only the host; RoomDO keeps a digest
+  const [passwordDialog, setPasswordDialog] = useState(false)
+  const onSavePassword = (password: string | null) => {
+    send({ t: 'host', action: 'setPassword', password })
+    knownPassword.remember(password)
+    setPasswordDialog(false)
+    show(
+      password === null
+        ? strings.participants.passwordClearedNow
+        : strings.participants.passwordSetNow,
+    )
+  }
+  // A host pressing 離開 (F3, e1-t17): only me (and who takes over), or end for everyone
+  const [leaving, setLeaving] = useState(false)
   // The lock and the waiting room (F2): RoomDO decides (worker/roles.ts)
   const waitingList = waitingQueue(state.view?.waiting)
   const canAdmit = can(role, 'admit')
@@ -668,8 +842,21 @@ function Room({
     media.error !== 'unauthorized'
   const mediaProblem = mediaLost ? null : mediaErrorText(media.error)
   const selfReconnecting = state.status === 'reconnecting' || media.status === 'reconnecting'
+  // Who could take over from us: connected members in the meeting, the room's own pick first
+  const successors = members
+    .filter((member) => member.id !== state.you && !member.reconnecting)
+    .sort((a, b) => successorOrder(a) - successorOrder(b) || a.joinedAt - b.joinedAt)
   const onLeave = () => {
+    if (role === 'host' && successors.length > 0) {
+      setLeaving(true)
+      return
+    }
     leave()
+    onLeft('left', title)
+  }
+  const leaveAs = (host?: string) => {
+    setLeaving(false)
+    leave(host)
     onLeft('left', title)
   }
   const remoteAudio = (member: (typeof members)[number]) => {
@@ -717,6 +904,9 @@ function Room({
       onAdmit={onAdmit}
       onDeny={onDeny}
       onAdmitAll={onAdmitAll}
+      passwordSet={roomHasPassword}
+      onPassword={() => setPasswordDialog(true)}
+      onRole={onRole}
     />
   )
   const shareTile =
@@ -895,6 +1085,27 @@ function Room({
           onCancel={screenShare.cancel}
         />
       )}
+      {passwordDialog && (
+        <PasswordDialog
+          hasPassword={roomHasPassword}
+          current={knownPassword.current}
+          onSave={onSavePassword}
+          onClear={() => onSavePassword(null)}
+          onCancel={() => setPasswordDialog(false)}
+        />
+      )}
+      {leaving && successors.length > 0 && (
+        <LeaveDialog
+          candidates={successors}
+          automatic={successors[0].id}
+          onLeave={(host) => leaveAs(host === successors[0].id ? undefined : host)}
+          onEnd={() => {
+            setLeaving(false)
+            onEndMeeting()
+          }}
+          onCancel={() => setLeaving(false)}
+        />
+      )}
       {renaming === 'room' && (
         <NameDialog
           title={strings.rename.room}
@@ -967,13 +1178,26 @@ function roomTitle(roomId: string, info: Pick<RoomInfo, 'name' | 'createdBy'> | 
   return strings.room.title(roomId)
 }
 
-/** "You are the host now" when the role comes to us from someone else (AC-1.3's handoff) */
-function useHostNotice(role: Role | undefined, show: (text: string) => void) {
+/** Who the room hands the host role to first (AC-1.3, F3): a co-host, then anyone */
+const successorOrder = (member: { role: Role }) => (member.role === 'cohost' ? 0 : 1)
+
+/**
+ * "You are the host now" when the role comes to us from someone else (AC-1.3's handoff); not
+ * when a handover's notice already said who gave it (F3): call the returned function then
+ */
+function useHostNotice(role: Role | undefined, show: (text: string) => void): () => void {
   const previous = useRef(role)
+  const announced = useRef(false)
   useEffect(() => {
-    if (role === 'host' && previous.current === 'participant') show(strings.room.youAreHost)
+    const before = previous.current
     previous.current = role
+    if (role !== 'host' || (before !== 'participant' && before !== 'cohost')) return
+    if (announced.current) announced.current = false
+    else show(strings.room.youAreHost)
   }, [role, show])
+  return useCallback(() => {
+    announced.current = true
+  }, [])
 }
 
 /**
@@ -1169,6 +1393,10 @@ function statusText({ status, view }: RoomConnectionState): string {
     case 'denied':
     case 'waitExpired':
     case 'waiting':
+    // Back to the pre-join screen at once (F3)
+    case 'passwordRequired':
+    case 'passwordWrong':
+    case 'passwordWait':
       return strings.room.connecting
     case 'open':
       return strings.room.memberCount(Object.keys(view?.members ?? {}).length)

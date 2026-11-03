@@ -415,9 +415,12 @@ describe('host controls in the room (F1, e1-t07, e1-t08)', () => {
     fireEvent.click(within(panel).getByRole('button', { name: '全員靜音' }))
     expect(socket.sent.at(-1)).toBe('{"t":"host","action":"muteAll"}')
     expect(screen.getByText('已將所有人靜音')).toBeInTheDocument()
-    // Wei publishes nothing: only removing applies
+    // Wei publishes nothing and is reconnecting: only the co-host role and removing apply
     fireEvent.click(within(panel).getByRole('button', { name: '對 Wei 的動作' }))
-    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['移出會議室'])
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      '設為共同主持人',
+      '移出會議室',
+    ])
     fireEvent.click(screen.getByRole('menuitem', { name: '移出會議室' }))
     const ask = screen.getByRole('alertdialog', { name: '把 Wei 移出會議室？' })
     fireEvent.click(within(ask).getByRole('button', { name: '移出' }))

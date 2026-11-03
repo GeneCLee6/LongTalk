@@ -12,9 +12,10 @@ export interface LeftScreenProps {
   /**
    * `left`: the person pressed 「離開」 (rejoin offered); `closed`: the room closed while they were
    * away from it; `ended`: the host ended the meeting; `removed`: the host removed them, or their
-   * browser is still banned (F1). Nothing to rejoin but after `left`.
+   * browser is still banned (F1); `endedSelf`: we ended it for everyone (F3). Nothing to rejoin
+   * but after `left`.
    */
-  reason: 'left' | 'closed' | 'ended' | 'removed'
+  reason: 'left' | 'closed' | 'ended' | 'endedSelf' | 'removed'
   /** The room's name as the top bar showed it */
   roomName: string
   /** The one question's answer, given at most once (the page sends it as telemetry) */
@@ -35,12 +36,14 @@ export function LeftScreen({ reason, roomName, onRate, onRejoin, onHome }: LeftS
     left: text.title,
     closed: text.closedTitle,
     ended: text.endedTitle,
+    endedSelf: text.endedSelfTitle,
     removed: text.removedTitle,
   }[reason]
   const body = {
     left: text.body(roomName),
     closed: text.closedBody,
     ended: text.endedBody(roomName),
+    endedSelf: text.endedSelfBody(roomName),
     removed: text.removedBody(roomName),
   }[reason]
   const rate = (score: RatingScore) => {

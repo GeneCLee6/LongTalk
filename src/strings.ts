@@ -55,6 +55,14 @@ export const strings = {
     loadFailed: '讀不到這間會議室的資訊，仍然可以試著加入。',
     // The room has its waiting room on (F2)
     waitingRoom: '這間會議室開了等候室：加入後，要等主持人讓你進來。',
+    // The room's password (F3, e1-t15)
+    passwordLabel: '會議室密碼',
+    passwordPlaceholder: '主持人給你的密碼',
+    passwordNeeded: '這間會議室有密碼，請輸入主持人給你的密碼。',
+    passwordFromLink: '已從連結帶入密碼。',
+    passwordWrong: '密碼不對，請再試一次。',
+    passwordWait: (seconds: number) => `密碼錯太多次，請等 ${seconds} 秒再試。`,
+    passwordInvalid: '密碼是 4–12 個英文字母、數字或符號。',
   },
   room: {
     title: (roomId: string) => `會議室 ${roomId}`,
@@ -217,6 +225,47 @@ export const strings = {
     waitingArrived: (name: string) => `${name} 在等候室，等你放行`,
     waitingArrivedMany: (count: number) => `${count} 人在等候室，等你放行`,
     denied: (name: string) => `已拒絕 ${name}`,
+    // The room's password (F3, e1-t15), for the host
+    password: '會議室密碼',
+    passwordOff: '沒有密碼，有連結就能加入',
+    passwordOn: '已設定，新加入的人要輸入密碼',
+    passwordSet: '設定',
+    passwordChange: '變更',
+    passwordSetNow: '已設定會議室密碼',
+    passwordClearedNow: '已清除會議室密碼',
+    // Co-hosts and handing over (F3, e1-t16)
+    makeCohost: '設為共同主持人',
+    revokeCohost: '取消共同主持人',
+    makeHost: '設為主持人',
+    makeHostTitle: (name: string) => `把主持人交給 ${name}？`,
+    makeHostBody: (name: string) =>
+      `${name} 會成為主持人，可以結束會議、設定密碼、指定共同主持人；你會變成共同主持人。`,
+    makeHostConfirm: '交給對方',
+    madeCohost: (name: string) => `已將 ${name} 設為共同主持人`,
+    revokedCohost: (name: string) => `已取消 ${name} 的共同主持人`,
+    madeHost: (name: string) => `已把主持人交給 ${name}`,
+  },
+  // The room's password dialog (F3, e1-t15), for the host
+  password: {
+    setTitle: '設定會議室密碼',
+    changeTitle: '變更會議室密碼',
+    label: '密碼',
+    hint: '4–12 個英文字母、數字或符號，大小寫有分。已經在會議室裡的人不受影響。',
+    invalid: '密碼是 4–12 個英文字母、數字或符號（不能有空白）。',
+    save: '儲存',
+    clear: '清除密碼',
+    copyWith: '複製含密碼的連結',
+    copiedWith: '已複製含密碼的連結，對方點了就能加入',
+    copiedWithout: '已複製會議室連結（不含密碼），對方加入時要輸入密碼',
+  },
+  // A host pressing 「離開」 (F3, e1-t17)
+  leave: {
+    title: '要離開會議嗎？',
+    body: '你是主持人。可以只有你離開、把主持人交給別人，也可以替所有人結束會議。',
+    nextHost: '誰接手主持人',
+    nextHostAuto: (name: string) => `${name}（自動）`,
+    justMe: '只有我離開',
+    endForAll: '結束會議（所有人）',
   },
   // What the person acted on sees (F1, AC-1.4): a toast that says who did what
   hostNotice: {
@@ -226,6 +275,10 @@ export const strings = {
     mutedAll: (actor: string) => `${actor} 將所有人靜音了。要說話時，請自己打開麥克風。`,
     camOff: (actor: string) => `${actor} 關閉了你的鏡頭。要開鏡頭時，請自己再打開。`,
     shareStopped: (actor: string) => `${actor} 停止了你的分享畫面。`,
+    // F3 (e1-t16)
+    madeCohost: (actor: string) => `${actor} 把你設為共同主持人。`,
+    cohostRevoked: (actor: string) => `${actor} 取消了你的共同主持人。`,
+    madeHost: (actor: string) => `${actor} 把主持人交給你了，你現在是主持人。`,
   },
   // Screen sharing (D1: e3-t01 – e3-t03, e3-t05)
   screenShare: {
@@ -356,6 +409,9 @@ export const strings = {
     // The host ended the meeting (F1)
     endedTitle: '主持人已結束會議',
     endedBody: (room: string) => `「${room}」已經結束，會議室也關閉了。`,
+    // We ended it ourselves (F3, e1-t17)
+    endedSelfTitle: '你已結束會議',
+    endedSelfBody: (room: string) => `「${room}」已經結束，所有人都離開了，會議室也關閉了。`,
     // The host removed us, or this browser is still banned (F1)
     removedTitle: '你已被移出會議室',
     removedBody: (room: string) =>

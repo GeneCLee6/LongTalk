@@ -5,6 +5,7 @@ import {
   CloseCode,
   DENY_COOLDOWN_MS,
   EMPTY_ROOM_TTL_MS,
+  ENDED_TOMBSTONE_MS,
   HEARTBEAT_PING,
   HOST_HANDOFF_MS,
   JOIN_TIMEOUT_MS,
@@ -20,6 +21,7 @@ import {
   viewAsJson,
   waitingQueue,
   type HostMessage,
+  type JoinMessage,
   type LobbyMessage,
   type Member,
   type MemberTrack,
@@ -40,6 +42,13 @@ import {
   RELAY_OVERHEAD,
   type UsageState,
 } from '../shared/usage.ts'
+import {
+  PasswordGuard,
+  hashPassword,
+  verifyPassword,
+  type GuessRecord,
+  type PasswordRecord,
+} from './password.ts'
 import { authorize, type Action } from './roles.ts'
 import { Scheduler, type Schedule } from './scheduler.ts'
 
@@ -122,15 +131,39 @@ const HOST_RULE: Readonly<Record<HostMessage['action'], Action>> = {
   admit: 'admit',
   admitAll: 'admit',
   deny: 'admit',
+  setPassword: 'setPassword',
+  setCohost: 'setCohost',
+  makeHost: 'makeHost',
 }
 
 const NO_CONNS: ReadonlySet<string> = new Set()
 
+/** Who takes the host role first (AC-1.3, F3): a co-host before anyone else, then who joined first */
+const before = (a: Member, b: Member): boolean =>
+  a.role === 'cohost' && b.role !== 'cohost'
+    ? true
+    : a.role !== 'cohost' && b.role === 'cohost'
+      ? false
+      : a.joinedAt < b.joinedAt
+
 /** The kinds only the member holding the share may list (D1) */
 const SCREEN_KINDS: ReadonlySet<TrackKind> = new Set(['screen', 'screenAudio'])
 
-/** A live socket the adapter found when it woke up */
-export type OpenSocket = { conn: string; openedAt: number }
+/**
+ * A live socket the adapter found when it woke up. `ip`: its network address as
+ * worker/password.ts addressKey keeps it (never the address itself), for the guess limit (F3)
+ */
+export type OpenSocket = { conn: string; openedAt: number; ip?: string | null }
+
+/** What else survives the object being evicted (F3) */
+export type RestoreExtras = {
+  /** The room's password, as a salted digest */
+  password?: PasswordRecord | null
+  /** Wrong password guesses still counting */
+  guesses?: readonly GuessRecord[]
+  /** Until when a meeting that was ended answers CloseCode.ended */
+  endedUntil?: number | null
+}
 
 /** What survives the object being evicted */
 export interface RoomStorage {
@@ -147,6 +180,12 @@ export interface RoomStorage {
   dropChat(id: number): void
   /** The banned browsers (F1), saved whenever the list changes */
   saveBans(bans: Ban[]): void
+  /** The room's password as a salted digest, or null for none (F3) */
+  savePassword(record: PasswordRecord | null): void
+  /** Wrong password guesses still counting (F3), saved whenever they change */
+  saveGuesses(guesses: GuessRecord[]): void
+  /** Until when an ended meeting answers CloseCode.ended (F3); saved after `clear` */
+  saveEnded(until: number): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -179,6 +218,10 @@ type Connection = {
   member: string | null
   openedAt: number
   lastSeen: number
+  /** Its network address as addressKey keeps it (F3), null when unknown */
+  ip: string | null
+  /** Its `join` waits for the password check (F3): another `join` is refused meanwhile */
+  joining: boolean
 }
 
 type Session = {
@@ -235,6 +278,14 @@ export class RoomHost {
   private readonly bans = new Map<string, { until: number; kind: BanKind }>()
   /** The `lobby` each waiting member was sent last (F2), to send it only when it changes */
   private readonly lobbies = new Map<string, string>()
+  /** The room's password as a salted digest (F3); null for none */
+  private password: PasswordRecord | null = null
+  /** Counts `setPassword` calls, so a slower digest never overwrites a newer password */
+  private passwordSeq = 0
+  /** The wrong-guess limit (F3, AC-1.8) */
+  private guard = new PasswordGuard()
+  /** Until when this ended meeting answers CloseCode.ended (F3); null otherwise */
+  private endedUntil: number | null = null
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -255,6 +306,7 @@ export class RoomHost {
     schedule: Schedule | null = null,
     chat: readonly ChatMessage[] = [],
     bans: readonly Ban[] = [],
+    extras: RestoreExtras = {},
   ): void {
     // Rooms stored before v6 have no name, creator or start time
     this.info = info
@@ -265,9 +317,17 @@ export class RoomHost {
           share: null,
           locked: false,
           waitingRoom: false,
+          passwordSetAt: null,
           ...info,
         }
       : null
+    this.password = info ? (extras.password ?? null) : null
+    // A room stored with a password time but no digest (never expected): no password
+    if (this.info && this.password === null && this.info.passwordSetAt !== null) {
+      this.info = { ...this.info, passwordSetAt: null }
+    }
+    this.guard = new PasswordGuard(extras.guesses ?? [])
+    this.endedUntil = info ? null : (extras.endedUntil ?? null)
     this.rev = rev
     this.schedule = new Scheduler(schedule)
     this.storedSchedule = JSON.stringify(this.schedule)
@@ -288,8 +348,14 @@ export class RoomHost {
     this.reported = 0
     this.usage = usage?.state ?? 'normal'
     this.usageAt = usage?.at ?? this.deps.now()
-    for (const { conn, openedAt } of sockets) {
-      this.conns.set(conn, { member: null, openedAt, lastSeen: openedAt })
+    for (const { conn, openedAt, ip } of sockets) {
+      this.conns.set(conn, {
+        member: null,
+        openedAt,
+        lastSeen: openedAt,
+        ip: ip ?? null,
+        joining: false,
+      })
     }
     for (const record of sessions) {
       // Members stored by protocol v2 have no tracks, by v3 no `muted`, by v5 no role
@@ -312,7 +378,11 @@ export class RoomHost {
     const share = this.info?.share
     if (share && !this.members.has(share.memberId)) this.info = { ...this.info!, share: null }
     this.sent = info ? this.view() : null
-    if (!info) return
+    if (!info) {
+      // An ended meeting's tombstone (F3) keeps its job; a stale one goes at the next alarm
+      if (this.endedUntil !== null) this.schedule.set('ended', this.endedUntil)
+      return
+    }
     const now = this.deps.now()
     for (const [id, session] of this.sessions) {
       const conn = session.conn === null ? undefined : this.conns.get(session.conn)
@@ -350,7 +420,8 @@ export class RoomHost {
    * closes like an empty one, EMPTY_ROOM_TTL_MS later.
    */
   create(init: RoomInit): boolean {
-    if (this.info) return false
+    // An ended meeting's id is not handed out again while its tombstone lasts (F3)
+    if (this.info || this.ended) return false
     this.info = {
       ...init,
       name: null,
@@ -359,6 +430,7 @@ export class RoomHost {
       share: null,
       locked: false,
       waitingRoom: false,
+      passwordSetAt: null,
     }
     this.deps.storage.saveRoom(this.info)
     this.usageAt = this.deps.now()
@@ -390,6 +462,13 @@ export class RoomHost {
         this.pruneBans()
       } else if (job === 'waiting') {
         this.expireWaiting()
+      } else if (job === 'guesses') {
+        if (this.guard.prune(this.deps.now())) this.saveGuesses()
+      } else if (job === 'ended' && !this.info) {
+        // The ended meeting's tombstone ran out (F3): from now on its id is simply not found
+        this.endedUntil = null
+        this.deps.storage.clear()
+        return result
       } else if (job === 'close' && this.info && !this.active) {
         this.close()
         result.closed = true
@@ -410,16 +489,26 @@ export class RoomHost {
     if (version !== String(PROTOCOL_VERSION)) {
       return { ok: false, code: CloseCode.versionMismatch, reason: 'protocol version mismatch' }
     }
+    // A member coming back to a meeting the host ended learns it ended, not that it is gone (F3)
+    if (!this.info && this.ended) return { ok: false, code: CloseCode.ended, reason: 'ended' }
     if (!this.info) return { ok: false, code: CloseCode.roomNotFound, reason: 'room not found' }
     if (this.conns.size >= MAX_MEMBERS + MAX_PENDING_SOCKETS)
       return { ok: false, code: CloseCode.roomFull, reason: 'room full' }
     return { ok: true }
   }
 
-  /** An admitted socket is live; it has JOIN_TIMEOUT_MS to send `join` */
-  opened(connId: string): void {
+  /** Whether the host ended this meeting less than ENDED_TOMBSTONE_MS ago (F3) */
+  get ended(): boolean {
+    return this.endedUntil !== null && this.endedUntil > this.deps.now()
+  }
+
+  /**
+   * An admitted socket is live; it has JOIN_TIMEOUT_MS to send `join`. `ip` is its network
+   * address as worker/password.ts addressKey keeps it (null when unknown)
+   */
+  opened(connId: string, ip: string | null = null): void {
     const now = this.deps.now()
-    this.conns.set(connId, { member: null, openedAt: now, lastSeen: now })
+    this.conns.set(connId, { member: null, openedAt: now, lastSeen: now, ip, joining: false })
     this.reschedule()
   }
 
@@ -439,22 +528,24 @@ export class RoomHost {
     this.publish()
   }
 
-  /** A text frame on a connection */
-  message(connId: string, raw: string): void {
+  /**
+   * A text frame on a connection. Returns a promise only while a `join` waits for the password
+   * check or a `setPassword` for its digest (F3); the adapter awaits it.
+   */
+  message(connId: string, raw: string): void | Promise<void> {
     const conn = this.conns.get(connId)
     if (!conn) return
     this.heartbeat(connId, this.deps.now())
     if (raw === HEARTBEAT_PING) return
     const message = parseClientMessage(raw)
-    // Before `join` nothing else is accepted, and `join` only once
-    if (!message || (conn.member === null) !== (message.t === 'join')) {
+    // Before `join` nothing else is accepted, and `join` only once (also while one is checked)
+    if (!message || (conn.member === null) !== (message.t === 'join') || conn.joining) {
       this.deps.sockets.send(connId, { t: 'error', code: 'bad_message' })
       return
     }
     switch (message.t) {
       case 'join':
-        this.join(connId, message.name, message.token, message.client)
-        return
+        return this.join(connId, message)
       case 'resync':
         // Someone waiting never gets the view (F2): its lobby again instead
         if (this.isWaiting(conn.member!)) {
@@ -469,6 +560,8 @@ export class RoomHost {
         })
         return
       case 'leave':
+        // A host leaving may name who takes over (F3, e1-t17); assignHost decides otherwise
+        if (message.host !== undefined) this.handOver(conn.member!, message.host)
         this.conns.delete(connId)
         this.remove(conn.member!)
         this.deps.sockets.close(connId, 1000, 'left')
@@ -497,8 +590,7 @@ export class RoomHost {
         this.addChat(connId, conn.member!, message.text)
         return
       case 'host':
-        this.control(connId, conn.member!, message)
-        return
+        return this.control(connId, conn.member!, message)
     }
   }
 
@@ -515,13 +607,25 @@ export class RoomHost {
    * refused with `forbidden`. A target that already left is refused the same way (the panel
    * that showed it is out of date).
    */
-  private control(connId: string, memberId: string, message: HostMessage): void {
+  private control(connId: string, memberId: string, message: HostMessage): void | Promise<void> {
     const targetId = 'memberId' in message ? message.memberId : null
     if (!this.allowed(memberId, HOST_RULE[message.action], targetId)) {
       this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
       return
     }
     switch (message.action) {
+      case 'setPassword':
+        return this.setPassword(message.password)
+      case 'setCohost':
+        this.setCohost(memberId, message.memberId, message.on)
+        return
+      case 'makeHost':
+        if (!this.handOver(memberId, message.memberId)) {
+          this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+          return
+        }
+        this.publish()
+        return
       case 'lock':
         this.setRoom({ locked: message.on })
         return
@@ -573,11 +677,56 @@ export class RoomHost {
     }
   }
 
-  /** Changes the room's switches (F2) and tells everyone */
-  private setRoom(changes: Partial<Pick<RoomInfo, 'locked' | 'waitingRoom'>>): void {
+  /** Changes the room's switches (F2) or password time (F3) and tells everyone */
+  private setRoom(changes: Partial<Pick<RoomInfo, 'locked' | 'waitingRoom' | 'passwordSetAt'>>) {
     this.info = { ...this.info!, ...changes }
     this.deps.storage.saveRoom(this.info)
     this.publish()
+  }
+
+  /**
+   * `setPassword` (F3, e1-t15): a new password (already normalized), kept as a salted digest, or
+   * none (null). Who is in the room or waiting stays; only someone new is asked for it. When two
+   * arrive close together the later one wins even if its digest is ready first.
+   */
+  private async setPassword(password: string | null): Promise<void> {
+    const seq = ++this.passwordSeq
+    const record = password === null ? null : await hashPassword(password)
+    if (seq !== this.passwordSeq || !this.info) return
+    this.password = record
+    this.deps.storage.savePassword(record)
+    this.setRoom({ passwordSetAt: record === null ? null : this.deps.now() })
+  }
+
+  /** Whether `memberId` is in the meeting and connected: someone who can take a role (F3) */
+  private present(memberId: string): boolean {
+    const member = this.members.get(memberId)
+    return !!member && member.role !== 'waiting' && !member.reconnecting
+  }
+
+  /**
+   * `setCohost` (F3, e1-t16): a participant becomes a co-host (`on`) or a co-host a participant
+   * again; nothing else changes. The member is told first (`notice`), then everyone sees it.
+   */
+  private setCohost(by: string, memberId: string, on: boolean): void {
+    const member = this.members.get(memberId)
+    if (!member || member.role !== (on ? 'participant' : 'cohost')) return
+    this.notify(memberId, { t: 'notice', notice: on ? 'madeCohost' : 'cohostRevoked', by })
+    this.setMember(memberId, { role: on ? 'cohost' : 'participant' })
+    this.publish()
+  }
+
+  /**
+   * `makeHost` (F3, e1-t16), or a host leaving with `leave.host` (e1-t17): `to` becomes the host
+   * and `from` a co-host. Only from the host (worker/roles.ts `makeHost`) to a connected member
+   * in the meeting; false otherwise. The new host is told first; the caller publishes.
+   */
+  private handOver(from: string, to: string): boolean {
+    if (!this.allowed(from, 'makeHost', to) || !this.present(to)) return false
+    this.notify(to, { t: 'notice', notice: 'madeHost', by: from })
+    this.setMember(from, { role: 'cohost' })
+    this.setMember(to, { role: 'host' })
+    return true
   }
 
   private isWaiting(memberId: string): boolean {
@@ -779,6 +928,13 @@ export class RoomHost {
     }
     this.conns.clear()
     this.close()
+    // The tombstone (F3, e1-t17): a member whose connection had dropped comes back to 「主持人已
+    // 結束會議」, not to 「這間會議室已經關閉」. Persistent rooms keeping their settings is e1-t13.
+    this.endedUntil = this.deps.now() + ENDED_TOMBSTONE_MS
+    this.deps.storage.saveEnded(this.endedUntil)
+    this.schedule.set('ended', this.endedUntil)
+    this.storedSchedule = JSON.stringify(this.schedule)
+    this.deps.storage.saveSchedule(this.schedule.toJSON())
   }
 
   /**
@@ -1097,20 +1253,91 @@ export class RoomHost {
    * `join` on a connection: a token the room knows brings back its member (taking it over from
    * another connection still holding it), anything else makes a new member if there is room. A
    * banned browser (F1) is closed with CloseCode.removed.
+   *
+   * The order (F3): a ban; a token the room knows (no lock, no password asked again); the lock
+   * (a locked room tells nobody whether a password is right); the password; the waiting room.
+   * Checking the password waits for its digest: the join finishes then, if the socket is still
+   * there, checking the ban and the lock again.
    */
-  private join(connId: string, name: string, token: string | null, client: string | null): void {
+  private join(connId: string, message: JoinMessage): void | Promise<void> {
+    const { token, client } = message
+    const known = token === null ? undefined : this.byToken.get(token)
+    if (!this.mayJoin(connId, client, known)) return
+    const record = this.password
+    if (known !== undefined || record === null) {
+      this.enter(connId, message, known)
+      return
+    }
+    const keys = this.guessKeys(connId, client)
+    const now = this.deps.now()
+    const waitUntil = this.guard.waitUntil(keys, now)
+    if (waitUntil !== null) {
+      this.refuse(connId, CloseCode.passwordWait, String(waitUntil - now))
+      return
+    }
+    const password = message.password ?? null
+    if (password === null) {
+      this.refuse(connId, CloseCode.passwordRequired, 'password required')
+      return
+    }
+    const conn = this.conns.get(connId)!
+    conn.joining = true
+    return verifyPassword(password, record).then((right) => {
+      conn.joining = false
+      if (this.conns.get(connId) !== conn || !this.info) return
+      // The host changed the password meanwhile: this guess was against the old one
+      if (this.password !== record) {
+        this.refuse(connId, CloseCode.passwordWrong, 'password changed')
+        return
+      }
+      const at = this.deps.now()
+      if (!right) {
+        const until = this.guard.fail(keys, at)
+        this.saveGuesses()
+        if (until !== null) this.refuse(connId, CloseCode.passwordWait, String(until - at))
+        else this.refuse(connId, CloseCode.passwordWrong, 'wrong password')
+        return
+      }
+      if (this.guard.waitUntil(keys, at) === null && keys.length > 0) {
+        this.guard.succeed(keys)
+        this.saveGuesses()
+      }
+      if (this.mayJoin(connId, client, undefined)) this.enter(connId, message, undefined)
+    })
+  }
+
+  /** What the guess limit counts a join against: its browser and its network address (F3) */
+  private guessKeys(connId: string, client: string | null): string[] {
+    const ip = this.conns.get(connId)?.ip ?? null
+    return [...(client === null ? [] : [`c:${client}`]), ...(ip === null ? [] : [`a:${ip}`])]
+  }
+
+  private saveGuesses(): void {
+    this.deps.storage.saveGuesses(this.guard.toJSON())
+  }
+
+  /**
+   * Whether a `join` may go on: not banned (F1), and the room is not locked to someone it does
+   * not know (F2); refuses the socket otherwise
+   */
+  private mayJoin(connId: string, client: string | null, known: string | undefined): boolean {
     const banned = this.banned(client)
     if (banned) {
       this.refuse(connId, banned === 'denied' ? CloseCode.denied : CloseCode.removed, banned)
-      return
+      return false
     }
-    const known = token === null ? undefined : this.byToken.get(token)
     // A locked room (F2) lets back in only who it knows: a member within its grace period, or
     // someone already waiting
     if (known === undefined && this.info!.locked) {
       this.refuse(connId, CloseCode.locked, 'locked')
-      return
+      return false
     }
+    return true
+  }
+
+  /** The `join` passed every check: the member it brings back (`known`), or a new one */
+  private enter(connId: string, message: JoinMessage, known: string | undefined): void {
+    const { name, client } = message
     let memberId: string
     if (known !== undefined) {
       memberId = known
@@ -1231,8 +1458,9 @@ export class RoomHost {
 
   /**
    * The host role (AC-1.3): the first member to join is the host. A host that left, or has been
-   * reconnecting for HOST_HANDOFF_MS, hands the role to the earliest-joined connected member; a
-   * host who comes back after that is a participant. While nobody is connected the role waits
+   * reconnecting for HOST_HANDOFF_MS, hands the role to the earliest-joined connected co-host
+   * (F3), else the earliest-joined connected member; a host who comes back after that is a
+   * participant. While nobody is connected the role waits
    * with the reconnecting host (or nobody), and goes to whoever connects first.
    */
   private assignHost(): void {
@@ -1245,10 +1473,7 @@ export class RoomHost {
         // Never two hosts (a defensive repair: nothing makes a second one)
         if (host) this.setMember(member.id, { role: 'participant' })
         else host = member
-      } else if (
-        !member.reconnecting &&
-        (candidate === null || member.joinedAt < candidate.joinedAt)
-      ) {
+      } else if (!member.reconnecting && (candidate === null || before(member, candidate))) {
         candidate = member
       }
     }
@@ -1301,6 +1526,10 @@ export class RoomHost {
     }
     if (waitEnds === null) this.schedule.clear('waiting')
     else this.schedule.set('waiting', waitEnds)
+    // The next wrong password guess to stop counting (F3); none, no job
+    const guessEnds = this.guard.nextExpiry()
+    if (guessEnds === null) this.schedule.clear('guesses')
+    else this.schedule.set('guesses', guessEnds)
     const stored = JSON.stringify(this.schedule)
     if (stored !== this.storedSchedule) {
       this.storedSchedule = stored
@@ -1326,6 +1555,10 @@ export class RoomHost {
     this.chatRate.clear()
     this.bans.clear()
     this.lobbies.clear()
+    this.password = null
+    // A digest still being made for this room is dropped when it is ready
+    this.passwordSeq++
+    this.guard.clear()
     this.schedule.clearAll()
     this.storedSchedule = '{}'
     this.deps.storage.clear()

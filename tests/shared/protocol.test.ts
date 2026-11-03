@@ -24,6 +24,7 @@ const state = {
     share: null,
     locked: false,
     waitingRoom: false,
+    passwordSetAt: null,
   },
   members: {
     m1: {

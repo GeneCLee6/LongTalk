@@ -32,7 +32,15 @@ export interface ParticipantsPanelProps {
   onAdmit?: (memberId: string) => void
   onDeny?: (memberId: string) => void
   onAdmitAll?: () => void
+  /** The room has a password (F3): the host's settings say so and open the password dialog */
+  passwordSet?: boolean
+  onPassword?: () => void
+  /** Co-hosts and handing over (F3, e1-t16); handing over asks first */
+  onRole?: (change: RoleChange, memberId: string) => void
 }
+
+/** What the host may change about someone's role (F3, e1-t16) */
+export type RoleChange = 'makeCohost' | 'revokeCohost' | 'makeHost'
 
 const noop = () => {}
 
@@ -55,6 +63,9 @@ const MEMBER_ACTIONS: readonly { action: HostMemberAction; label: string; danger
  * For a host or co-host (F2, e1-t09 – e1-t11) it also has the room's switches at the top (lock,
  * waiting room; turning the waiting room off with people in it asks first, since they all come
  * in) and, while anyone waits, 「等候中 N」 with 放行 / 拒絕 per person and 全部放行.
+ *
+ * For the host (F3, e1-t15, e1-t16): the room's password among the switches, and in each
+ * person's menu 設為／取消共同主持人 and 設為主持人 (asks first).
  */
 export function ParticipantsPanel({
   members,
@@ -71,9 +82,16 @@ export function ParticipantsPanel({
   onAdmit = noop,
   onDeny = noop,
   onAdmitAll = noop,
+  passwordSet = false,
+  onPassword = noop,
+  onRole = noop,
 }: ParticipantsPanelProps) {
   const [confirm, setConfirm] = useState<
-    { type: 'remove'; member: Member } | { type: 'end' } | { type: 'waitingOff' } | null
+    | { type: 'remove'; member: Member }
+    | { type: 'makeHost'; member: Member }
+    | { type: 'end' }
+    | { type: 'waitingOff' }
+    | null
   >(null)
   const role: Role = members.find((member) => member.id === you)?.role ?? 'participant'
   const sorted = [...members].sort(
@@ -87,6 +105,7 @@ export function ParticipantsPanel({
   const canLock = can(role, 'lockRoom')
   const canWaitingRoom = can(role, 'waitingRoom')
   const canAdmit = can(role, 'admit')
+  const canSetPassword = can(role, 'setPassword')
   const toggleWaitingRoom = () => {
     if (waitingRoom && waiting.length > 0) setConfirm({ type: 'waitingOff' })
     else onWaitingRoom(!waitingRoom)
@@ -102,20 +121,49 @@ export function ParticipantsPanel({
       stopShare: member.id === sharerId,
       remove: true,
     }
-    return MEMBER_ACTIONS.filter(
-      ({ action }) => applies[action] && canActOn(role, action, member.role, member.id === you),
-    ).map(({ action, label, danger }) => ({
+    const self = member.id === you
+    // Co-hosts and handing over (F3): only the host, never on oneself; handing over only to
+    // someone connected
+    const roles: MenuItem[] = []
+    if (canActOn(role, 'setCohost', member.role, self)) {
+      roles.push(
+        member.role === 'cohost'
+          ? {
+              id: 'revokeCohost',
+              label: text.revokeCohost,
+              onSelect: () => onRole('revokeCohost', member.id),
+            }
+          : {
+              id: 'makeCohost',
+              label: text.makeCohost,
+              onSelect: () => onRole('makeCohost', member.id),
+            },
+      )
+    }
+    if (canActOn(role, 'makeHost', member.role, self) && !member.reconnecting) {
+      roles.push({
+        id: 'makeHost',
+        label: text.makeHost,
+        onSelect: () => setConfirm({ type: 'makeHost', member }),
+      })
+    }
+    const controls = MEMBER_ACTIONS.filter(
+      ({ action }) => applies[action] && canActOn(role, action, member.role, self),
+    ).map(({ action, label, danger }): MenuItem => ({
       id: action,
       label,
       tone: danger ? 'danger' : 'neutral',
       onSelect: () =>
         action === 'remove' ? setConfirm({ type: 'remove', member }) : onAction(action, member.id),
     }))
+    // Removing stays last (the dangerous one)
+    const remove = controls.filter((item) => item.id === 'remove')
+    return [...controls.filter((item) => item.id !== 'remove'), ...roles, ...remove]
   }
 
   return (
     <Root>
-      {(canLock || canWaitingRoom) && (
+      {(canLock || canWaitingRoom || canSetPassword) && (
         <Settings aria-label={text.settings}>
           {canLock && (
             <Switch
@@ -132,6 +180,21 @@ export function ParticipantsPanel({
               on={waitingRoom}
               onToggle={toggleWaitingRoom}
             />
+          )}
+          {canSetPassword && (
+            <SwitchRow>
+              <SwitchText>
+                <Name>{text.password}</Name>
+                <Hint>{passwordSet ? text.passwordOn : text.passwordOff}</Hint>
+              </SwitchText>
+              <Button
+                variant="secondary"
+                aria-label={passwordSet ? strings.password.changeTitle : strings.password.setTitle}
+                onClick={onPassword}
+              >
+                {passwordSet ? text.passwordChange : text.passwordSet}
+              </Button>
+            </SwitchRow>
           )}
         </Settings>
       )}
@@ -258,6 +321,18 @@ export function ParticipantsPanel({
           onConfirm={() => {
             setConfirm(null)
             onAction('remove', confirm.member.id)
+          }}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
+      {confirm?.type === 'makeHost' && (
+        <ConfirmDialog
+          title={text.makeHostTitle(confirm.member.name)}
+          body={text.makeHostBody(confirm.member.name)}
+          confirmLabel={text.makeHostConfirm}
+          onConfirm={() => {
+            setConfirm(null)
+            onRole('makeHost', confirm.member.id)
           }}
           onCancel={() => setConfirm(null)}
         />
