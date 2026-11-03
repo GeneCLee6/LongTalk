@@ -1,3 +1,4 @@
+import { formatClock } from '../strings.ts'
 // Chat text in the browser (D3, e5-t02): finding links, deciding when Enter sends, and which
 // messages are unread. Pure, so Vitest runs them directly.
 import type { ChatMessage } from '../../shared/chat.ts'
@@ -116,8 +117,10 @@ export function countUnread(
 /** The newest message's id, or 0 */
 export const latestId = (messages: readonly ChatMessage[]): number => messages.at(-1)?.id ?? 0
 
-/** A message's time as the list shows it: 21:04 (24-hour, the browser's time zone) */
+/**
+ * A message's time as the list shows it, in the browser's time zone and the chosen language
+ * (G1, Intl): 21:04 in Chinese, 9:04 pm in Australian English
+ */
 export function chatTime(at: number): string {
-  const date = new Date(at)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  return formatClock(at)
 }

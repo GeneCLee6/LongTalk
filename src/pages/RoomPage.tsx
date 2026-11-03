@@ -45,6 +45,7 @@ import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
 import { ParticipantsPanel, type RoleChange } from '../components/ParticipantsPanel.tsx'
 import { PreJoin, type PasswordFieldProps } from '../components/PreJoin.tsx'
+import type { PermissionGuideProps } from '../components/PermissionGuide.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
 import { ShareTile } from '../components/ShareTile.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
@@ -69,7 +70,9 @@ import type { RoomConnectionState } from '../room/RoomConnection.ts'
 import type { DeviceNotice, LocalDevicesState, LocalKind } from '../room/LocalDevices.ts'
 import {
   clearSession,
+  loadDeviceLabels,
   loadDevices,
+  resolveDevice,
   loadName,
   loadPrefs,
   loadSession,
@@ -88,6 +91,10 @@ import { useReactions } from '../room/useReactions.ts'
 import { useHeldSpeaker } from '../room/useHeldSpeaker.ts'
 import { useLocalDevices } from '../room/useLocalDevices.ts'
 import { useLocalPreview } from '../room/useLocalPreview.ts'
+import { useMicSilence } from '../room/useMicSilence.ts'
+import { useMediaPermissions } from '../room/usePermissions.ts'
+import { useSpeakerTest } from '../room/useSpeakerTest.ts'
+import { browserHints, detectGuide, detectSystem } from '../room/permissionGuide.ts'
 import { useMicLevel } from '../room/useMicLevel.ts'
 import { useChatNotifications } from '../room/useChatNotifications.ts'
 import { useRoomConnection } from '../room/useRoomConnection.ts'
@@ -107,7 +114,7 @@ import { useKnownPassword } from '../room/useKnownPassword.ts'
 import { useSpeaking } from '../room/useSpeaking.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
 import { telemetry } from '../telemetry.ts'
-import { strings } from '../strings.ts'
+import { LOCALES, getLocale, setLocale, strings } from '../strings.ts'
 import { color, font, fontSize, layer, radius, media, space } from '../styles/tokens.ts'
 
 /** What the pre-join screen hands to the room: the room publishes with the media choices */
@@ -337,23 +344,43 @@ function PreJoinScreen({
   const [name, setName] = useState(loadName)
   const [mic, setMic] = useState(true)
   const [cam, setCam] = useState(true)
-  const [devices, setDevices] = useState<DeviceChoices>(loadDevices)
-  const preview = useLocalPreview({ mic, cam, micId: devices.mic, camId: devices.cam })
+  // What was picked (remembered in localStorage) and where those devices are now (G1): a
+  // remembered device with a new id is found by its label; an unplugged one falls back to the
+  // browser's default meanwhile, and stays remembered
+  const [picked, setPicked] = useState<DeviceChoices>(loadDevices)
+  const [labels, setLabels] = useState<DeviceChoices>(loadDeviceLabels)
+  const preview = useLocalPreview({
+    mic,
+    cam,
+    micId: picked.mic,
+    camId: picked.cam,
+    micLabel: labels.mic,
+    camLabel: labels.cam,
+  })
+  const lists = preview.devices
+  const resolved: DeviceChoices = {
+    ...preview.resolved,
+    speaker: resolveDevice(picked.speaker, labels.speaker, lists.audiooutput),
+  }
   const level = useMicLevel(preview.stream)
+  const micListening = mic && (preview.stream?.getAudioTracks().length ?? 0) > 0
+  const micSilent = useMicSilence(level, micListening)
   const [speakerSupported] = useState(canChooseSpeaker)
+  const speakerTest = useSpeakerTest(resolved.speaker)
   const passwordField = usePasswordField(roomId, summary.password, problem)
+  const permissionGuide = usePermissionGuide(preview.micProblem, preview.camProblem, preview.retry)
 
   return (
     <PreJoin
       roomId={roomId}
       memberCount={summary.memberCount}
-      roomNotice={
-        summary.status === 'error'
-          ? strings.prejoin.loadFailed
-          : summary.waitingRoom
-            ? strings.prejoin.waitingRoom
-            : null
+      roomNotice={summary.status === 'error' ? strings.prejoin.loadFailed : null}
+      waitingRoom={summary.waitingRoom}
+      speakerTest={
+        speakerSupported ? { playing: speakerTest.playing, onToggle: speakerTest.toggle } : null
       }
+      micSilent={micSilent}
+      permissionGuide={permissionGuide}
       name={name}
       onNameChange={setName}
       mic={mic}
@@ -365,13 +392,21 @@ function PreJoinScreen({
       level={level}
       devices={preview.devices}
       selected={{
-        mic: devices.mic ?? activeDeviceId(preview.stream, 'audio'),
-        cam: devices.cam ?? activeDeviceId(preview.stream, 'video'),
-        speaker: devices.speaker,
+        mic: resolved.mic ?? activeDeviceId(preview.stream, 'audio'),
+        cam: resolved.cam ?? activeDeviceId(preview.stream, 'video'),
+        speaker: resolved.speaker,
       }}
       onSelect={(choice, deviceId) => {
-        saveDevice(choice, deviceId)
-        setDevices((current) => ({ ...current, [choice]: deviceId }))
+        const list =
+          choice === 'mic'
+            ? lists.audioinput
+            : choice === 'cam'
+              ? lists.videoinput
+              : lists.audiooutput
+        const label = list.find((option) => option.deviceId === deviceId)?.label ?? ''
+        saveDevice(choice, deviceId, label)
+        setPicked((current) => ({ ...current, [choice]: deviceId }))
+        setLabels((current) => ({ ...current, [choice]: label || null }))
       }}
       speakerSupported={speakerSupported}
       micProblem={preview.micProblem}
@@ -384,10 +419,54 @@ function PreJoinScreen({
         if (!normalized || (passwordField && password === null)) return
         // Kept in this tab (sessionStorage) for 「複製含密碼的連結」; the room confirms it
         if (password !== null) saveKnownPassword(roomId, { password, setAt: null })
+        // Devices found under a new id are remembered by it from now on
+        const devices = { ...picked }
+        for (const kind of ['mic', 'cam', 'speaker'] as const) {
+          const now = resolved[kind]
+          if (now === null || now === picked[kind]) continue
+          saveDevice(kind, now, labels[kind] ?? '')
+          devices[kind] = now
+        }
         onJoin({ name: normalized, mic, cam, devices, password })
       }}
     />
   )
+}
+
+/**
+ * The permission tutorial (G1, e4-t09): shown when the browser refused the microphone or camera.
+ * The Permissions API (where there is one) tells a system block (the browser allows it, the
+ * system does not) from a browser one, and retries by itself once the person allows it.
+ */
+function usePermissionGuide(
+  micProblem: MediaProblem | null,
+  camProblem: MediaProblem | null,
+  retry: () => void,
+): PermissionGuideProps | null {
+  const permissions = useMediaPermissions()
+  const [hints] = useState(browserHints)
+  const micDenied = micProblem === 'denied'
+  const camDenied = camProblem === 'denied'
+  // A permission that goes from denied to allowed (or "ask") while the guide is up: try again
+  // without a click. One that says granted from the start is a system block: no retry loop.
+  const previous = useRef(permissions)
+  useEffect(() => {
+    const before = previous.current
+    previous.current = permissions
+    const lifted = (kind: 'mic' | 'cam') =>
+      before[kind] === 'denied' && permissions[kind] !== 'denied' && permissions[kind] !== 'unknown'
+    if ((micDenied && lifted('mic')) || (camDenied && lifted('cam'))) retry()
+  }, [permissions, micDenied, camDenied, retry])
+  if (!micDenied && !camDenied) return null
+  return {
+    blocked: micDenied && camDenied ? 'both' : micDenied ? 'mic' : 'cam',
+    system:
+      (micDenied && permissions.mic === 'granted') || (camDenied && permissions.cam === 'granted'),
+    guide: detectGuide(hints),
+    systemId: detectSystem(hints),
+    watching: permissions.watching,
+    onRetry: retry,
+  }
 }
 
 /**
@@ -711,6 +790,14 @@ function Room({
       checked: prefs.sounds,
       onSelect: () => updatePrefs({ sounds: !prefs.sounds }),
     },
+    // 更多 › 語言 (G1, e4-t15): each language named in itself; switching keeps the call going
+    ...LOCALES.map((which) => ({
+      id: `language-${which}`,
+      label: strings.language.names[which],
+      section: strings.language.section,
+      checked: getLocale() === which,
+      onSelect: () => setLocale(which),
+    })),
   ]
   const onNotice = useCallback((notice: DeviceNotice) => show(noticeText(notice), 'warn'), [show])
   // The microphone and camera chosen on the pre-join screen, opened again for the room; the

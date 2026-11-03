@@ -6,7 +6,9 @@
 // scripts/brand.ts writes public/manifest.webmanifest from `webManifest()` and renders the PNGs
 // from the SVGs in docs/design/logo/ (`npm run brand`, DEPLOY.md §9); tests/shared/brand.test.ts
 // checks that what is committed in public/ and index.html matches this file.
-import { strings } from './strings.ts'
+// The static page and the manifest speak Chinese, the default locale (G1: the app switches at run
+// time, these files do not)
+import { zhTW as strings } from './i18n/zh-TW.ts'
 import { palette } from './styles/tokens.ts'
 
 /** The production site: Open Graph needs an absolute image URL (previews point here too) */

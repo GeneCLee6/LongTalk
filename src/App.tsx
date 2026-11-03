@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { LoadFailedBoundary } from './components/LoadFailed.tsx'
 import { HomePage } from './pages/HomePage.tsx'
+import { useLocale } from './strings.ts'
 
 // The room page is its own chunk: the home page must stay within its JS budget (CLAUDE.md rule 6)
 const RoomPage = lazy(() => import('./pages/RoomPage.tsx'))
@@ -9,6 +10,9 @@ const RoomPage = lazy(() => import('./pages/RoomPage.tsx'))
 const AdminPage = lazy(() => import('./pages/AdminPage.tsx'))
 
 export function App() {
+  // Switching language (G1, e4-t15) re-renders everything from here down with the other
+  // dictionary; nothing remounts, so a call in progress carries on
+  useLocale()
   return (
     <BrowserRouter>
       {/* A chunk that cannot be loaded shows 「載入失敗，請重新整理」, not a blank page (e4-t20) */}

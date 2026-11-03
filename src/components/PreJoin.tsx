@@ -8,8 +8,10 @@ import { breakpoint, color, fontSize, layer, radius, space } from '../styles/tok
 import { Button } from './Button.tsx'
 import { SelectField, TextField } from './Field.tsx'
 import { IconButton } from './IconButton.tsx'
-import { CamIcon, CamOffIcon, MicIcon, MicOffIcon } from './icons.tsx'
+import { CamIcon, CamOffIcon, HourglassIcon, MicIcon, MicOffIcon, SoundIcon } from './icons.tsx'
+import { LanguageSelect } from './LanguageSelect.tsx'
 import { LevelMeter } from './LevelMeter.tsx'
+import { PermissionGuide, type PermissionGuideProps } from './PermissionGuide.tsx'
 import { VideoPreview } from './VideoPreview.tsx'
 
 export type DeviceChoice = 'mic' | 'cam' | 'speaker'
@@ -54,6 +56,14 @@ export interface PreJoinProps {
   onJoin: () => void
   /** The room has a password (F3): the field above 加入 */
   password?: PasswordFieldProps | null
+  /** The room has its waiting room on (F2): a status card, and 加入 becomes 要求加入 (G1) */
+  waitingRoom?: boolean
+  /** The speaker test (G1, e4-t09); null where the browser cannot choose the speaker */
+  speakerTest?: { playing: boolean; onToggle: () => void } | null
+  /** The microphone is on but has heard nothing for a while (G1) */
+  micSilent?: boolean
+  /** The browser blocked the devices: the permission tutorial instead of the short notice (G1) */
+  permissionGuide?: PermissionGuideProps | null
 }
 
 /** The message for what went wrong opening the devices, most actionable first */
@@ -71,11 +81,13 @@ function problemMessage(mic: MediaProblem | null, cam: MediaProblem | null): str
   return null
 }
 
-const kindName = {
-  mic: strings.prejoin.micLabel,
-  cam: strings.prejoin.camLabel,
-  speaker: strings.prejoin.speakerLabel,
-} as const
+// A function, not a constant: the text follows the language chosen now (strings.ts)
+const kindName = (choice: DeviceChoice): string =>
+  choice === 'mic'
+    ? strings.prejoin.micLabel
+    : choice === 'cam'
+      ? strings.prejoin.camLabel
+      : strings.prejoin.speakerLabel
 
 function DeviceSelect({
   choice,
@@ -90,7 +102,7 @@ function DeviceSelect({
 }) {
   return (
     <SelectField
-      label={kindName[choice]}
+      label={kindName(choice)}
       value={options.length === 0 ? '' : (value ?? options[0].deviceId)}
       disabled={options.length === 0}
       onChange={(event) => onSelect(choice, event.target.value)}
@@ -100,7 +112,7 @@ function DeviceSelect({
       ) : (
         options.map((option, i) => (
           <option key={option.deviceId} value={option.deviceId}>
-            {option.label || strings.prejoin.deviceFallback(kindName[choice], i + 1)}
+            {option.label || strings.prejoin.deviceFallback(kindName(choice), i + 1)}
           </option>
         ))
       )}
@@ -153,13 +165,20 @@ export function PreJoin(props: PreJoinProps) {
           </Controls>
         </Frame>
         <LevelMeter level={mic ? props.level : 0} label={strings.prejoin.micLevel} />
-        {problem && (
-          <Problem role="alert">
-            <span>{problem}</span>
-            <Button variant="secondary" onClick={props.onRetry}>
-              {strings.common.retry}
-            </Button>
-          </Problem>
+        {mic && props.micSilent && !problem && (
+          <Muted role="status">{strings.prejoin.micSilent}</Muted>
+        )}
+        {props.permissionGuide ? (
+          <PermissionGuide {...props.permissionGuide} />
+        ) : (
+          problem && (
+            <Problem role="alert">
+              <span>{problem}</span>
+              <Button variant="secondary" onClick={props.onRetry}>
+                {strings.common.retry}
+              </Button>
+            </Problem>
+          )
         )}
         <Devices>
           <DeviceSelect
@@ -183,6 +202,23 @@ export function PreJoin(props: PreJoinProps) {
             />
           )}
         </Devices>
+        {props.speakerTest && (
+          <SpeakerTest>
+            <Button
+              variant="secondary"
+              aria-pressed={props.speakerTest.playing}
+              onClick={props.speakerTest.onToggle}
+            >
+              <SoundIcon />
+              {props.speakerTest.playing
+                ? strings.prejoin.speakerTestStop
+                : strings.prejoin.speakerTest}
+            </Button>
+            {props.speakerTest.playing && (
+              <Muted role="status">{strings.prejoin.speakerTestHint}</Muted>
+            )}
+          </SpeakerTest>
+        )}
       </Media>
       <Form onSubmit={onSubmit}>
         <div>
@@ -193,6 +229,15 @@ export function PreJoin(props: PreJoinProps) {
           </Muted>
           {roomNotice && <Muted role="status">{roomNotice}</Muted>}
         </div>
+        {props.waitingRoom && (
+          <Status role="status">
+            <HourglassIcon />
+            <div>
+              <strong>{strings.prejoin.waitingRoomTitle}</strong>
+              <span>{strings.prejoin.waitingRoom}</span>
+            </div>
+          </Status>
+        )}
         <TextField
           label={strings.prejoin.nameLabel}
           placeholder={strings.prejoin.namePlaceholder}
@@ -227,9 +272,14 @@ export function PreJoin(props: PreJoinProps) {
           </div>
         )}
         <Button type="submit" block disabled={!canJoin}>
-          {props.joining ? strings.prejoin.joining : strings.prejoin.join}
+          {props.joining
+            ? strings.prejoin.joining
+            : props.waitingRoom
+              ? strings.prejoin.joinWaiting
+              : strings.prejoin.join}
         </Button>
         <Muted>{strings.prejoin.joinState(mic, cam)}</Muted>
+        <LanguageSelect />
       </Form>
     </Layout>
   )
@@ -302,6 +352,38 @@ const Devices = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: ${space(3)};
+`
+
+const SpeakerTest = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: ${space(3)};
+
+  svg {
+    width: 18px;
+    height: 18px;
+  }
+`
+
+const Status = styled.div`
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: ${space(3)};
+  padding: ${space(3)};
+  border-radius: ${radius.button};
+  background: ${color.primarySoft};
+  font-size: ${fontSize.small};
+
+  svg {
+    width: 22px;
+    height: 22px;
+    color: ${color.primary};
+  }
+  div {
+    display: grid;
+    gap: ${space(1)};
+  }
 `
 
 const Problem = styled.div`

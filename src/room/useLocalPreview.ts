@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMediaDevices } from './devicesContext.ts'
+import { resolveDevice } from './session.ts'
 import {
   emptyDeviceLists,
   listDevices,
@@ -22,6 +23,17 @@ export interface LocalPreview {
   opening: boolean
   /** Asks again (after the person allowed access, or freed the camera) */
   retry: () => void
+  /**
+   * Where the remembered microphone and camera are in the lists now (resolveDevice): the same id,
+   * a new id found by label, or null when gone (or not chosen)
+   */
+  resolved: { mic: string | null; cam: string | null }
+}
+
+/** The preview's request, with the remembered devices' labels to find them by (G1) */
+export interface PreviewRequest extends LocalMediaRequest {
+  micLabel?: string | null
+  camLabel?: string | null
 }
 
 export interface LocalPreviewDeps {
@@ -32,10 +44,12 @@ export interface LocalPreviewDeps {
 /**
  * The pre-join preview (e4-t03): opens the microphone and camera asked for, reopens them when
  * the choice changes, keeps the device lists fresh (labels appear once there is permission; a
- * device plugged in or out fires `devicechange`) and stops every track on unmount.
+ * device plugged in or out fires `devicechange`) and stops every track on unmount. A device
+ * unplugged while previewed (its track ended) is opened again (G1): the remembered choice is
+ * only preferred, so another device of that kind takes over.
  */
 export function useLocalPreview(
-  request: LocalMediaRequest,
+  request: PreviewRequest,
   deps: LocalPreviewDeps = {},
 ): LocalPreview {
   const contextDevices = useMediaDevices()
@@ -47,6 +61,10 @@ export function useLocalPreview(
   // The result of the last request that finished, tagged with that request
   const [opened, setOpened] = useState<{ key: string; media: LocalMedia } | null>(null)
   const [devices, setDevices] = useState<DeviceLists>(emptyDeviceLists)
+  const shown = useRef<MediaStream | null>(null)
+  useEffect(() => {
+    shown.current = opened?.media.stream ?? null
+  })
 
   const refreshDevices = useCallback(async () => {
     if (!mediaDevices) return
@@ -57,7 +75,15 @@ export function useLocalPreview(
     }
   }, [mediaDevices])
 
-  const { mic, cam, micId, camId } = request
+  // A device found under a new id is asked for by that id; a gone one stays preferred (`ideal`:
+  // the browser opens another), so nothing reopens for it
+  const resolved = {
+    mic: resolveDevice(request.micId, request.micLabel ?? null, devices.audioinput),
+    cam: resolveDevice(request.camId, request.camLabel ?? null, devices.videoinput),
+  }
+  const { mic, cam } = request
+  const micId = resolved.mic ?? request.micId
+  const camId = resolved.cam ?? request.camId
   const key = JSON.stringify([mic, cam, micId, camId, attempt])
   useEffect(() => {
     let cancelled = false
@@ -79,7 +105,11 @@ export function useLocalPreview(
 
   useEffect(() => {
     if (!mediaDevices?.addEventListener) return
-    const onChange = () => void refreshDevices()
+    const onChange = () => {
+      void refreshDevices()
+      const ended = shown.current?.getTracks().some((track) => track.readyState === 'ended')
+      if (ended) setAttempt((n) => n + 1)
+    }
     mediaDevices.addEventListener('devicechange', onChange)
     return () => mediaDevices.removeEventListener?.('devicechange', onChange)
   }, [mediaDevices, refreshDevices])
@@ -87,7 +117,15 @@ export function useLocalPreview(
   const retry = useCallback(() => setAttempt((n) => n + 1), [])
   // While a new request is opening, the previous stream is already stopped: show nothing
   if (opened?.key !== key) {
-    return { stream: null, micProblem: null, camProblem: null, opening: mic || cam, devices, retry }
+    return {
+      stream: null,
+      micProblem: null,
+      camProblem: null,
+      opening: mic || cam,
+      devices,
+      retry,
+      resolved,
+    }
   }
-  return { ...opened.media, opening: false, devices, retry }
+  return { ...opened.media, opening: false, devices, retry, resolved }
 }

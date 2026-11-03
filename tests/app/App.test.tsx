@@ -497,7 +497,9 @@ describe('lock and waiting room (F2, e1-t09 – e1-t11)', () => {
     localStorage.setItem('longtalk.name', 'Gene')
     visit(`/r/${ROOM_ID}`)
     expect(await screen.findByText(/開了等候室/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '加入' }))
+    // G1: the status card says so, and 加入 asks to join
+    expect(screen.getByText(/主持人放行你才會進入/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '要求加入' }))
     expect(await screen.findByRole('heading', { name: '你在等候室' })).toBeInTheDocument()
     return RoomSocket.instances.at(-1)!
   }

@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 import { cleanup, configure } from '@testing-library/react'
-import { afterEach } from 'vitest'
+import { afterEach, beforeEach } from 'vitest'
+import { setLocale } from '../src/strings.ts'
 
 // jsdom has no WebRTC; the room page refuses a browser without RTCPeerConnection (e2-t09). The
 // media itself runs on FakeTransport; a page using the real transport fails to connect, as before.
@@ -17,6 +18,12 @@ if (typeof globalThis.RTCPeerConnection === 'undefined') {
 // little larger). findBy* and waitFor wait up to 4 s, under Vitest's 5 s per test; a passing
 // test still returns at once.
 configure({ asyncUtilTimeout: 4_000 })
+
+// The tests read Chinese (the default locale, G1; tests/setupLocale.ts): start every
+// test in zh-TW without remembering it; a test that switches to English is undone here
+beforeEach(() => {
+  setLocale('zh-TW', false)
+})
 
 afterEach(() => {
   cleanup()

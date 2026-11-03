@@ -6,7 +6,7 @@ import { App } from '../../src/App.tsx'
 import { FakeSfu } from '../../src/media/FakeTransport.ts'
 import { DEFAULT_VIEW, loadView, saveView } from '../../src/room/session.ts'
 import { TransportContext } from '../../src/room/transportContext.ts'
-import { strings } from '../../src/strings.ts'
+import { getLocale, strings } from '../../src/strings.ts'
 
 // What the stage shows (G2, e4-t10, e4-t11): the layout switch in 更多, pinning a tile for
 // ourselves, the host's spotlight (sent to the room, shown when the room says so), hiding our
@@ -245,5 +245,29 @@ describe('stage view (G2, e4-t10, e4-t11)', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: strings.view.showAll }))
     expect(within(stage()).getByRole('figure', { name: '阿明' })).toBeInTheDocument()
+  })
+})
+
+describe('更多 › 語言 in the room (G1, e4-t15)', () => {
+  it('switches to English without leaving the call, and remembers it', async () => {
+    await visitRoom()
+    const before = sockets.length
+    const menu = openMore()
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'English' }))
+    expect(getLocale()).toBe('en')
+    expect(await screen.findByRole('region', { name: 'Meeting view' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Leave' })).toBeInTheDocument()
+    // Nothing remounted: the same connection, still in the room
+    expect(sockets.length).toBe(before)
+    expect(within(stage()).getByRole('figure', { name: 'Wei' })).toBeInTheDocument()
+    expect(localStorage.getItem('longtalk.locale')).toBe('en')
+    const again = openMore()
+    expect(within(again).getByRole('menuitemradio', { name: 'English' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    fireEvent.click(within(again).getByRole('menuitemradio', { name: '繁體中文' }))
+    expect(await screen.findByRole('button', { name: '更多' })).toBeInTheDocument()
   })
 })

@@ -18,8 +18,6 @@ import {
 } from './icons.tsx'
 import { Menu, type MenuItem } from './Menu.tsx'
 
-const text = strings.participants
-
 export interface ParticipantsPanelProps {
   members: Member[]
   /** Our own member id */
@@ -53,13 +51,20 @@ export type RoleChange = 'makeCohost' | 'revokeCohost' | 'makeHost'
 
 const noop = () => {}
 
-/** What the per-person menu offers, in order, with the role table's action for each */
-const MEMBER_ACTIONS: readonly { action: HostMemberAction; label: string; danger?: true }[] = [
+/**
+ * What the per-person menu offers, in order, with the role table's action for each (a function:
+ * the labels follow the language chosen now, strings.ts)
+ */
+const memberActions = (): readonly {
+  action: HostMemberAction
+  label: string
+  danger?: true
+}[] => [
   { action: 'lowerHand', label: strings.reactions.lowerHand },
-  { action: 'muteMember', label: text.mute },
-  { action: 'camOff', label: text.camOffAction },
-  { action: 'stopShare', label: text.stopShare },
-  { action: 'remove', label: text.remove, danger: true },
+  { action: 'muteMember', label: strings.participants.mute },
+  { action: 'camOff', label: strings.participants.camOffAction },
+  { action: 'stopShare', label: strings.participants.stopShare },
+  { action: 'remove', label: strings.participants.remove, danger: true },
 ]
 
 /**
@@ -150,12 +155,12 @@ export function ParticipantsPanel({
         member.role === 'cohost'
           ? {
               id: 'revokeCohost',
-              label: text.revokeCohost,
+              label: strings.participants.revokeCohost,
               onSelect: () => onRole('revokeCohost', member.id),
             }
           : {
               id: 'makeCohost',
-              label: text.makeCohost,
+              label: strings.participants.makeCohost,
               onSelect: () => onRole('makeCohost', member.id),
             },
       )
@@ -163,19 +168,21 @@ export function ParticipantsPanel({
     if (canActOn(role, 'makeHost', member.role, self) && !member.reconnecting) {
       roles.push({
         id: 'makeHost',
-        label: text.makeHost,
+        label: strings.participants.makeHost,
         onSelect: () => setConfirm({ type: 'makeHost', member }),
       })
     }
-    const controls = MEMBER_ACTIONS.filter(
-      ({ action }) => applies[action] && canActOn(role, action, member.role, self),
-    ).map(({ action, label, danger }): MenuItem => ({
-      id: action,
-      label,
-      tone: danger ? 'danger' : 'neutral',
-      onSelect: () =>
-        action === 'remove' ? setConfirm({ type: 'remove', member }) : onAction(action, member.id),
-    }))
+    const controls = memberActions()
+      .filter(({ action }) => applies[action] && canActOn(role, action, member.role, self))
+      .map(({ action, label, danger }): MenuItem => ({
+        id: action,
+        label,
+        tone: danger ? 'danger' : 'neutral',
+        onSelect: () =>
+          action === 'remove'
+            ? setConfirm({ type: 'remove', member })
+            : onAction(action, member.id),
+      }))
     // Removing stays last (the dangerous one)
     const remove = controls.filter((item) => item.id === 'remove')
     return [...controls.filter((item) => item.id !== 'remove'), ...roles, ...remove]
@@ -184,19 +191,19 @@ export function ParticipantsPanel({
   return (
     <Root>
       {(canLock || canWaitingRoom || canSetPassword) && (
-        <Settings aria-label={text.settings}>
+        <Settings aria-label={strings.participants.settings}>
           {canLock && (
             <Switch
-              label={text.lock}
-              hint={text.lockHint}
+              label={strings.participants.lock}
+              hint={strings.participants.lockHint}
               on={locked}
               onToggle={() => onLock(!locked)}
             />
           )}
           {canWaitingRoom && (
             <Switch
-              label={text.waitingRoom}
-              hint={text.waitingRoomHint}
+              label={strings.participants.waitingRoom}
+              hint={strings.participants.waitingRoomHint}
               on={waitingRoom}
               onToggle={toggleWaitingRoom}
             />
@@ -204,15 +211,19 @@ export function ParticipantsPanel({
           {canSetPassword && (
             <SwitchRow>
               <SwitchText>
-                <Name>{text.password}</Name>
-                <Hint>{passwordSet ? text.passwordOn : text.passwordOff}</Hint>
+                <Name>{strings.participants.password}</Name>
+                <Hint>
+                  {passwordSet ? strings.participants.passwordOn : strings.participants.passwordOff}
+                </Hint>
               </SwitchText>
               <Button
                 variant="secondary"
                 aria-label={passwordSet ? strings.password.changeTitle : strings.password.setTitle}
                 onClick={onPassword}
               >
-                {passwordSet ? text.passwordChange : text.passwordSet}
+                {passwordSet
+                  ? strings.participants.passwordChange
+                  : strings.participants.passwordSet}
               </Button>
             </SwitchRow>
           )}
@@ -221,14 +232,14 @@ export function ParticipantsPanel({
       {canAdmit && waiting.length > 0 && (
         <Waiting aria-labelledby="waiting-title">
           <WaitingHead>
-            <h3 id="waiting-title">{text.waiting(waiting.length)}</h3>
+            <h3 id="waiting-title">{strings.participants.waiting(waiting.length)}</h3>
             {waiting.length > 1 && (
               <Button variant="secondary" onClick={onAdmitAll}>
-                {text.admitAll}
+                {strings.participants.admitAll}
               </Button>
             )}
           </WaitingHead>
-          <WaitingList aria-label={text.waitingList}>
+          <WaitingList aria-label={strings.participants.waitingList}>
             {waiting.map((entry) => (
               <Row key={entry.id} aria-label={entry.name} $away={entry.reconnecting}>
                 <Avatar aria-hidden="true" style={{ background: avatarColor(entry.name) }}>
@@ -238,23 +249,23 @@ export function ParticipantsPanel({
                   <Name>{entry.name}</Name>
                   {entry.reconnecting && (
                     <Tags>
-                      <Tag $warn>{text.reconnecting}</Tag>
+                      <Tag $warn>{strings.participants.reconnecting}</Tag>
                     </Tags>
                   )}
                 </Who>
                 <Decide>
                   <Button
                     variant="secondary"
-                    aria-label={text.denyLabel(entry.name)}
+                    aria-label={strings.participants.denyLabel(entry.name)}
                     onClick={() => onDeny(entry.id)}
                   >
-                    {text.deny}
+                    {strings.participants.deny}
                   </Button>
                   <Button
-                    aria-label={text.admitLabel(entry.name)}
+                    aria-label={strings.participants.admitLabel(entry.name)}
                     onClick={() => onAdmit(entry.id)}
                   >
-                    {text.admit}
+                    {strings.participants.admit}
                   </Button>
                 </Decide>
               </Row>
@@ -262,7 +273,7 @@ export function ParticipantsPanel({
           </WaitingList>
         </Waiting>
       )}
-      <List aria-label={text.list}>
+      <List aria-label={strings.participants.list}>
         {sorted.map((member) => {
           const mic = member.tracks.find((t) => t.kind === 'mic')
           const cam = member.tracks.find((t) => t.kind === 'cam')
@@ -270,7 +281,11 @@ export function ParticipantsPanel({
           const camOn = !!cam && !cam.muted
           const items = itemsFor(member)
           const roleLabel =
-            member.role === 'host' ? text.host : member.role === 'cohost' ? text.cohost : null
+            member.role === 'host'
+              ? strings.participants.host
+              : member.role === 'cohost'
+                ? strings.participants.cohost
+                : null
           return (
             <Row key={member.id} aria-label={member.name} $away={member.reconnecting}>
               <Avatar aria-hidden="true" style={{ background: avatarColor(member.name) }}>
@@ -288,29 +303,34 @@ export function ParticipantsPanel({
                       <span aria-hidden="true">{handPlace.get(member.id)}</span>
                     </HandTag>
                   )}
-                  {member.id === you && <Tag>{text.you}</Tag>}
+                  {member.id === you && <Tag>{strings.participants.you}</Tag>}
                   {roleLabel && <Tag $strong>{roleLabel}</Tag>}
-                  {member.reconnecting && <Tag $warn>{text.reconnecting}</Tag>}
+                  {member.reconnecting && <Tag $warn>{strings.participants.reconnecting}</Tag>}
                 </Tags>
               </Who>
               <States>
                 {member.id === sharerId && (
-                  <State role="img" aria-label={text.sharing} title={text.sharing} $on>
+                  <State
+                    role="img"
+                    aria-label={strings.participants.sharing}
+                    title={strings.participants.sharing}
+                    $on
+                  >
                     <ScreenShareIcon />
                   </State>
                 )}
                 <State
                   role="img"
-                  aria-label={micOn ? text.micOn : text.micOff}
-                  title={micOn ? text.micOn : text.micOff}
+                  aria-label={micOn ? strings.participants.micOn : strings.participants.micOff}
+                  title={micOn ? strings.participants.micOn : strings.participants.micOff}
                   $off={!micOn}
                 >
                   {micOn ? <MicIcon /> : <MicOffIcon />}
                 </State>
                 <State
                   role="img"
-                  aria-label={camOn ? text.camOn : text.camOff}
-                  title={camOn ? text.camOn : text.camOff}
+                  aria-label={camOn ? strings.participants.camOn : strings.participants.camOff}
+                  title={camOn ? strings.participants.camOn : strings.participants.camOff}
                   $off={!camOn}
                 >
                   {camOn ? <CamIcon /> : <CamOffIcon />}
@@ -318,7 +338,7 @@ export function ParticipantsPanel({
               </States>
               {items.length > 0 && (
                 <Menu
-                  label={text.actions(member.name)}
+                  label={strings.participants.actions(member.name)}
                   icon={<MoreIcon />}
                   items={items}
                   align="end"
@@ -331,22 +351,27 @@ export function ParticipantsPanel({
       {(canMuteAll || canEnd) && (
         <Footer>
           {canMuteAll && (
-            <Button variant="secondary" block title={text.muteAllHint} onClick={onMuteAll}>
-              {text.muteAll}
+            <Button
+              variant="secondary"
+              block
+              title={strings.participants.muteAllHint}
+              onClick={onMuteAll}
+            >
+              {strings.participants.muteAll}
             </Button>
           )}
           {canEnd && (
             <Button variant="danger" block onClick={() => setConfirm({ type: 'end' })}>
-              {text.endMeeting}
+              {strings.participants.endMeeting}
             </Button>
           )}
         </Footer>
       )}
       {confirm?.type === 'remove' && (
         <ConfirmDialog
-          title={text.removeTitle(confirm.member.name)}
-          body={text.removeBody(confirm.member.name)}
-          confirmLabel={text.removeConfirm}
+          title={strings.participants.removeTitle(confirm.member.name)}
+          body={strings.participants.removeBody(confirm.member.name)}
+          confirmLabel={strings.participants.removeConfirm}
           onConfirm={() => {
             setConfirm(null)
             onAction('remove', confirm.member.id)
@@ -356,9 +381,9 @@ export function ParticipantsPanel({
       )}
       {confirm?.type === 'makeHost' && (
         <ConfirmDialog
-          title={text.makeHostTitle(confirm.member.name)}
-          body={text.makeHostBody(confirm.member.name)}
-          confirmLabel={text.makeHostConfirm}
+          title={strings.participants.makeHostTitle(confirm.member.name)}
+          body={strings.participants.makeHostBody(confirm.member.name)}
+          confirmLabel={strings.participants.makeHostConfirm}
           onConfirm={() => {
             setConfirm(null)
             onRole('makeHost', confirm.member.id)
@@ -368,9 +393,9 @@ export function ParticipantsPanel({
       )}
       {confirm?.type === 'waitingOff' && (
         <ConfirmDialog
-          title={text.waitingOffTitle}
-          body={text.waitingOffBody(waiting.length)}
-          confirmLabel={text.waitingOffConfirm(waiting.length)}
+          title={strings.participants.waitingOffTitle}
+          body={strings.participants.waitingOffBody(waiting.length)}
+          confirmLabel={strings.participants.waitingOffConfirm(waiting.length)}
           onConfirm={() => {
             setConfirm(null)
             onWaitingRoom(false)
@@ -380,9 +405,9 @@ export function ParticipantsPanel({
       )}
       {confirm?.type === 'end' && (
         <ConfirmDialog
-          title={text.endTitle}
-          body={text.endBody}
-          confirmLabel={text.endConfirm}
+          title={strings.participants.endTitle}
+          body={strings.participants.endBody}
+          confirmLabel={strings.participants.endConfirm}
           onConfirm={() => {
             setConfirm(null)
             onEndMeeting()
