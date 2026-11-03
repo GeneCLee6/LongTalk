@@ -500,7 +500,7 @@ Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval
 Reporting-Endpoints: csp="/api/csp-report"
 Strict-Transport-Security: max-age=31536000; includeSubDomains
 Permissions-Policy: camera=(self), microphone=(self), display-capture=(self), autoplay=(self),
-  clipboard-write=(self), fullscreen=(self), picture-in-picture=(self), accelerometer=(), bluetooth=(),
+  clipboard-write=(self), fullscreen=(self), picture-in-picture=(self), accelerometer=(),
   browsing-topics=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(),
   magnetometer=(), midi=(), otp-credentials=(), payment=(), screen-wake-lock=(), serial=(), usb=(),
   window-management=(), xr-spatial-tracking=()
@@ -517,7 +517,7 @@ X-Frame-Options: DENY
 - **connect 只有 `'self'`**（CSP 3 的 `'self'` 也涵蓋同主機的 `wss:`，Safari 17+ 也是）：瀏覽器**不直接**連 `rtc.live.cloudflare.com`：SFU API 走 Worker 代理（`/api/sfu/*`）、TURN 憑證走 `/api/turn/*`；媒體本身是 ICE（UDP／TURN），不受 CSP 管。
 - **img／media 加 `data:` `blob:`**：喇叭測試音（blob WAV）、統計匯出、內嵌的小圖。**worker 只有 `'self'`**：`/sw.js` 與 RNNoise 的 AudioWorklet 模組（`/assets/`）。
 - **COOP `same-origin`**：LongTalk 不開彈出視窗、不需要和其他網域的視窗互相操作；Turnstile 是 iframe 不是彈窗，Capture Handle（分享分頁時認出會議分頁）不受影響。沒有加 COEP（會擋 Turnstile 的 iframe，也用不到 SharedArrayBuffer）。
-- **Permissions-Policy** 只列 Chromium 認得的功能（認不得的會在主控台報錯：`web-share` 就是，所以沒列，維持瀏覽器預設），沒列的也維持預設（例如喇叭選擇、之後 I2 的 passkey）。
+- **Permissions-Policy** 只列 Chromium 認得的功能（認不得的會在主控台報錯：`web-share`（Windows 的 Chromium）與 `bluetooth`（Linux 的 Chromium）就是，所以沒列，維持瀏覽器預設），沒列的也維持預設（例如喇叭選擇、之後 I2 的 passkey）。
 - Worker 自己的回應（`/api/*`）是 JSON，另外加 `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`、HSTS、nosniff、Referrer-Policy、`X-Frame-Options`（`worker/headers.ts`）；WebSocket 升級不動。
 - **CSP 違規回報**：瀏覽器把被擋的東西 POST 到 `/api/csp-report`（`report-uri` 與 Reporting API 兩種格式都收），Worker 轉成遙測的錯誤事件：名稱 `CSP`、訊息「`<指令> blocked <網域或 inline／eval>`」、來源是頁面路徑（房號去掉），和其他用戶端錯誤一樣在 `/admin`「最近的錯誤」、受同一個速率限制。部署後出現新的 `CSP` 錯誤就是有東西被擋了。
 - **檢查**：`scripts/smoke.sh` 每次部署後確認首頁與 `/api/health` 帶著這些標頭；`e2e/local/security.spec.ts`（`vite preview`）確認每個路徑的標頭，以及首頁 → 預先加入（含喇叭測試音）→ 會議室 → RNNoise（worklet＋wasm）→ `/admin`、service worker 註冊都沒有任何 CSP 或 Permissions-Policy 錯誤，別的網頁也框不住會議室。

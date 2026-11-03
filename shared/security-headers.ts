@@ -55,7 +55,6 @@ export const PERMISSIONS_POLICY = [
   'fullscreen=(self)',
   'picture-in-picture=(self)',
   'accelerometer=()',
-  'bluetooth=()',
   'browsing-topics=()',
   'geolocation=()',
   'gyroscope=()',
