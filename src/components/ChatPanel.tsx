@@ -12,8 +12,9 @@ import { MAX_CHAT_CHARS, type ChatMessage } from '../../shared/chat.ts'
 import { chatTime, isSendKey, splitLinks } from '../room/chatText.ts'
 import type { ChatSendResult } from '../room/RoomConnection.ts'
 import { strings } from '../strings.ts'
-import { color, fontSize, radius, size, space } from '../styles/tokens.ts'
+import { color, fontSize, media, radius, size, space } from '../styles/tokens.ts'
 import { SendIcon } from './icons.tsx'
+import { useMediaQuery } from './layoutContext.ts'
 
 export interface ChatPanelProps {
   messages: readonly ChatMessage[]
@@ -38,8 +39,10 @@ const STICK_PX = 48
  *
  * Messages are text: rendered as React text nodes (never as HTML), newlines kept, with http(s)
  * links as anchors that open in a new tab without access to this page (rel="noopener
- * noreferrer"). Enter sends, Shift+Enter is a new line, and Enter while an input method is
- * composing (注音、倉頡、拼音) only picks the candidate. The list follows new messages while it
+ * noreferrer"). With a keyboard Enter sends and Shift+Enter is a new line; Enter while an input
+ * method is composing (注音、倉頡、拼音), or just after it ended (Safari), only picks the
+ * candidate. Where a touch screen is the main input, Enter is a new line and only the send
+ * button sends (field test 2026-11-03: 注音 on a phone sent half a sentence). The list follows new messages while it
  * is scrolled to the bottom, and always after our own.
  */
 export function ChatPanel({ messages, you, onSend, autoFocus = false }: ChatPanelProps) {
@@ -50,6 +53,9 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false }: ChatPane
   const atBottom = useRef(true)
   const hintId = useId()
   const problemId = useId()
+  const touch = useMediaQuery(media.touchPrimary)
+  const composing = useRef(false)
+  const compositionEndedAt = useRef<number | null>(null)
 
   useEffect(() => {
     if (autoFocus) input.current?.focus()
@@ -94,15 +100,23 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false }: ChatPane
     }
   }
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    const sends = isSendKey({
-      key: event.key,
-      shiftKey: event.shiftKey,
-      altKey: event.altKey,
-      ctrlKey: event.ctrlKey,
-      metaKey: event.metaKey,
-      isComposing: event.nativeEvent.isComposing,
-      keyCode: event.keyCode,
-    })
+    const sends = isSendKey(
+      {
+        key: event.key,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        isComposing: event.nativeEvent.isComposing,
+        keyCode: event.keyCode,
+      },
+      {
+        enterSends: !touch,
+        composing: composing.current,
+        compositionEndedAt: compositionEndedAt.current,
+        now: performance.now(),
+      },
+    )
     if (!sends) return
     event.preventDefault()
     send()
@@ -165,7 +179,15 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false }: ChatPane
             aria-label={strings.chat.inputLabel}
             aria-describedby={problem ? `${hintId} ${problemId}` : hintId}
             placeholder={strings.chat.placeholder}
-            enterKeyHint="send"
+            // The on-screen keyboard's Enter says what it does: a new line on touch screens
+            enterKeyHint={touch ? 'enter' : 'send'}
+            onCompositionStart={() => {
+              composing.current = true
+            }}
+            onCompositionEnd={() => {
+              composing.current = false
+              compositionEndedAt.current = performance.now()
+            }}
             onChange={(event) => {
               setDraft(event.target.value)
               if (problem) setProblem(null)
@@ -182,7 +204,7 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false }: ChatPane
           </Send>
         </Box>
         <Footer>
-          <span id={hintId}>{strings.chat.hint}</span>
+          <span id={hintId}>{touch ? strings.chat.hintTouch : strings.chat.hint}</span>
           {length >= COUNT_FROM && (
             <Count $over={length > MAX_CHAT_CHARS} aria-live="polite">
               {strings.chat.remaining(MAX_CHAT_CHARS - length)}

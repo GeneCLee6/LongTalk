@@ -242,6 +242,8 @@ export const strings = {
     inputLabel: '輸入訊息',
     placeholder: '傳訊息給所有人…',
     hint: 'Enter 送出，Shift + Enter 換行',
+    // Touch screens: Enter is a new line (it also picks 注音 candidates), only the button sends
+    hintTouch: '按「送出」鈕傳送，Enter 換行',
     send: '送出',
     you: '你',
     // 「小潔 · 21:04」 above a message

@@ -19,7 +19,10 @@ import {
   EventRateLimit,
   MAX_ERROR_SAMPLES,
   TELEMETRY_DAYS,
+  TELEMETRY_RECORD_KEY,
   TelemetryLedger,
+  TelemetryStore,
+  type TelemetryStorage,
   dayKey,
   hourKey,
 } from '../../worker/telemetry.ts'
@@ -227,6 +230,51 @@ describe('EventRateLimit', () => {
       EVENT_RATE.ratings + 1,
     )
     expect(limit.take('d', [{ type: 'rating', score: 5 }], 1)).toEqual([])
+  })
+})
+
+/** Durable Object storage as far as TelemetryStore sees it; values are copied like the real one */
+function memoryStorage() {
+  const map = new Map<string, unknown>()
+  const storage: TelemetryStorage = {
+    get: async <T>(key: string) => map.get(key) as T | undefined,
+    put: async <T>(key: string, value: T) => {
+      map.set(key, structuredClone(value))
+    },
+  }
+  return { storage, map }
+}
+
+describe('TelemetryStore (TelemetryDO’s storage rule)', () => {
+  // Field test 2026-11-03: two people rated on leaving and /admin showed nothing. TelemetryDO
+  // saved from an alarm 30 s later; the object left memory first (about 10 s idle, no WebSockets)
+  // and the alarm woke a fresh one that stored the old record again.
+  it('keeps ratings given just before the object leaves memory', async () => {
+    const { storage } = memoryStorage()
+    const first = await TelemetryStore.load(storage)
+    await first.record('pc', [{ type: 'join', ok: true }], NOW)
+    await first.record('pc', [{ type: 'rating', score: 5 }], NOW + 60_000)
+    await first.record('phone', [{ type: 'rating', score: 4 }], NOW + 61_000)
+    // Evicted right after answering: a new instance only has what reached storage
+    const second = await TelemetryStore.load(storage)
+    const summary = second.summary(NOW + 120_000)
+    expect(ratingStats(summary.last24h)).toEqual({ count: 2, average: 4.5 })
+    expect(ratingsOf(summary.last7d)).toEqual({ 1: 0, 2: 0, 3: 0, 4: 1, 5: 1 })
+    expect(summary.days[0]).toMatchObject({ day: dayKey(NOW), joinOk: 1 })
+    expect(ratingStats(summary.days[0]).count).toBe(2)
+  })
+
+  it('writes nothing when the rate limit took nothing', async () => {
+    const { storage, map } = memoryStorage()
+    const store = await TelemetryStore.load(storage)
+    const ratings = Array<ClientEvent>(EVENT_RATE.ratings).fill({ type: 'rating', score: 3 })
+    expect(await store.record('a', ratings, NOW)).toHaveLength(EVENT_RATE.ratings)
+    const stored = structuredClone(map.get(TELEMETRY_RECORD_KEY))
+    expect(await store.record('a', [{ type: 'rating', score: 1 }], NOW + 1)).toEqual([])
+    expect(map.get(TELEMETRY_RECORD_KEY)).toEqual(stored)
+    expect(ratingStats((await TelemetryStore.load(storage)).summary(NOW).last24h).count).toBe(
+      EVENT_RATE.ratings,
+    )
   })
 })
 

@@ -163,6 +163,9 @@ export const media = {
   phone: `(max-width: ${breakpoint.phone}), (max-height: ${breakpoint.phoneLandscape}) and (orientation: landscape)`,
   // A mouse or trackpad: the pager's previous / next buttons (touch screens swipe)
   finePointer: '(hover: hover) and (pointer: fine)',
+  // A touch screen is the main input (phones, tablets without a mouse): an on-screen keyboard,
+  // where chat's Enter is a new line and only the send button sends
+  touchPrimary: '(hover: none) and (pointer: coarse)',
   reducedMotion: '(prefers-reduced-motion: reduce)',
 } as const
 

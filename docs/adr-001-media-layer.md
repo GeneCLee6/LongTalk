@@ -95,6 +95,24 @@ interface MediaTransport {
 - **B2 加上 `replaceTrack`**：換掉已發布的軌實際送出的內容（換裝置），或送 null（靜音、關鏡頭）；`RTCRtpSender.replaceTrack`，不需要 SDP 交換，所以不經過協商佇列，訂閱者的訂閱不受影響。
 - `FakeTransport`（`src/media/FakeTransport.ts`）：同一個 `FakeSfu` 建出來的 transport 互相 publish／subscribe，`useRoomMedia`（`e2-t04`）的測試用它跑。
 
+## 編碼參數（2026-11-03 實測後，`src/media/encoding.ts`）
+
+擁有者第一次實測（電腦＋手機＋同一台電腦上的 6 個 bot）回報「分享螢幕卡卡的、視訊一開始很糊、慢慢才變清楚」。量法：#21 的 PR 預覽，同一個 headless Chrome 裡 3 人（Alice 分享、Bob 與 Carol 看），替身 `getDisplayMedia` 是 1920×1080 的 canvas（捲動的文字＋快速移動的方塊，依要求的 fps 畫），每秒讀接收端 `inbound-rtp`（`framesPerSecond`、`framesDropped`、`freezeCount`、解析度）與發送端 `outbound-rtp`（`qualityLimitationReason`、`targetBitrate`）、`candidate-pair.availableOutgoingBitrate`；分享後 30 秒、鏡頭從加入起 20 秒。候選參數先在舊版預覽上以 init script 注入比較，選定後部署再量一次。
+
+| | 改之前（main） | 改之後（#21） |
+| --- | --- | --- |
+| 分享，接收端平均 fps（無負載） | 15.3；另一次 **1.5**（分享一開始頻寬估計掉到約 100 kbps，`detail` 守住 1080p、幀率掉到 0–3 fps，30 秒都沒回來） | **28.0／29.3**（兩次；從第 2 秒起 1080p） |
+| 分享，接收端 kbps | 約 1,200（另一次 212） | 約 2,150 |
+| 鏡頭到 640×480 | **13–16 秒**（先 320×240、再 480×360） | **第 0 秒** |
+| 8 人同一程序（5 個 bot） | 分享 12.8 fps | 分享 12.8 fps：**替身畫面本身只畫出約 12 fps**（渲染程序 CPU 不夠），編碼器沒有受限（`qualityLimitationReason: none`、`targetBitrate` 頂到 2.5 Mbps）；這個負載量到的是測試機，不是網路或編碼 |
+
+決定（候選比較的數字在 #21）：
+
+- **分享**：`frameRate { ideal: 30, max: 30 }`（原本 15）；`contentHint` 留 `detail`（`motion` 或不設時前 14 秒只有 720p，字糊；`detail`＋`balanced` 從第一秒就是 1080p）；sender `degradationPreference: 'balanced'`（壓力下解析度與幀率一起降，不再只掉幀）、`priority`／`networkPriority: 'high'`（同一條 PeerConnection 的頻寬估計依優先權分配，分享拿大份）、`maxBitrate` 2.5 Mbps、`maxFramerate` 30。文字／動態模式切換仍是 M1 `e3-t06`。
+- **鏡頭**：`maxBitrate` 800 kbps、`maxFramerate` 30（沒有 simulcast 前每個接收端都收整條，8 人時每人收 7 條；也讓分享在同一條上行有空間）；degradation 用瀏覽器預設（鏡頭本來就是 `balanced`）。
+- **起始頻寬**：發布時把 SFU answer 裡 VP8 的 fmtp 加上 `x-google-start-bitrate=1000`（kbps）再 `setRemoteDescription`。**只改本機**：SFU 看不到這個改動（這是瀏覽器 sender 從 remote description 讀的設定），Realtime 的 session 狀態不變；之後頻寬照 SFU 的 transport-cc 回饋調整，只是起點從 Chrome 預設的 300 kbps 改成 1,000 kbps。預期 Chrome 只在這個值改變時重設估計（libwebrtc 的 bitrate 設定比對），所以之後的發布（例如分享）不會把估計拉回 1,000；這點沒有單獨驗證，量到的分享數字已經包含它。非 Chromium 瀏覽器忽略它。上行真的很差的人頭一兩秒可能多掉一點包，之後估計會降下來。
+- 只送 VP8、不做 simulcast（`e2-t11`／H1 再改成每層的 encodings）。
+
 ## 後果
 
 - **要自己做的**：房間與軌清單（RoomDO，A3／B1）、desired／actual 訂閱對齊（`e2-t04`）、重連（`e2-t08`）、選層策略（`e2-t12`、`e2-t15`）、統計（`e2-t13`）。這些 LiveKit SDK 會送，Realtime 不會；已經排進 E2 的 task。

@@ -9,8 +9,14 @@ class MockPc {
     mid: string | null
     stop: () => void
     receiver: { track: unknown }
-    sender?: { replaceTrack: ReturnType<typeof vi.fn> }
+    sender?: {
+      replaceTrack: ReturnType<typeof vi.fn>
+      getParameters: () => Record<string, unknown>
+      setParameters: ReturnType<typeof vi.fn>
+    }
   }[] = []
+  /** What each addTransceiver call asked for */
+  inits: unknown[] = []
   localDescription: { type: string; sdp: string } | null = null
   remoteDescriptions: { type: string; sdp: string }[] = []
   iceGatheringState = 'complete'
@@ -21,12 +27,17 @@ class MockPc {
 
   addEventListener() {}
   removeEventListener() {}
-  addTransceiver(track: unknown) {
+  addTransceiver(track: unknown, init?: unknown) {
+    this.inits.push(init)
     const t = {
       mid: null as string | null,
       stop: vi.fn(),
       receiver: { track: { from: 'local', track } },
-      sender: { replaceTrack: vi.fn(async () => {}) },
+      sender: {
+        replaceTrack: vi.fn(async () => {}),
+        getParameters: () => ({ transactionId: 't1', encodings: [{}] }),
+        setParameters: vi.fn(async () => {}),
+      },
     }
     this.transceivers.push(t)
     return t
@@ -140,6 +151,49 @@ describe('CloudflareRealtimeTransport', () => {
       tracks: [{ location: 'local', mid: '0', trackName: published.trackName }],
     })
     expect(pc.remoteDescriptions).toEqual([{ type: 'answer', sdp: 'sfu-answer' }])
+  })
+
+  it('sends the screen and camera with their encoding, start bitrate and degradation', async () => {
+    const answer = [
+      'v=0',
+      'm=video 9 UDP/TLS/RTP/SAVPF 96 97',
+      'a=rtpmap:96 VP8/90000',
+      'a=rtpmap:97 rtx/90000',
+      'a=fmtp:97 apt=96',
+    ].join('\r\n')
+    const { transport, pc } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        sessionDescription: { type: 'answer', sdp: answer },
+        tracks: [{ mid: '0', trackName: 'x' }],
+      },
+    })
+    await transport.connect()
+    await transport.publish({ kind: 'video' } as MediaStreamTrack, { kind: 'screen' })
+    expect(pc.inits[0]).toEqual({
+      direction: 'sendonly',
+      sendEncodings: [
+        { maxBitrate: 2_500_000, maxFramerate: 30, priority: 'high', networkPriority: 'high' },
+      ],
+    })
+    expect(pc.remoteDescriptions[0].sdp).toContain('a=fmtp:96 x-google-start-bitrate=1000')
+    expect(pc.transceivers[0].sender!.setParameters).toHaveBeenCalledWith({
+      transactionId: 't1',
+      encodings: [{}],
+      degradationPreference: 'balanced',
+    })
+
+    await transport.publish({ kind: 'video' } as MediaStreamTrack, { kind: 'cam' })
+    expect(pc.inits[1]).toMatchObject({
+      sendEncodings: [{ maxBitrate: 800_000, maxFramerate: 30 }],
+    })
+    // The camera keeps the browser's own degradation (already balanced for cameras)
+    expect(pc.transceivers[1].sender!.setParameters).not.toHaveBeenCalled()
+
+    // Audio: the browser's defaults, and the answer as the SFU sent it
+    await transport.publish(track, { kind: 'mic' })
+    expect(pc.inits[2]).toEqual({ direction: 'sendonly', sendEncodings: undefined })
+    expect(pc.remoteDescriptions[2].sdp).toBe(answer)
   })
 
   it('replaces what a published track sends without another SFU call (B2)', async () => {

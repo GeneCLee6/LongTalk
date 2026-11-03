@@ -5,9 +5,17 @@ import { ChatPanel } from '../../src/components/ChatPanel.tsx'
 import { ChatPreview } from '../../src/components/ChatPreview.tsx'
 import { Drawer } from '../../src/components/Drawer.tsx'
 import { SidePanel } from '../../src/components/SidePanel.tsx'
-import { chatTime, countUnread, isSendKey, safeHref, splitLinks } from '../../src/room/chatText.ts'
+import {
+  COMPOSITION_GRACE_MS,
+  chatTime,
+  countUnread,
+  isSendKey,
+  safeHref,
+  splitLinks,
+} from '../../src/room/chatText.ts'
 import { CHAT_PREVIEW_MS, useChatNotifications } from '../../src/room/useChatNotifications.ts'
 import { strings } from '../../src/strings.ts'
+import { media } from '../../src/styles/tokens.ts'
 
 const at = new Date(2026, 10, 2, 21, 4).getTime()
 const message = (id: number, from = 'b', text = `m${id}`, name = '小潔'): ChatMessage => ({
@@ -75,6 +83,35 @@ describe('isSendKey', () => {
     expect(isSendKey({ key: 'Enter', shiftKey: false, keyCode: 229 })).toBe(false)
     expect(isSendKey({ key: 'Enter', shiftKey: false, ctrlKey: true })).toBe(false)
     expect(isSendKey({ key: 'a', shiftKey: false })).toBe(false)
+  })
+
+  const enter = { key: 'Enter', shiftKey: false }
+
+  it('does not send while a composition is open, even if the event does not say so', () => {
+    expect(isSendKey(enter, { enterSends: true, composing: true })).toBe(false)
+  })
+
+  it(`does not send within ${COMPOSITION_GRACE_MS} ms after compositionend (Safari's order)`, () => {
+    const ended = 1_000
+    // Safari: compositionend, then the Enter's keydown with isComposing false and keyCode 13
+    const right = { enterSends: true, compositionEndedAt: ended, now: ended + 5 }
+    expect(isSendKey({ ...enter, keyCode: 13 }, right)).toBe(false)
+    const edge = {
+      enterSends: true,
+      compositionEndedAt: ended,
+      now: ended + COMPOSITION_GRACE_MS - 1,
+    }
+    expect(isSendKey(enter, edge)).toBe(false)
+    // A later Enter is a real one
+    const later = { enterSends: true, compositionEndedAt: ended, now: ended + COMPOSITION_GRACE_MS }
+    expect(isSendKey(enter, later)).toBe(true)
+  })
+
+  it('never sends on Enter where a touch screen is the main input', () => {
+    expect(isSendKey(enter, { enterSends: false })).toBe(false)
+    expect(
+      isSendKey({ ...enter, keyCode: 13 }, { enterSends: false, compositionEndedAt: null }),
+    ).toBe(false)
   })
 })
 
@@ -198,6 +235,54 @@ describe('ChatPanel', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onSend).toHaveBeenCalledExactlyOnceWith('第一行')
     expect(input).toHaveValue('')
+  })
+
+  it('ignores the Enter that comes right after compositionend, sends a later one', () => {
+    const now = vi.spyOn(performance, 'now')
+    try {
+      const { onSend, input } = panel()
+      fireEvent.change(input, { target: { value: '你好' } })
+      now.mockReturnValue(10_000)
+      fireEvent.compositionStart(input)
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(onSend).not.toHaveBeenCalled()
+      fireEvent.compositionEnd(input)
+      now.mockReturnValue(10_020)
+      fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 })
+      expect(onSend).not.toHaveBeenCalled()
+      now.mockReturnValue(10_000 + COMPOSITION_GRACE_MS + 50)
+      fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 })
+      expect(onSend).toHaveBeenCalledExactlyOnceWith('你好')
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('on touch screens Enter is a new line and only the send button sends', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === media.touchPrimary,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+    try {
+      const { onSend, input } = panel()
+      expect(input).toHaveAttribute('enterkeyhint', 'enter')
+      expect(input).toHaveAccessibleDescription(strings.chat.hintTouch)
+      fireEvent.change(input, { target: { value: '第一行' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(onSend).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: strings.chat.send }))
+      expect(onSend).toHaveBeenCalledExactlyOnceWith('第一行')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('with a keyboard the hint says Enter sends', () => {
+    const { input } = panel()
+    expect(input).toHaveAttribute('enterkeyhint', 'send')
+    expect(input).toHaveAccessibleDescription(strings.chat.hint)
   })
 
   it('keeps the text and says why when it could not send', () => {

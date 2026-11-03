@@ -65,13 +65,40 @@ export interface ComposeKey {
 }
 
 /**
- * Whether this keydown sends the message: Enter without Shift (Shift+Enter is a new line), and
- * never while an input method is composing: there Enter picks the candidate (注音、倉頡、拼音),
+ * An Enter this soon after `compositionend` picked a candidate; it did not ask to send. Safari
+ * (macOS and iOS) ends the composition before the Enter's keydown, which then has isComposing
+ * false and, on some versions, keyCode 13 instead of 229.
+ */
+export const COMPOSITION_GRACE_MS = 200
+
+export interface SendKeyContext {
+  /**
+   * Whether Enter sends at all. Off where a touch screen is the main input (`media.touchPrimary`):
+   * a phone keyboard's Enter also picks 注音 candidates and does not always say so, so there Enter
+   * is a new line and only the send button sends (like LINE and WhatsApp).
+   */
+  enterSends: boolean
+  /** A composition is in progress (compositionstart seen, compositionend not yet) */
+  composing?: boolean
+  /** When the last composition ended (ms, the same clock as `now`), or null */
+  compositionEndedAt?: number | null
+  now?: number
+}
+
+/**
+ * Whether this keydown sends the message: Enter without Shift (Shift+Enter is a new line), only
+ * where Enter sends (not on touch screens), and never while an input method is composing or
+ * within COMPOSITION_GRACE_MS after it ended: there Enter picks the candidate (注音、倉頡、拼音),
  * and sending would cut the sentence in half.
  */
-export function isSendKey(event: ComposeKey): boolean {
-  if (event.key !== 'Enter') return false
-  if (event.isComposing || event.keyCode === 229) return false
+export function isSendKey(
+  event: ComposeKey,
+  context: SendKeyContext = { enterSends: true },
+): boolean {
+  if (event.key !== 'Enter' || !context.enterSends) return false
+  if (event.isComposing || event.keyCode === 229 || context.composing) return false
+  const ended = context.compositionEndedAt ?? null
+  if (ended !== null && (context.now ?? 0) - ended < COMPOSITION_GRACE_MS) return false
   return !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey
 }
 

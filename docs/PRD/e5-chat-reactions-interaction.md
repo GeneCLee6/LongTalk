@@ -52,7 +52,7 @@ depends_on: [E2, E4]
 ### M0
 
 - [x] `e5-t01` 聊天訊息模型、RoomDO 保留 200 則、速率限制、`chat.*` 訊息（協定 v8：`chat` 雙向、`rate_limited`；`shared/chat.ts`；每人每 10 秒 10 則、≤ 2000 字、去掉控制與雙向覆寫字元；每則一個 storage key，hibernation 後仍在；每次 `welcome` 後分段送歷史，重連也補上） · AC-5.1 · #18
-- [x] `e5-t02` 聊天面板 UI：訊息列、輸入框、連結偵測、未讀數與氣泡預覽、手機抽屜（桌機 320 px 側欄、手機全螢幕 `Drawer`；Enter 送出、Shift+Enter 換行、輸入法選字不送；只連 http／https、`rel="noopener noreferrer"`、純文字顯示；進房前的歷史不算未讀。AC-5.1 等 `DEPLOY.md` §5 第 11 步用手機實測） · AC-5.1 · #18
+- [x] `e5-t02` 聊天面板 UI：訊息列、輸入框、連結偵測、未讀數與氣泡預覽、手機抽屜（桌機 320 px 側欄、手機全螢幕 `Drawer`；Enter 送出、Shift+Enter 換行、輸入法選字不送（`compositionend` 後 200 ms 內的 Enter 也不送；觸控螢幕為主的裝置 Enter 換行、只有送出鈕送，2026-11-03 實測後修正）；只連 http／https、`rel="noopener noreferrer"`、純文字顯示；進房前的歷史不算未讀。AC-5.1 等 `DEPLOY.md` §5 第 11 步用手機實測） · AC-5.1 · #18
 
 ### M1
 
