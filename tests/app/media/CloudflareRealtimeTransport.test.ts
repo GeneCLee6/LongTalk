@@ -237,16 +237,12 @@ describe('CloudflareRealtimeTransport', () => {
           scaleResolutionDownBy: 2,
           maxBitrate: 400_000,
           maxFramerate: 30,
-          priority: 'low',
-          networkPriority: 'low',
         },
         {
           rid: 'q',
           scaleResolutionDownBy: 4,
           maxBitrate: 120_000,
           maxFramerate: 15,
-          priority: 'low',
-          networkPriority: 'low',
         },
       ],
     })

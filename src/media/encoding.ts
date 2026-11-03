@@ -108,16 +108,21 @@ export const SIMULCAST: Record<'cam' | 'screen', readonly SimulcastLayer[]> = {
   ],
 }
 
-/** addTransceiver's sendEncodings for a simulcast camera or screen, highest layer first */
+/**
+ * addTransceiver's sendEncodings for a simulcast camera or screen, highest layer first. The
+ * priority goes on the first encoding only: Chrome takes the sender's priority from it, and a
+ * non-default priority on any other encoding is "an unimplemented parameter" (OperationError,
+ * found in H5: the screen's `high` on both layers made addTransceiver throw, so every screen
+ * went out as one layer and no receiver could ask for `h`). The camera's `low` is the default.
+ */
 export function simulcastEncodings(kind: 'cam' | 'screen'): RTCRtpEncodingParameters[] {
   const { priority } = VIDEO_SEND[kind]
-  return SIMULCAST[kind].map((layer) => ({
+  return SIMULCAST[kind].map((layer, i) => ({
     rid: layer.rid,
     scaleResolutionDownBy: layer.scaleResolutionDownBy,
     maxBitrate: layer.maxBitrate,
     maxFramerate: layer.maxFramerate,
-    priority,
-    networkPriority: priority,
+    ...(i === 0 ? { priority, networkPriority: priority } : {}),
   }))
 }
 
