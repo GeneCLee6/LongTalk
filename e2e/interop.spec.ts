@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
-import { strings } from '../src/strings.ts'
+// The browsers run in zh-TW (playwright.config.ts): the Chinese dictionary, whatever Node's locale
+import { zhTW as strings } from '../src/i18n/zh-TW.ts'
 
 // e2-t10 (AC-2.2): three browsers with Chrome's fake camera and microphone (a moving picture and
 // a beep) open one room through the home page, join through the pre-join screen a few seconds
