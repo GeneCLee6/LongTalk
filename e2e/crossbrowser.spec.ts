@@ -37,9 +37,12 @@ interface Member {
   page: Page
 }
 
-/** A moving canvas for getDisplayMedia (headless browsers have no screen and no picker) */
+/**
+ * A moving canvas for getDisplayMedia (headless browsers have no screen and no picker); on the
+ * prototype, as in WebKit, setting it on navigator.mediaDevices from an init script did not hold
+ */
 function stubScreen() {
-  navigator.mediaDevices.getDisplayMedia = async () => {
+  MediaDevices.prototype.getDisplayMedia = async () => {
     const canvas = document.createElement('canvas')
     canvas.width = 1280
     canvas.height = 720
@@ -85,12 +88,15 @@ async function join(
   await context.addInitScript(keepPeerConnections)
   const page = await context.newPage()
   page.on('console', (message) => {
-    if (message.type() === 'error') console.log(`[${name} ${engine}] ${message.text().slice(0, 300)}`)
+    if (message.type() === 'error')
+      console.log(`[${name} ${engine}] ${message.text().slice(0, 300)}`)
   })
   page.on('response', (response) => {
     const path = new URL(response.url()).pathname
     if (path.startsWith('/api/sfu/') && !response.ok()) {
-      console.log(`[${name} ${engine}] ${response.request().method()} ${path} → ${response.status()}`)
+      console.log(
+        `[${name} ${engine}] ${response.request().method()} ${path} → ${response.status()}`,
+      )
     }
   })
   await page.goto(url)
@@ -108,14 +114,24 @@ const toolbarButton = (member: Member, name: string) =>
     .getByRole('toolbar', { name: strings.devices.controls })
     .getByRole('button', { name, exact: true })
 
-/** Frames decoded in one second by this video element (0 when there is none) */
+/**
+ * Frames this video element showed in one second (0 when there is none), counted with
+ * requestVideoFrameCallback: Firefox's getVideoPlaybackQuality() stays at 0 for a MediaStream
+ */
 async function framesOf(video: ReturnType<Page['locator']>): Promise<number> {
   if ((await video.count()) === 0) return 0
   return video.evaluate(async (element: HTMLVideoElement) => {
     if (element.videoWidth === 0) return 0
-    const before = element.getVideoPlaybackQuality().totalVideoFrames
+    let frames = 0
+    let counting = true
+    const count = () => {
+      frames += 1
+      if (counting) element.requestVideoFrameCallback(count)
+    }
+    element.requestVideoFrameCallback(count)
     await new Promise((resolve) => setTimeout(resolve, 1000))
-    return element.getVideoPlaybackQuality().totalVideoFrames - before
+    counting = false
+    return frames
   })
 }
 
@@ -162,7 +178,9 @@ async function expectReceiving(viewer: Member, other: Member) {
 
 async function expectSeesShare(viewer: Member, sharer: Member) {
   const region = strings.screenShare.region(sharer.name)
-  const video = viewer.page.getByRole('figure', { name: region }).getByLabel(region, { exact: true })
+  const video = viewer.page
+    .getByRole('figure', { name: region })
+    .getByLabel(region, { exact: true })
   await expect
     .poll(() => framesOf(video), {
       message: `${viewer.name} (${viewer.engine}) decodes ${sharer.name}'s screen`,
@@ -279,7 +297,9 @@ test('Firefox and Chromium in one room see and hear each other, a mute and each 
   try {
     const url = await openRoom(browser)
     testInfo.annotations.push({ type: 'room', description: url })
-    members.push(await join(other, 'chromium', url, 'Chris', { permissions: ['camera', 'microphone'] }))
+    members.push(
+      await join(other, 'chromium', url, 'Chris', { permissions: ['camera', 'microphone'] }),
+    )
     members.push(await join(browser, 'firefox', url, 'Fiona'))
     await meet(members[0], members[1], testInfo)
   } finally {
@@ -307,7 +327,9 @@ test('WebKit and Chromium in one room, where this WebKit build has WebRTC and de
     test.skip(!usable, 'this WebKit build has no WebRTC or no capture devices')
     const url = await openRoom(browser)
     testInfo.annotations.push({ type: 'room', description: url })
-    members.push(await join(other, 'chromium', url, 'Chris', { permissions: ['camera', 'microphone'] }))
+    members.push(
+      await join(other, 'chromium', url, 'Chris', { permissions: ['camera', 'microphone'] }),
+    )
     members.push(
       await join(safari, 'webkit', url, 'Wes', { permissions: ['camera', 'microphone'] }),
     )

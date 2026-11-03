@@ -35,7 +35,6 @@ const ENGINE_DIFFERENCES: Record<string, Partial<Record<Capability, string>>> = 
   firefox: {},
   webkit: {
     webShare: "Safari's share sheet is Safari's own; Playwright's WebKit may not have it",
-    getDisplayMedia: "Safari's screen picker is Safari's own; Playwright's WebKit may not have it",
   },
 }
 
@@ -69,7 +68,10 @@ function report(testInfo: TestInfo, name: string, data: unknown) {
   const dir = 'browser-report'
   mkdirSync(dir, { recursive: true })
   writeFileSync(`${dir}/${testInfo.project.name}-${name}.json`, JSON.stringify(data, null, 2))
-  return testInfo.attach(name, { body: JSON.stringify(data, null, 2), contentType: 'application/json' })
+  return testInfo.attach(name, {
+    body: JSON.stringify(data, null, 2),
+    contentType: 'application/json',
+  })
 }
 
 /** Whether this browser can be in a call at all; the rest of a test depends on it */
@@ -78,7 +80,10 @@ async function hasWebRtc(page: Page): Promise<boolean> {
   return (await detect(page)).webrtc
 }
 
-test('what LongTalk detects agrees with docs/BROWSER-SUPPORT.md', async ({ page, browser }, testInfo) => {
+test('what LongTalk detects agrees with docs/BROWSER-SUPPORT.md', async ({
+  page,
+  browser,
+}, testInfo) => {
   const column = COLUMN[testInfo.project.name]
   test.skip(!column, 'no doc column for this project')
   await page.goto('/')
@@ -161,13 +166,16 @@ test('pre-join with the camera and microphone denied, then joining without them'
   page,
 }) => {
   test.skip(!(await hasWebRtc(page)), 'no WebRTC in this build: the room says so (test above)')
-  // As when the person said no: the devices refuse and the permissions read denied
+  // As when the person said no: the devices refuse and the permissions read denied. On the
+  // prototypes: in WebKit, setting it on navigator.mediaDevices from an init script did not hold
   await page.addInitScript(() => {
-    navigator.mediaDevices.getUserMedia = () =>
-      Promise.reject(new DOMException('Permission denied', 'NotAllowedError'))
-    const query = navigator.permissions.query.bind(navigator.permissions)
-    navigator.permissions.query = (descriptor) =>
-      ['camera', 'microphone'].includes(descriptor.name)
+    Object.defineProperty(MediaDevices.prototype, 'getUserMedia', {
+      configurable: true,
+      value: () => Promise.reject(new DOMException('Permission denied', 'NotAllowedError')),
+    })
+    const query = Permissions.prototype.query
+    Permissions.prototype.query = function (this: Permissions, descriptor: PermissionDescriptor) {
+      return ['camera', 'microphone'].includes(descriptor.name)
         ? Promise.resolve({
             name: descriptor.name,
             state: 'denied',
@@ -176,7 +184,8 @@ test('pre-join with the camera and microphone denied, then joining without them'
             removeEventListener() {},
             dispatchEvent: () => false,
           } as unknown as PermissionStatus)
-        : query(descriptor)
+        : query.call(this, descriptor)
+    }
   })
   const path = await newRoom(page)
   await page.goto(path)
@@ -195,15 +204,22 @@ test('pre-join with the camera and microphone denied, then joining without them'
 test('pre-join with no camera or microphone at all', async ({ page }) => {
   test.skip(!(await hasWebRtc(page)), 'no WebRTC in this build: the room says so (test above)')
   await page.addInitScript(() => {
-    navigator.mediaDevices.enumerateDevices = () => Promise.resolve([])
-    navigator.mediaDevices.getUserMedia = () =>
-      Promise.reject(new DOMException('Requested device not found', 'NotFoundError'))
+    Object.defineProperty(MediaDevices.prototype, 'enumerateDevices', {
+      configurable: true,
+      value: () => Promise.resolve([]),
+    })
+    Object.defineProperty(MediaDevices.prototype, 'getUserMedia', {
+      configurable: true,
+      value: () => Promise.reject(new DOMException('Requested device not found', 'NotFoundError')),
+    })
   })
   const path = await newRoom(page)
   await page.goto(path)
   await expect(page.getByRole('heading', { name: strings.prejoin.title })).toBeVisible()
   await expect(
-    page.getByText(`${strings.prejoin.problems.micNotFound}${strings.prejoin.problems.camNotFound}`),
+    page.getByText(
+      `${strings.prejoin.problems.micNotFound}${strings.prejoin.problems.camNotFound}`,
+    ),
   ).toBeVisible()
   for (const label of [strings.prejoin.micLabel, strings.prejoin.camLabel]) {
     const select = page.getByRole('combobox', { name: label, exact: true })
@@ -256,7 +272,9 @@ test('two members: the grid, chat and the participants panel', async ({ page, br
   // one picks a candidate instead of sending (chatText.ts, COMPOSITION_GRACE_MS)
   await bobInput.pressSequentially('hi Ada')
   await bobInput.press('Enter')
-  await expect(page.getByRole('log', { name: strings.chat.messages }).getByText('hi Ada')).toBeVisible()
+  await expect(
+    page.getByRole('log', { name: strings.chat.messages }).getByText('hi Ada'),
+  ).toBeVisible()
 
   // The participants panel lists both
   await toolbar.getByRole('button', { name: /^參與者/ }).click()
@@ -287,9 +305,11 @@ test('a phone-sized window: the toolbar fits and nothing scrolls sideways', asyn
   expect(box!.y + box!.height).toBeLessThanOrEqual(844)
   expect(box!.x + box!.width).toBeLessThanOrEqual(390)
   // No sharing button on a phone-sized screen (sharing is a computer's)
-  await expect(toolbar.getByRole('button', { name: strings.toolbar.more, exact: true })).toBeVisible()
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-  ).toBe(true)
+  await expect(
+    toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }),
+  ).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  )
   await context.close()
 })
