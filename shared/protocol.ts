@@ -142,6 +142,8 @@
 // v13 → v14 (H2): `signal`, `Member.signal`.
 // v14 → v15 (H5): `RoomInfo.shares` (up to MAX_SHARES) replaces `RoomInfo.share`; `share` has no
 //   `takeOver`; error code `share_full` replaces `share_busy`.
+// v15 → v16 (I1): close code `rateLimited`; a frame over MAX_CLIENT_MESSAGE_CHARS closes the
+//   socket with 1009 instead of answering `bad_message`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -154,7 +156,7 @@ import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 15
+export const PROTOCOL_VERSION = 16
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -229,6 +231,11 @@ export const CloseCode = {
   passwordWrong: 4402,
   /** Too many wrong passwords: wait; the close reason is the milliseconds left (F3) */
   passwordWait: 4429,
+  /**
+   * Abuse protection (I1): too many upgrades from one network into this room
+   * (ROOM_CONNECT_RATE), or too many frames on one socket (SOCKET_MESSAGE_RATE)
+   */
+  rateLimited: 4420,
 } as const
 
 /** What POST /api/rooms decides about a room */

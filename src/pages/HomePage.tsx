@@ -1,8 +1,8 @@
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import styled from 'styled-components'
 import { parseRoomInput } from '../../shared/room-id.ts'
-import { createRoom } from '../api/rooms.ts'
+import { createRoom, CreateRoomError, type CreateRoomProblem } from '../api/rooms.ts'
 import { Button } from '../components/Button.tsx'
 import { TextInput } from '../components/Field.tsx'
 import { OfflineIcon } from '../components/icons.tsx'
@@ -11,27 +11,79 @@ import { LanguageSelect } from '../components/LanguageSelect.tsx'
 import { ThemeSelect } from '../components/ThemeSelect.tsx'
 import { Logo } from '../components/Logo.tsx'
 import { useOnline } from '../pwa/online.ts'
-import { strings } from '../strings.ts'
+import { getLocale, strings } from '../strings.ts'
 import { breakpoint, color, font, fontSize, radius, space } from '../styles/tokens.ts'
+import { turnstileToken } from '../turnstile.ts'
+
+/** What went wrong creating a room (I1): the notice under the buttons */
+type CreateProblem = Exclude<CreateRoomProblem['reason'], 'turnstile'> | 'verifyFailed'
+
+function createProblemText(problem: CreateProblem, retryAfter: number): string {
+  switch (problem) {
+    case 'rateLimited':
+      return strings.home.createRoomRateLimited(Math.max(1, Math.ceil(retryAfter / 60)))
+    case 'blocked':
+      return strings.home.createRoomBlocked
+    case 'turnstileFailed':
+    case 'verifyFailed':
+      return strings.home.createRoomVerifyFailed
+    case 'failed':
+      return strings.home.createRoomFailed
+  }
+}
 
 /** The home page (DESIGN.md §4.1): one primary action, a join box, three reasons. Follows the system scheme. */
 export function HomePage() {
   const navigate = useNavigate()
   const [creating, setCreating] = useState(false)
-  const [createFailed, setCreateFailed] = useState(false)
+  const [createProblem, setCreateProblem] = useState<{
+    problem: CreateProblem
+    retryAfter: number
+  } | null>(null)
+  const [verifying, setVerifying] = useState(false)
+  // Where Turnstile's widget goes when it needs the person (most of the time it stays empty)
+  const challenge = useRef<HTMLDivElement>(null)
   const [joinInput, setJoinInput] = useState('')
   const [joinInvalid, setJoinInvalid] = useState(false)
   // The shell opens offline (e4-t12); rooms need the network
   const online = useOnline()
 
+  /**
+   * POST /api/rooms; when the server asks for Turnstile (I1), the widget's token and once more.
+   * Every refusal has its own notice.
+   */
   async function onCreate() {
     setCreating(true)
-    setCreateFailed(false)
+    setCreateProblem(null)
     try {
-      const roomId = await createRoom()
+      let roomId: string
+      try {
+        roomId = await createRoom()
+      } catch (error) {
+        if (!(error instanceof CreateRoomError) || error.problem.reason !== 'turnstile') throw error
+        setVerifying(true)
+        let token: string
+        try {
+          token = await turnstileToken(
+            challenge.current!,
+            error.problem.siteKey,
+            getLocale().toLowerCase(),
+          )
+        } catch {
+          throw new CreateRoomError({ reason: 'turnstileFailed' })
+        } finally {
+          setVerifying(false)
+        }
+        roomId = await createRoom(token)
+      }
       navigate(`/r/${roomId}`)
-    } catch {
-      setCreateFailed(true)
+    } catch (error) {
+      const problem: CreateRoomProblem =
+        error instanceof CreateRoomError ? error.problem : { reason: 'failed' }
+      setCreateProblem({
+        problem: problem.reason === 'turnstile' ? 'verifyFailed' : problem.reason,
+        retryAfter: problem.reason === 'rateLimited' ? problem.retryAfter : 0,
+      })
       setCreating(false)
     }
   }
@@ -57,7 +109,11 @@ export function HomePage() {
         <Intro>{strings.home.intro}</Intro>
         <Actions>
           <Button onClick={onCreate} disabled={creating}>
-            {creating ? strings.home.creatingRoom : strings.home.createRoom}
+            {verifying
+              ? strings.home.verifying
+              : creating
+                ? strings.home.creatingRoom
+                : strings.home.createRoom}
           </Button>
           <JoinForm onSubmit={onJoin} noValidate>
             <TextInput
@@ -84,7 +140,12 @@ export function HomePage() {
             {strings.pwa.offlineHome}
           </Offline>
         )}
-        {createFailed && <Notice role="alert">{strings.home.createRoomFailed}</Notice>}
+        <Challenge ref={challenge} />
+        {createProblem && (
+          <Notice role="alert">
+            {createProblemText(createProblem.problem, createProblem.retryAfter)}
+          </Notice>
+        )}
         {joinInvalid && (
           <Notice id="join-error" role="alert">
             {strings.home.joinInvalid}
@@ -177,6 +238,13 @@ const JoinForm = styled.form`
   > button {
     flex: none;
     white-space: nowrap;
+  }
+`
+
+/** Turnstile's widget, when it asks for a click; takes no room while empty */
+const Challenge = styled.div`
+  &:empty {
+    display: none;
   }
 `
 

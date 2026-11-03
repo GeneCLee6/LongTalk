@@ -10,7 +10,8 @@ import {
   type EventCounts,
 } from '../../shared/telemetry.ts'
 import { GB } from '../../shared/usage.ts'
-import { fetchAdminSummary } from '../api/admin.ts'
+import { blockClient, fetchAdminSummary, unblockClient } from '../api/admin.ts'
+import { AdminBlocks } from './AdminBlocks.tsx'
 import { Button } from '../components/Button.tsx'
 import { TextField } from '../components/Field.tsx'
 import { formatDateTime, formatDay, strings } from '../strings.ts'
@@ -223,6 +224,20 @@ export default function AdminPage() {
           <Small>{strings.admin.analyticsEngine(summary.analyticsEngine)}</Small>
           <Small>{strings.admin.privacy}</Small>
         </Section>
+
+        <AdminBlocks
+          abuse={summary.abuse ?? null}
+          onBlock={async (request) => {
+            if (!token || !(await blockClient(token, request))) return false
+            await load(token)
+            return true
+          }}
+          onUnblock={async (key) => {
+            if (!token || !(await unblockClient(token, key))) return false
+            await load(token)
+            return true
+          }}
+        />
       </Dashboard>
     </Page>
   )

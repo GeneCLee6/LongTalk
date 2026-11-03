@@ -179,6 +179,7 @@ describe('AdminPage', () => {
     },
     usage: { month: '2026-11', bytes: 12_300_000_000, state: 'normal' },
     analyticsEngine: true,
+    abuse: null,
   }
   afterEach(() => {
     vi.unstubAllGlobals()

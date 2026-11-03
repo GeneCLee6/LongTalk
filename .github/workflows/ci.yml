@@ -1,7 +1,8 @@
 name: CI
 
-# Runs on every push and on pull requests targeting main: install -> lint -> typecheck -> test ->
-# build -> JS budget (CLAUDE.md rule 6). All must pass before a pull request can merge (AC-11.2).
+# Runs on every push and on pull requests targeting main: install -> dependency audit -> lint
+# (with the secrets lint) -> typecheck -> test -> build -> JS budget (CLAUDE.md rule 6) and no
+# secrets in the built client (rule 3). All must pass before a pull request can merge (AC-11.2).
 # Production deploys run in deploy.yml after this workflow succeeds on main.
 on:
   push:
@@ -28,7 +29,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint (oxlint, then no text or colour literals outside i18n and tokens)
+      # e11-t06 (AC-11.7): a high or critical advisory in a dependency the app or the Worker ships
+      # fails the build; the dev tools' advisories are listed in the summary but do not fail
+      - name: Dependency audit (production dependencies, high and critical fail)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Dependency audit (everything, report only)
+        run: |
+          {
+            echo '### npm audit (all dependencies, report only)'
+            echo '```'
+            npm audit --audit-level=none 2>&1 | tail -n 40 || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Lint (oxlint; no text or colour literals outside i18n and tokens; no secrets in src/ or public/)
         run: npm run lint
 
       - name: Type check
@@ -40,6 +55,6 @@ jobs:
       - name: Production build
         run: npm run build
 
-      - name: JS budget (home ≤ 150 kB, room ≤ 350 kB gzip)
+      - name: JS budget (home ≤ 150 kB, room ≤ 350 kB gzip) and no secrets in the built client
         # GitHub's bash runs with -o pipefail, so a failed budget fails the step through the pipe
         run: npm run --silent budget | tee -a "$GITHUB_STEP_SUMMARY"

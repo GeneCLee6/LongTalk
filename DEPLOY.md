@@ -43,12 +43,12 @@ LongTalk 是**一個 Cloudflare Worker**：同一個 Worker 回答 `/api/*`、�
 
 | Workflow | 何時 | 做什麼 |
 | --- | --- | --- |
-| `ci.yml` | 每次 push、每個 PR | `npm ci` → lint → typecheck → test → build → JS 預算（首頁 ≤ 150 kB、會議室 ≤ 350 kB gzip）。全綠才可合併（AC-11.2） |
-| `preview.yml` | PR 開啟、更新 | 部署 `longtalk-pr-<號>`（`CLOUDFLARE_ENV=preview`），smoke test，把網址留言在 PR；接著 `e2e` job 在這個預覽跑三個瀏覽器的互通測試（§7）；PR 關閉時刪除該 Worker 與它的資料 |
+| `ci.yml` | 每次 push、每個 PR | `npm ci` → 相依稽核（正式相依 high／critical 失敗，§11）→ lint（含 secrets lint）→ typecheck → test → build → JS 預算（首頁 ≤ 150 kB、會議室 ≤ 350 kB gzip）與 build 出來的檔案沒有 secret。全綠才可合併（AC-11.2） |
+| `preview.yml` | PR 開啟、更新 | 部署 `longtalk-pr-<號>`（`CLOUDFLARE_ENV=preview`），smoke test，把網址留言在 PR；接著 `e2e` job 在這個預覽跑三個瀏覽器的互通測試（§7），之後 `abuse` job 對預覽跑濫用測試（§11）；PR 關閉時刪除該 Worker 與它的資料 |
 | `ui.yml`（`UI checks`） | 每個 PR、`main` 的 push、手動 | 在 Playwright 的 Docker image 裡 build＋`vite preview`：`a11y`（axe 與鍵盤、Lighthouse 無障礙 ≥ 0.95）、`visual`（12 張基準截圖）；不是必過的檢查（§7） |
 | `deploy.yml` | CI 在 `main` 綠了之後 | 部署正式站 `longtalk`，smoke test 確認它正在提供這個 commit |
 
-smoke test（`scripts/smoke.sh`）檢查：首頁 `<meta name="app-version">` 是這個 commit、`/api/health` 回這個 commit、`/r/<id>` 回 200（SPA fallback）、品牌檔案（§9），以及 `/sw.js` 是 JavaScript、`Cache-Control: no-cache`、`appVersion` 是這個 commit、預先快取清單裡沒有 `/api`（§10）。
+smoke test（`scripts/smoke.sh`）檢查：首頁 `<meta name="app-version">` 是這個 commit、`/api/health` 回這個 commit、`/r/<id>` 回 200（SPA fallback）、品牌檔案（§9），以及 `/sw.js` 是 JavaScript、`Cache-Control: no-cache`、`appVersion` 是這個 commit、預先快取清單裡沒有 `/api`（§10），首頁與 `/api/health` 帶著安全標頭（§11）。
 
 建議在 GitHub 把 `main` 設為受保護分支：要求 PR、要求 `CI / verify` 通過。
 
@@ -72,10 +72,10 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 
 ## 4. 新增綁定或 Durable Object 時
 
-- `wrangler.jsonc` 的 `migrations` **只能往後加**；已部署的 migration 不要改、不要刪。新增 DO class 就加一個新 tag。現有：`v1` `RoomDO`（A1）、`v2` `UsageDO`（B1，§6）、`v3` `TelemetryDO`（D3，§8）；下一個是 `v4`。
-- `vars` 也**不會繼承**：頂層與 `env.preview` 各寫一次（現有 `USAGE_LOW_QUALITY_GB`、`USAGE_AUDIO_ONLY_GB`，§6）。
+- `wrangler.jsonc` 的 `migrations` **只能往後加**；已部署的 migration 不要改、不要刪。新增 DO class 就加一個新 tag。現有：`v1` `RoomDO`（A1）、`v2` `UsageDO`（B1，§6）、`v3` `TelemetryDO`（D3，§8）、`v4` `GuardDO`（I1，§11）；下一個是 `v5`。
+- `vars` 也**不會繼承**：頂層與 `env.preview` 各寫一次（現有 `USAGE_LOW_QUALITY_GB`、`USAGE_AUDIO_ONLY_GB`，§6；預覽另有 Turnstile 的公開測試 key，§11）。
 - `env.preview` **不會繼承**頂層的綁定：每個 DO、KV、R2、D1、Analytics Engine 綁定都要在 `env.preview` 重寫一次；R2／D1／Analytics Engine 要給預覽自己的資源，不要指到正式站的（Analytics Engine：正式站 `longtalk_events`、預覽 `longtalk_events_preview`，§8）。
-- secret（SFU App token、TURN key、AI 金鑰）只用 `wrangler secret put` 放在 Worker，**不進前端、不進 repo**（CLAUDE.md 規則 3）。要設定的 secret 見 §5。
+- secret（SFU App token、TURN key、Turnstile secret key、AI 金鑰）只用 `wrangler secret put` 放在 Worker，**不進前端、不進 repo**（CLAUDE.md 規則 3；`npm run lint` 與 `npm run budget` 的 `scripts/secrets.ts` 會擋，§11）。要設定的 secret 見 §5。
 
 ## 5. Secrets 與 Realtime 互通測試（A2，B1 起改用會議室頁）
 
@@ -88,6 +88,9 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 | `REALTIME_TURN_KEY_ID` | Worker secret | 儀表板 → Realtime → TURN → 建立 key → **Turn Token ID** | `worker/turn.ts`（B3 起） |
 | `REALTIME_TURN_KEY_API_TOKEN` | Worker secret | 同一個 TURN key 的 **API token**（只顯示一次） | `worker/turn.ts`（B3 起） |
 | `ADMIN_TOKEN` | Worker secret | 自己產生的長亂數（例如 `openssl rand -base64 32`），當成 `/admin` 的密碼 | `worker/events.ts`（D3 起，§8） |
+| `TURNSTILE_SECRET_KEY` | Worker secret（選用） | 儀表板 → Turnstile → 建立 widget → **Secret Key**（§11） | `worker/turnstile.ts`（I1 起；和 `TURNSTILE_SITE_KEY` 都設了才開） |
+| `TURNSTILE_SITE_KEY` | `wrangler.jsonc` 頂層 `vars`（公開，不是 secret） | 同一個 widget 的 **Site Key**（§11） | `worker/rooms.ts` 回給瀏覽器（I1 起） |
+| `IP_HASH_PEPPER` | Worker secret（選用、建議） | 自己產生的長亂數（`openssl rand -base64 32`）；**設了就不要改**（改了既有的封鎖與計數全部對不上） | `worker/client-key.ts`（I1 起，§11） |
 
 App ID 不算機密，但和 App Secret 放在一起管理比較不會漏。**沒設定時 `/api/sfu/<roomId>/*` 對房間成員回 503 `sfu_not_configured`**，其餘功能照常（進得了房、看得到成員，只是沒有聲音與畫面）。
 
@@ -382,7 +385,7 @@ npx vite preview --port 4173 &  npm run lighthouse   # 另一個終端機也可�
    npx wrangler secret put ADMIN_TOKEN
    ```
 
-   沒設定時 `/api/admin/summary` 回 503，`/admin` 顯示「還沒設定 ADMIN_TOKEN」；其他功能不受影響。
+   沒設定時 `/api/admin/summary` 回 503，`/admin` 顯示「這個部署還沒設定管理密碼」；其他功能不受影響。
 2. （選用）PR 預覽也要能看 `/admin`：在 GitHub 設 `PREVIEW_ADMIN_TOKEN`（`gh secret set PREVIEW_ADMIN_TOKEN`，用**另一個**亂數），`preview.yml` 部署後會把它寫成該 PR Worker 的 `ADMIN_TOKEN`；沒設就跳過（notice）。
 3. 打開 `https://<站>/admin`，輸入密碼。密碼只放在這個分頁的記憶體裡（重新整理就要再輸入一次），以 `Authorization: Bearer …` 標頭送出，**不會放在網址**；Worker 用常數時間比對（兩邊先 SHA-256 再 `timingSafeEqual`）。目前沒有猜密碼的次數限制，所以密碼一定要夠長（32 個字元以上的亂數）。
 
@@ -436,3 +439,91 @@ curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engin
 - **安裝提示**（`src/pwa/install.ts`）：只在首頁。Chromium 的 `beforeinstallprompt` 被留下來給自己的「安裝」按鈕；iPhone／iPad Safari（`navigator.standalone` 存在）顯示一次「分享 › 加入主畫面」；已經以 App 打開（`display-mode: standalone`）、按過「不用了」、或瀏覽器回報已安裝就不再出現（`localStorage` 的 `longtalk.installDismissed`）。
 - **PR 預覽**：每個預覽是自己的 `longtalk-pr-<號>` 網域，service worker 與快取各自獨立，不會和正式站互相影響；`vite dev` 不註冊 service worker（`import.meta.env.PROD`）。e2e 的 `e2e/pwa.spec.ts` 在預覽上檢查：worker 註冊並接管、快取裡有殼而沒有 `/api`、`/api/health` 不經過 worker、離線時首頁與房間連結的畫面；`scripts/smoke.sh` 檢查 `/sw.js`（§2）。
 - **出問題時**：要讓所有人立刻丟掉 service worker，部署一版 `sw.ts` 只在 `activate` 時刪掉全部 `longtalk-shell-*` 並 `self.registration.unregister()`（瀏覽器每次載入都會重新檢查 `/sw.js`，`no-cache`）。使用者端：網站設定 › 清除資料，或 DevTools › Application › Service workers › Unregister。
+
+## 11. 濫用防護與安全標頭（e11-t05、e11-t06，I1）
+
+**只用免費方案**：限制都在自己的 Worker 與 Durable Object 裡，不用 Cloudflare 的 WAF 規則或付費的 Rate Limiting。Workers 的 Rate Limiting 綁定（`ratelimits`）官方文件沒寫免費方案能不能用、只有 10／60 秒兩種週期、每個機房各算各的，所以**沒有用**；跨機房、以天計的建房限制要全站一致，放在 `GuardDO`（一次建房一次 DO 請求，免費方案每天 10 萬次）。
+
+### 限制一覽（數字在 `shared/abuse.ts`）
+
+| 什麼 | 上限 | 超過時 | 在哪裡算 |
+| --- | --- | --- | --- |
+| 建房（每個網路） | 10 分鐘 10 間、一天 60 間 | 429 `rate_limited`＋`Retry-After`；首頁「這個網路開房的次數太多了，請 N 分鐘後再試」 | `GuardDO`（全站） |
+| Turnstile（建房） | 兩把 key 都設了才開 | 403 `turnstile_required`（附 site key）→ 瀏覽器跑 widget 再送；驗證沒過 403 `turnstile_failed` | Worker → siteverify |
+| `/api/rooms/<id>` 與 WebSocket 升級（每個網路） | 每個 isolate 10 秒 60 次 | 429 | Worker 記憶體（第一道防線） |
+| 進同一間房的升級（每個網路） | 每分鐘 60 次 | WebSocket 以 4420 關閉，瀏覽器不重連、請使用者等一分鐘再重新整理 | RoomDO |
+| 每個連線的訊息（全部種類合計） | 10 秒 120 個（心跳 `ping` 由 runtime 自動回，不算） | 4420 關閉，那位成員變成「重新連線中」，寬限期滿被移除 | RoomDO |
+| 單一訊息大小 | 16 384 字元（`MAX_CLIENT_MESSAGE_CHARS`） | 1009（Message Too Big）關閉 | RoomDO |
+| 原有的：聊天、反應、訊號、密碼 | 每人 10 秒 10 則、5 秒 8 個、10 秒 3 個；密碼錯 3 次等 30 秒 | 不變 | RoomDO |
+| 封鎖名單 | 擁有者在 `/admin` 設定，1 小時／1 天／7 天／30 天 | `/api/rooms/*` 一律 403 `blocked`（首頁與預先加入頁說「這個網路目前不能開房／加入會議室」）；已經在會議裡的連線不受影響 | `GuardDO`，Worker 每 30 秒讀一次 |
+
+- **網路**＝IPv4 的一個位址、IPv6 的一個 /64（一個家庭或一支手機通常拿到整個 /64）。只存雜湊（96 bits），從不存位址；有 `IP_HASH_PEPPER` 時是以它為 key 的 HMAC，沒有時是一般 SHA-256（IPv4 只有 2³² 個，拿到 storage 的人可以窮舉回推，所以建議設 pepper）。
+- **同一個網路的人一起算**：公司、學校、宿舍的 NAT 後面的人共用額度與封鎖。數字設得讓一整間辦公室同時進房、斷線重連都碰不到；要調整改 `shared/abuse.ts`。
+- 沒有 `CF-Connecting-IP` 的請求（本機 `npm run dev`／`vite preview`、單元測試）**不受**這些限制。
+- `/admin` 的「濫用防護與封鎖名單」：Turnstile 與 pepper 有沒有開、封鎖中的雜湊與到期時間、輸入 IP 封鎖（Worker 雜湊後才存）、最近碰到限制的網路（開房太多、驗證沒過、連線太多、訊息太多）可以一鍵封鎖 1 天、解除封鎖。API：`POST /api/admin/blocks`（`{ ip | key, hours, note? }`）、`DELETE /api/admin/blocks/<key>`，都要 `ADMIN_TOKEN`。
+
+### 擁有者要做的事（Turnstile 與 pepper；都可以晚點做，沒做之前什麼都不會壞）
+
+1. **建立 Turnstile widget**：Cloudflare 儀表板 → Turnstile → Add widget。名稱 `LongTalk`；Hostname 加 `longtalk.genelee-pro.workers.dev`（之後有自訂網域也加上）；Widget mode 選 **Managed**（LongTalk 用 `interaction-only` 外觀：大部分人什麼都看不到，需要時才出現勾選框）；Pre-clearance 選 No。建立後拿到 **Site Key** 與 **Secret Key**。PR 預覽（`longtalk-pr-<號>.genelee-pro.workers.dev`）**不需要**加進 hostname：預覽用 Cloudflare 公開的測試 key（下面）。
+2. **secret key 放進正式 Worker**（不要貼到任何檔案、PR 或對話裡）：
+
+   ```sh
+   npx wrangler secret put TURNSTILE_SECRET_KEY
+   ```
+
+3. **site key 寫進 `wrangler.jsonc` 頂層的 `vars`**（它是公開的，瀏覽器本來就看得到），開一個 PR 合併：
+
+   ```jsonc
+   "vars": {
+     "USAGE_LOW_QUALITY_GB": "800",
+     "USAGE_AUDIO_ONLY_GB": "950",
+     "TURNSTILE_SITE_KEY": "<site key>"
+   },
+   ```
+
+   不要在儀表板設這個 var：每次 `wrangler deploy` 會用 `wrangler.jsonc` 的 vars 蓋掉儀表板的。**兩把都設了 Turnstile 才會開**；只設一把等於沒開（`/admin` 會顯示「Turnstile 未設定」）。
+4. （建議）**pepper**：`openssl rand -base64 32`，然後 `npx wrangler secret put IP_HASH_PEPPER`。設了之後不要再換：換了之後既有的封鎖與建房計數都對不上（等於全部清空）。最好在第一次封鎖任何人之前就設好。
+5. 檢查：開首頁按「開一間房」，DevTools 的 Network 先看到一個 403 的 `POST /api/rooms`（`turnstile_required`），接著載入 `challenges.cloudflare.com` 的 script，第二個 `POST /api/rooms` 回 201；`/admin` 顯示「開房需要 Turnstile 真人驗證」。
+
+**PR 預覽**用 Cloudflare 文件裡的公開測試 key（`wrangler.jsonc` 的 `env.preview.vars`）：site key `1x00000000000000000000BB`（隱形、永遠通過），secret key `1x0000000000000000000000000000000AA`（永遠通過；公開的測試值，不是 secret）。所以每個預覽都走完整的「403 → Turnstile → 201」流程，`e2e` 的瀏覽器測試也是。**真的 key 永遠不要放進 `env.preview`**。驗證失敗的情境由單元測試（假的 siteverify）負責。
+
+### 安全標頭與 CSP
+
+頁面與所有靜態檔（`public/_headers` 的 `/*`，內容＝`shared/security-headers.ts` 的 `PAGE_HEADERS`，`tests/app/security.test.ts` 比對）：
+
+```
+Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com;
+  style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self';
+  connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-src https://challenges.cloudflare.com;
+  frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self';
+  report-uri /api/csp-report; report-to csp
+Reporting-Endpoints: csp="/api/csp-report"
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+Permissions-Policy: camera=(self), microphone=(self), display-capture=(self), autoplay=(self),
+  clipboard-write=(self), fullscreen=(self), picture-in-picture=(self), accelerometer=(),
+  browsing-topics=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(),
+  magnetometer=(), midi=(), otp-credentials=(), payment=(), screen-wake-lock=(), serial=(), usb=(),
+  window-management=(), xr-spatial-tracking=()
+Cross-Origin-Opener-Policy: same-origin
+Referrer-Policy: strict-origin-when-cross-origin
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+```
+
+（CSP 與 Permissions-Policy 實際上各是一行。）為什麼這樣：
+
+- **script**：只有自己的檔案，沒有 inline、沒有 `eval`（Vite build 的 `index.html` 沒有 inline script）。`'wasm-unsafe-eval'` 只允許編譯 WebAssembly（RNNoise，`e6-t02`），不是 JavaScript 的 eval。Turnstile 的網域**一律列著**：頁面由靜態資產直接回應、標頭是固定的，沒辦法照「有沒有設定 key」變；它是 Cloudflare 自己的網域，沒設定 key 時頁面根本不會載入它。
+- **style 允許 `'unsafe-inline'`**：styled-components 在執行時寫 `<style>`，React 的 `style={…}` 與 `index.html` 的 `<body style>` 也是 inline style。要改用 nonce 得讓每個 HTML 回應都經過 Worker 改寫（每次開頁多一次 Worker 請求），不划算；inline style 不能執行程式，風險比 inline script 低很多，script 那邊維持嚴格。
+- **connect 只有 `'self'`**（CSP 3 的 `'self'` 也涵蓋同主機的 `wss:`，Safari 17+ 也是）：瀏覽器**不直接**連 `rtc.live.cloudflare.com`：SFU API 走 Worker 代理（`/api/sfu/*`）、TURN 憑證走 `/api/turn/*`；媒體本身是 ICE（UDP／TURN），不受 CSP 管。
+- **img／media 加 `data:` `blob:`**：喇叭測試音（blob WAV）、統計匯出、內嵌的小圖。**worker 只有 `'self'`**：`/sw.js` 與 RNNoise 的 AudioWorklet 模組（`/assets/`）。
+- **COOP `same-origin`**：LongTalk 不開彈出視窗、不需要和其他網域的視窗互相操作；Turnstile 是 iframe 不是彈窗，Capture Handle（分享分頁時認出會議分頁）不受影響。沒有加 COEP（會擋 Turnstile 的 iframe，也用不到 SharedArrayBuffer）。
+- **Permissions-Policy** 只列 Chromium 認得的功能（認不得的會在主控台報錯：`web-share`（Windows 的 Chromium）與 `bluetooth`（Linux 的 Chromium）就是，所以沒列，維持瀏覽器預設），沒列的也維持預設（例如喇叭選擇、之後 I2 的 passkey）。
+- Worker 自己的回應（`/api/*`）是 JSON，另外加 `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`、HSTS、nosniff、Referrer-Policy、`X-Frame-Options`（`worker/headers.ts`）；WebSocket 升級不動。
+- **CSP 違規回報**：瀏覽器把被擋的東西 POST 到 `/api/csp-report`（`report-uri` 與 Reporting API 兩種格式都收），Worker 轉成遙測的錯誤事件：名稱 `CSP`、訊息「`<指令> blocked <網域或 inline／eval>`」、來源是頁面路徑（房號去掉），和其他用戶端錯誤一樣在 `/admin`「最近的錯誤」、受同一個速率限制。部署後出現新的 `CSP` 錯誤就是有東西被擋了。
+- **檢查**：`scripts/smoke.sh` 每次部署後確認首頁與 `/api/health` 帶著這些標頭；`e2e/local/security.spec.ts`（`vite preview`）確認每個路徑的標頭，以及首頁 → 預先加入（含喇叭測試音）→ 會議室 → RNNoise（worklet＋wasm）→ `/admin`、service worker 註冊都沒有任何 CSP 或 Permissions-Policy 錯誤，別的網頁也框不住會議室。
+
+### CI 的檢查
+
+- **secrets lint**（`scripts/secrets.ts`）：`npm run lint` 掃 `src/`、`public/`、`index.html`（註解不算），`npm run budget` 再掃 build 出來的 `dist/client/`。擋：Worker 與 CI 的 secret 名稱（`REALTIME_APP_SECRET`、`REALTIME_TURN_KEY_ID`、`REALTIME_TURN_KEY_API_TOKEN`、`ADMIN_TOKEN`、`PREVIEW_ADMIN_TOKEN`、`TURNSTILE_SECRET_KEY`、`IP_HASH_PEPPER`、`CLOUDFLARE_API_TOKEN`）、私鑰、AWS／GitHub／Slack／AI／Google 的 key、JWT、Turnstile secret key（含測試用的）、名字像 secret 的變數被指定成長字串、`dist/client` 裡的 `.env`／`.dev.vars`。真的需要的那一行在行尾寫 `// secret-ok: <理由>`。（`/admin` 的說明文字因此不再寫出 `ADMIN_TOKEN` 這個名字。）
+- **npm audit**（`ci.yml`）：`npm audit --omit=dev --audit-level=high`，正式相依（React、router、styled-components、RNNoise）有 high／critical 就失敗；全部相依的報告寫進 run 的 summary、不失敗（目前 5 個 moderate，都在 Lighthouse 的開發相依）。
+- **濫用測試**（`preview.yml` 的 `abuse` job，`scripts/abuse.ts`）：瀏覽器測試跑完後對這個 PR 的預覽打：沒有 token 建房要 403、連續建房到第 11 次 429、一個 socket 一次送 141 個訊息被 4420 關掉、一個超大訊息被 1009 關掉、連續升級進同一間房被擋、120 個同時查詢、頁面的安全標頭；有 `PREVIEW_ADMIN_TOKEN` 時再封鎖自己的網路、確認 403、解除。約一分鐘、幾百個小請求。**不要對正式站跑**（腳本會拒絕；會用掉這個網路一天的建房額度）。

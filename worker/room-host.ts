@@ -41,6 +41,7 @@ import {
   type TracksMessage,
   type WaitingEntry,
 } from '../shared/protocol.ts'
+import { ROOM_CONNECT_RATE, SOCKET_MESSAGE_RATE, type OffenceKind } from '../shared/abuse.ts'
 import { REACTION_RATE, type Reaction } from '../shared/reactions.ts'
 import {
   ASSUMED_BITRATE,
@@ -242,6 +243,11 @@ export interface RoomHostDeps {
   now: () => number
   newMemberId: () => string
   newToken: () => string
+  /**
+   * A connection hit an abuse limit (I1): the adapter tells GuardDO, so /admin lists the
+   * client. `connId` is null for an upgrade refused before it had one; `ip` its address key.
+   */
+  offence?: (connId: string | null, ip: string | null, kind: OffenceKind) => void
 }
 
 export type Admission = { ok: true } | { ok: false; code: number; reason: string }
@@ -311,6 +317,10 @@ export class RoomHost {
   private readonly reactionRate = new ChatRateLimit(REACTION_RATE)
   /** `signal` reports per member (H2, SIGNAL_RATE), in memory */
   private readonly signalRate = new ChatRateLimit(SIGNAL_RATE)
+  /** Every frame per connection (I1, SOCKET_MESSAGE_RATE), in memory */
+  private readonly socketRate = new ChatRateLimit(SOCKET_MESSAGE_RATE)
+  /** Upgrades per network address (I1, ROOM_CONNECT_RATE), in memory */
+  private readonly connectRate = new ChatRateLimit(ROOM_CONNECT_RATE)
   /** Removed (F1) and denied (F2) browsers and until when, by client id */
   private readonly bans = new Map<string, { until: number; kind: BanKind }>()
   /** The `lobby` each waiting member was sent last (F2), to send it only when it changes */
@@ -526,10 +536,18 @@ export class RoomHost {
     return this.info ? { ...this.info, memberCount: this.memberCount } : null
   }
 
-  /** Whether a new WebSocket may open; `version` is the `v` query parameter */
-  admit(version: string | null): Admission {
+  /**
+   * Whether a new WebSocket may open; `version` is the `v` query parameter, `ip` the network
+   * address as addressKey keeps it (null when unknown: not limited). At most ROOM_CONNECT_RATE
+   * upgrades per address (I1): over it CloseCode.rateLimited, which the browser does not retry.
+   */
+  admit(version: string | null, ip: string | null = null): Admission {
     if (version !== String(PROTOCOL_VERSION)) {
       return { ok: false, code: CloseCode.versionMismatch, reason: 'protocol version mismatch' }
+    }
+    if (ip !== null && !this.connectRate.take(ip, this.deps.now())) {
+      this.deps.offence?.(null, ip, 'connectLimit')
+      return { ok: false, code: CloseCode.rateLimited, reason: 'too many connections' }
     }
     // A member coming back to a meeting the host ended learns it ended, not that it is gone (F3)
     if (!this.info && this.ended) return { ok: false, code: CloseCode.ended, reason: 'ended' }
@@ -562,6 +580,7 @@ export class RoomHost {
     const conn = this.conns.get(connId)
     if (!conn) return
     this.conns.delete(connId)
+    this.socketRate.forget(connId)
     if (conn.member === null) {
       this.reschedule()
       return
@@ -577,6 +596,18 @@ export class RoomHost {
   message(connId: string, raw: string): void | Promise<void> {
     const conn = this.conns.get(connId)
     if (!conn) return
+    // Every frame counts (I1): a flood closes the socket, its member reconnects only by reloading
+    if (!this.socketRate.take(connId, this.deps.now())) {
+      this.deps.offence?.(connId, conn.ip, 'flood')
+      this.conns.delete(connId)
+      this.socketRate.forget(connId)
+      if (conn.member !== null) {
+        this.markAway(conn.member)
+        this.publish()
+      }
+      this.deps.sockets.close(connId, CloseCode.rateLimited, 'too many messages')
+      return
+    }
     this.heartbeat(connId, this.deps.now())
     if (raw === HEARTBEAT_PING) return
     const message = parseClientMessage(raw)

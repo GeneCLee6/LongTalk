@@ -17,7 +17,9 @@
       // One object for the whole deployment: the month's Realtime egress count (e11-t13)
       { "name": "USAGE", "class_name": "UsageDO" },
       // One object for the whole deployment: the telemetry counters behind /admin (e11-t03)
-      { "name": "TELEMETRY", "class_name": "TelemetryDO" }
+      { "name": "TELEMETRY", "class_name": "TelemetryDO" },
+      // One object for the whole deployment: room-creation limits and the IP blocklist (e11-t05)
+      { "name": "GUARD", "class_name": "GuardDO" }
     ]
   },
   // Workers Analytics Engine (e11-t03): every accepted telemetry event, for ad-hoc SQL. Off until
@@ -30,10 +32,14 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RoomDO"] },
     { "tag": "v2", "new_sqlite_classes": ["UsageDO"] },
-    { "tag": "v3", "new_sqlite_classes": ["TelemetryDO"] }
+    { "tag": "v3", "new_sqlite_classes": ["TelemetryDO"] },
+    { "tag": "v4", "new_sqlite_classes": ["GuardDO"] }
   ],
   // The Realtime free-tier guard (e11-t13, DEPLOY.md §6): GB of SFU + TURN egress this calendar
-  // month (UTC) after which cameras send low quality, and after which new video is refused
+  // month (UTC) after which cameras send low quality, and after which new video is refused.
+  // Turnstile on room creation (e11-t05, DEPLOY.md §11): add "TURNSTILE_SITE_KEY": "<site key>"
+  // here (public) once the owner has made the widget, and set the secret key with
+  // `wrangler secret put TURNSTILE_SECRET_KEY`; Turnstile stays off until both exist.
   "vars": {
     "USAGE_LOW_QUALITY_GB": "800",
     "USAGE_AUDIO_ONLY_GB": "950"
@@ -49,13 +55,19 @@
         "bindings": [
           { "name": "ROOM", "class_name": "RoomDO" },
           { "name": "USAGE", "class_name": "UsageDO" },
-          { "name": "TELEMETRY", "class_name": "TelemetryDO" }
+          { "name": "TELEMETRY", "class_name": "TelemetryDO" },
+          { "name": "GUARD", "class_name": "GuardDO" }
         ]
       },
       // "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "longtalk_events_preview" }],
+      // Turnstile's public test keys (DEPLOY.md §11): an invisible widget that always passes and a
+      // secret that always validates, so every preview runs the whole room-creation flow. Never
+      // real keys here: previews get no Turnstile secret of their own
       "vars": {
         "USAGE_LOW_QUALITY_GB": "800",
-        "USAGE_AUDIO_ONLY_GB": "950"
+        "USAGE_AUDIO_ONLY_GB": "950",
+        "TURNSTILE_SITE_KEY": "1x00000000000000000000BB",
+        "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"
       }
     }
   }

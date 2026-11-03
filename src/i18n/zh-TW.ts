@@ -13,6 +13,12 @@ export const zhTW = {
     createRoom: '開一間房',
     creatingRoom: '開房中…',
     createRoomFailed: '開房失敗，請再試一次。',
+    // Abuse protection (I1): Turnstile, the per-network limit, the blocklist
+    verifying: '確認中…',
+    createRoomVerifyFailed: '沒有通過真人驗證，請再試一次。',
+    createRoomRateLimited: (minutes: number) =>
+      `這個網路開房的次數太多了，請 ${minutes} 分鐘後再試。`,
+    createRoomBlocked: '這個網路目前不能開房或加入會議室。',
     joinLabel: '會議室連結或代碼',
     joinPlaceholder: '貼上連結或輸入代碼',
     join: '加入',
@@ -147,6 +153,8 @@ export const zhTW = {
     notFound: '找不到這間會議室。請確認連結是否正確；房間沒有人超過 10 分鐘也會自動關閉。',
     youAreHost: '你現在是主持人',
     full: '這間會議室已經滿了。',
+    blocked: '這個網路目前不能加入會議室。',
+    rateLimited: '連線或訊息太頻繁，會議室暫時中斷了你的連線。請稍等一分鐘再重新整理頁面。',
     outdated: 'LongTalk 已經更新，請重新整理頁面。',
     reconnectingSelf: '連線中斷，正在重新連線…',
     lost: '連不上會議室。請檢查網路，再按「重試」。',
@@ -563,12 +571,12 @@ export const zhTW = {
   admin: {
     title: 'LongTalk 管理',
     lockedTitle: '管理頁',
-    lockedBody: '這一頁只給 LongTalk 的擁有者。輸入管理密碼（Worker 的 ADMIN_TOKEN）才能查看。',
+    lockedBody: '這一頁只給 LongTalk 的擁有者。輸入管理密碼（Worker 的管理密碼 secret，DEPLOY.md §8）才能查看。',
     tokenLabel: '管理密碼',
     unlock: '查看',
     unlocking: '讀取中…',
     wrongToken: '密碼不對。',
-    notConfigured: '這個部署還沒設定 ADMIN_TOKEN，請照 DEPLOY.md 設定後再試。',
+    notConfigured: '這個部署還沒設定管理密碼，請照 DEPLOY.md §8 設定後再試。',
     loadFailed: '讀取失敗，請再試一次。',
     lock: '鎖上',
     refresh: '重新整理',
@@ -622,6 +630,38 @@ export const zhTW = {
         ? '事件也寫進 Workers Analytics Engine，可用 SQL API 細查（DEPLOY.md §8）。'
         : '這個部署沒有 Analytics Engine 綁定，只有上方的計數。',
     privacy: '統計只記事件種類與原因，不含名字、房號、聊天內容或 IP。',
+    // Abuse protection (I1, e11-t05)
+    abuse: {
+      title: '濫用防護與封鎖名單',
+      unavailable: '讀不到封鎖名單，請重新整理。',
+      turnstile: (on: boolean) =>
+        on ? '開房需要 Turnstile 真人驗證。' : 'Turnstile 未設定，開房不驗證（DEPLOY.md §11）。',
+      pepper: (on: boolean) =>
+        on ? '網路位址用秘密金鑰（pepper）雜湊。' : '沒有設定秘密金鑰（pepper），位址只做一般雜湊（DEPLOY.md §11）。',
+      ipLabel: 'IP 位址（IPv6 會封整個 /64）',
+      durationLabel: '封鎖多久',
+      duration: (hours: number) =>
+        hours < 24 ? `${hours} 小時` : hours === 24 ? '1 天' : `${hours / 24} 天`,
+      noteLabel: '備註（選填）',
+      block: '封鎖',
+      failed: '沒有成功：請確認位址格式，或重新整理後再試。',
+      hashNote: '只存位址的雜湊值，不存位址本身；被封鎖的網路不能開房、不能加入會議室，已經在會議裡的人不受影響。',
+      blocksTitle: '封鎖中',
+      noBlocks: '目前沒有封鎖。',
+      until: (time: string) => `到 ${time}`,
+      unblock: '解除',
+      unblockLabel: (key: string) => `解除封鎖 ${key}`,
+      offendersTitle: '最近碰到限制的網路',
+      noOffenders: '最近沒有。',
+      kinds: {
+        createLimit: '開房太多',
+        turnstile: '驗證沒過',
+        connectLimit: '連線太多',
+        flood: '訊息太多',
+      },
+      blockDay: '封鎖 1 天',
+      blockKeyLabel: (key: string) => `封鎖 ${key} 1 天`,
+    },
   },
   // After pressing 「離開」, or when the room closed while we were away from it (e4-t18)
   left: {
