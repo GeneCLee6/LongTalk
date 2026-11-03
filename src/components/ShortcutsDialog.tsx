@@ -102,7 +102,7 @@ const List = styled.dl`
 
 const Row = styled.div`
   display: grid;
-  grid-template-columns: ${space(20)} 1fr;
+  grid-template-columns: ${space(16)} 1fr;
   align-items: center;
   gap: ${space(3)};
 
