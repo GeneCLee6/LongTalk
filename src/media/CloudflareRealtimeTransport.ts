@@ -332,7 +332,6 @@ export class CloudflareRealtimeTransport implements MediaTransport {
       usingRelay: false,
       bytesSent: 0,
       bytesReceived: 0,
-      availableIncomingBitrate: null,
     }
     const byId = new Map<string, Record<string, unknown>>()
     report.forEach((entry: Record<string, unknown>) => byId.set(String(entry.id), entry))
@@ -348,9 +347,6 @@ export class CloudflareRealtimeTransport implements MediaTransport {
         stats.rttMs = entry.currentRoundTripTime * 1000
       stats.bytesSent = Number(entry.bytesSent ?? 0)
       stats.bytesReceived = Number(entry.bytesReceived ?? 0)
-      const incoming = entry.availableIncomingBitrate
-      stats.availableIncomingBitrate =
-        typeof incoming === 'number' && incoming > 0 ? incoming : null
       const local = byId.get(String(entry.localCandidateId))
       stats.usingRelay = local?.candidateType === 'relay'
     }

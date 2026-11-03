@@ -74,11 +74,6 @@ export interface TransportStats {
   usingRelay: boolean
   bytesSent: number
   bytesReceived: number
-  /**
-   * The browser's estimate of what can arrive, bits per second (the candidate pair's
-   * availableIncomingBitrate); null when the browser does not estimate it (layer budget, e2-t12)
-   */
-  availableIncomingBitrate: number | null
 }
 
 export interface MediaTransportEvents {

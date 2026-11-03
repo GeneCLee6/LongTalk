@@ -1,6 +1,6 @@
 import { RECONNECT_GRACE_MS, type ClientMessage, type MemberTrack } from '../../shared/protocol.ts'
 import { STATS_INTERVAL_MS, type UsageState } from '../../shared/usage.ts'
-import { chooseLayers, videoBudget, type LayerInput } from '../media/layers.ts'
+import { chooseLayers, DOWNLINK_BUDGET_BPS, type LayerInput } from '../media/layers.ts'
 import {
   MediaTransportError,
   trackKey,
@@ -51,9 +51,9 @@ import type { VideoDemandStore } from './videoDemand.ts'
 // Layers (H1, e2-t11, e2-t12): the camera and the screen are published in simulcast layers, and
 // every received camera or screen asks the SFU for the layer its tile needs. Tiles report where
 // they draw each track (`demand`, videoDemand.ts); a change (a resize, a page turned, a strip
-// scrolled, a tile hidden), a new subscription, or a new bandwidth estimate (the stats tick)
-// recomputes every layer after LAYER_DEBOUNCE_MS (media/layers.ts: size, visibility, budget,
-// hysteresis), and only the ones that changed go to the SFU. A camera starts at medium and a
+// scrolled, a tile hidden) or a new subscription recomputes every layer after LAYER_DEBOUNCE_MS
+// (media/layers.ts: size, visibility, budget, hysteresis), and only the ones that changed go to
+// the SFU. A camera starts at medium and a
 // screen at high until its tile reports. Without a demand store nothing is recomputed.
 //
 // Rebuilding (e2-t08): when the transport fails, or stays `reconnecting` (ICE disconnected) for
@@ -245,8 +245,6 @@ export class RoomMedia {
   private readonly layerDebounceMs: number
   private layerTimer: Timer | null = null
   private offDemand: (() => void) | null = null
-  /** The browser's incoming estimate from the last stats tick (bits per second) */
-  private availableIncoming: number | null = null
 
   /** Every other member's tracks, by trackKey (from RoomDO) */
   private desired = new Map<string, MemberTrack>()
@@ -594,7 +592,7 @@ export class RoomMedia {
         current: this.state.layers[key] ?? null,
       })
     }
-    const chosen = chooseLayers(inputs, videoBudget(this.availableIncoming))
+    const chosen = chooseLayers(inputs, DOWNLINK_BUDGET_BPS)
     const changes = [...chosen].filter(([key, layer]) => this.state.layers[key] !== layer)
     if (changes.length === 0) return
     this.update({ layers: { ...this.state.layers, ...Object.fromEntries(changes) } })
@@ -909,13 +907,9 @@ export class RoomMedia {
     const sessionId = transport.sessionId
     if (this.closed || !this.ready || !sessionId) return
     try {
-      const { bytesReceived, usingRelay, availableIncomingBitrate } = await transport.getStats()
+      const { bytesReceived, usingRelay } = await transport.getStats()
       if (this.closed || transport !== this.transport) return
       if (usingRelay !== this.state.usingRelay) this.update({ usingRelay })
-      if (availableIncomingBitrate !== this.availableIncoming) {
-        this.availableIncoming = availableIncomingBitrate
-        this.scheduleLayers()
-      }
       this.send({
         t: 'stats',
         sessionId,

@@ -64,8 +64,6 @@ export class FakeTransport implements MediaTransport {
   bytesReceived = 0
   /** What getStats() reports as the path; tests set it (e2-t07) */
   usingRelay = false
-  /** What getStats() reports as the incoming estimate; tests set it (e2-t12) */
-  availableIncomingBitrate: number | null = null
   /** What connect() was given, and the servers setIceServers() handed over since */
   connectOptions: ConnectOptions | null = null
   readonly iceServerUpdates: RTCIceServer[][] = []
@@ -160,7 +158,6 @@ export class FakeTransport implements MediaTransport {
       usingRelay: this.usingRelay,
       bytesSent: 0,
       bytesReceived: this.bytesReceived,
-      availableIncomingBitrate: this.availableIncomingBitrate,
     }
   }
 
