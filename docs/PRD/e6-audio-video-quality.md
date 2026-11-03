@@ -51,10 +51,10 @@ E2 讓媒體送到；E6 讓它好聽好看。Zoom 的「背景雜音抑制」「
 
 ### M1
 
-- [x] `e6-t01` 音訊三項約束開關與設定面板骨架（音訊／視訊／效能） · AC-6.1 · #PRNUM
+- [x] `e6-t01` 音訊三項約束開關與設定面板骨架（音訊／視訊／效能） · AC-6.1 · #32
 - [ ] `e6-t02` 進階噪音抑制：AudioWorklet ＋ wasm、能力偵測、CPU 門檻自動關 · AC-6.2 · M · ← e6-t01
-- [x] `e6-t03` 靜音中講話提醒 · AC-6.3 · #PRNUM
-- [x] `e6-t04` HD 開關（上行檢查）與純音訊模式 · AC-6.4 · #PRNUM
+- [x] `e6-t03` 靜音中講話提醒 · AC-6.3 · #32
+- [x] `e6-t04` HD 開關（上行檢查）與純音訊模式 · AC-6.4 · #32
 - [ ] `e6-t05` 省電模式（低幀率最低層、關動畫、不送 HD） · AC-6.4 · S · ← e6-t04, e2-t12
 
 ### M2
@@ -63,7 +63,7 @@ E2 讓媒體送到；E6 讓它好聽好看。Zoom 的「背景雜音抑制」「
 - [ ] `e6-t07` 鏡像設定與可拖曳自拍格 · S
 - [ ] `e6-t08` 音量條與每人接收音量 · S
 
-## H3 的做法與決定（#PRNUM）
+## H3 的做法與決定（#32）
 
 - **設定面板**（`src/components/SettingsDialog.tsx`）：「更多 › 設定…」與預先加入頁的「設定」；電腦是對話框、手機是全螢幕抽屜；三個分頁「音訊」（麥克風、喇叭、聲音處理）、「視訊」（鏡頭、HD）、「效能」（純音訊模式；H4 加省電模式與進階噪音抑制）。改了立刻生效，沒有「儲存」鈕。裝置選單和預先加入頁共用 `DeviceSelect`。
 - **聲音處理**（`src/media/audioProcessing.ts`）：三個開關預設全開（瀏覽器本來的預設），只把關掉的那幾個放進 `getUserMedia`。通話中切換先對開著的麥克風 `applyConstraints`，再讀 `getSettings` 確認瀏覽器真的改了；沒改（Chrome 常見）就用新的設定重開同一支麥克風（靜音的話保持靜音），送出的軌經 `MediaTransport.replaceTrack` 換掉，**不重新協商**。`getSupportedConstraints` 不認得的開關不顯示（`capabilities.ts` 的 `audioProcessing`）。設定記在 localStorage（`longtalk.media`），預先加入頁與會議室共用。
