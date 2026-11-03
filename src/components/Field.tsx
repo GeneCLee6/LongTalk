@@ -1,7 +1,7 @@
 import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 import { useId } from 'react'
 import styled, { css } from 'styled-components'
-import { color, fontSize, radius, space } from '../styles/tokens.ts'
+import { color, font, fontSize, radius, space } from '../styles/tokens.ts'
 
 const control = css`
   width: 100%;
@@ -18,6 +18,10 @@ const control = css`
   }
   &:disabled {
     opacity: 0.5;
+  }
+  &[type='password'] {
+    font-family: ${font.secret};
+    letter-spacing: 0.08em;
   }
 `
 

@@ -77,6 +77,8 @@ export const font = {
   ui: "'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, -apple-system, 'Segoe UI', sans-serif",
   // The wordmark only (DESIGN.md §7)
   brand: "'Inter', system-ui, sans-serif",
+  // Password fields: a Latin font first, so the mask dot is not the CJK font's full-width one
+  secret: "'Segoe UI', Roboto, 'Helvetica Neue', Arial, system-ui, sans-serif",
   mono: "ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace",
 } as const
 
