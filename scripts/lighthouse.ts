@@ -100,6 +100,9 @@ async function main() {
   try {
     for (const formFactor of ['desktop', 'mobile'] as const) {
       const page = await browser.newPage()
+      // The interface in Traditional Chinese whatever the machine's language (the CI image is
+      // English): the dictionary's choice is read from localStorage on every new page
+      await page.evaluateOnNewDocument(() => localStorage.setItem('longtalk.locale', 'zh-TW'))
       const options = { flags: flags(formFactor) }
       results.push(
         collect(
