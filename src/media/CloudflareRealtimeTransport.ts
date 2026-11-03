@@ -8,6 +8,12 @@ import type {
 } from '../../shared/sfu.ts'
 import { TransportEmitter } from './emitter.ts'
 import {
+  applyDegradation,
+  sendEncoding,
+  videoSendParameters,
+  withStartBitrate,
+} from './encoding.ts'
+import {
   MediaTransportError,
   trackKey,
   type ConnectOptions,
@@ -131,6 +137,8 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     const { published, transceiver } = await this.#serial(async () => {
       const { pc, sessionId } = this.#require()
       const simulcast = options.simulcast && track.kind === 'video'
+      // Bitrate, frame rate and priority by kind (encoding.ts, measured in ADR-001)
+      const video = track.kind === 'video' ? videoSendParameters(options.kind) : null
       const transceiver = pc.addTransceiver(track, {
         direction: 'sendonly',
         sendEncodings: simulcast
@@ -139,7 +147,9 @@ export class CloudflareRealtimeTransport implements MediaTransport {
               { rid: 'h', scaleResolutionDownBy: 2 },
               { rid: 'q', scaleResolutionDownBy: 4 },
             ]
-          : undefined,
+          : video
+            ? [sendEncoding(video)]
+            : undefined,
       })
       if (track.kind === 'video') sendVp8(transceiver)
       const trackName = `${options.kind}-${crypto.randomUUID().slice(0, 8)}`
@@ -163,7 +173,10 @@ export class CloudflareRealtimeTransport implements MediaTransport {
         throw error
       }
       // The SFU accepted the offer: from here a failure leaves the two sides disagreeing
-      await this.#exchange(() => pc.setRemoteDescription(answer))
+      // The answer's VP8 gets a start bitrate for our sender (local only, encoding.ts)
+      const remote = video ? { type: answer.type, sdp: withStartBitrate(answer.sdp) } : answer
+      await this.#exchange(() => pc.setRemoteDescription(remote))
+      if (video) await applyDegradation(transceiver.sender, video)
       this.#published.set(trackName, transceiver)
       const published: PublishedTrack = { sessionId, trackName, kind: options.kind }
       return { published, transceiver }

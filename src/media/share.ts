@@ -44,15 +44,18 @@ export type CaptureResult =
 
 /**
  * What the picker offers (E3): anything but this meeting's own tab (it would show itself
- * endlessly), switching source while sharing. Up to 1080p at a low frame rate: text stays sharp
- * and the free tier lasts (the text mode, e3-t06, refines it). No audio here: displayMediaOptions
- * adds it where the browser can capture it (e3-t04).
+ * endlessly), switching source while sharing. Up to 1080p and up to 30 fps: the field test
+ * (2026-11-03) found 15 fps choppy for scrolling and video; the encoder (encoding.ts: `balanced`
+ * degradation, the uplink's larger share, at most 2.5 Mbps) gives up frame rate and resolution
+ * together when the network or CPU cannot keep up, and a still screen sends almost nothing
+ * whatever the rate (measurements in ADR-001; the text/motion switch is e3-t06). No audio here:
+ * displayMediaOptions adds it where the browser can capture it (e3-t04).
  */
 export const DISPLAY_MEDIA_OPTIONS = {
   video: {
     width: { max: 1920 },
     height: { max: 1080 },
-    frameRate: { ideal: 15, max: 30 },
+    frameRate: { ideal: 30, max: 30 },
   },
   audio: false,
   preferCurrentTab: false,
@@ -129,6 +132,8 @@ export async function captureScreen(
     sound?.stop()
     return { ok: false, problem: 'failed' }
   }
+  // Detail: the first frames are already full resolution (with `motion` the share began at 720p
+  // for ~14 s); smoothness under pressure comes from the sender's `balanced` degradation
   try {
     track.contentHint = 'detail'
   } catch {
