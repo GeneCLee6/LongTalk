@@ -87,7 +87,7 @@ worktree 開分支、只讀需要的段落、lint+typecheck+test+build 只看最
 | [x] H1 #29 | `e2-t11` `e2-t12` | simulcast 三層發布、接收端依格子與頻寬選層 | G2 |
 | [x] H2 #31 | `e2-t13` `e2-t14` `e2-t15` | `getStats` 與訊號格、統計面板、頻寬自適應（音訊優先） | H1 |
 | [x] H3 #32 | `e6-t01` `e6-t03` `e6-t04` | 音訊三項開關與設定面板、靜音中講話提醒、HD 開關與純音訊模式 | H1 |
-| [ ] H4 | `e6-t02` `e6-t05` | 進階噪音抑制（AudioWorklet＋wasm）、省電模式 | H3 |
+| [x] H4 #33 | `e6-t02` `e6-t05` | 進階噪音抑制（AudioWorklet＋wasm）、省電模式 | H3 |
 | [ ] H5 | `e3-t06` `e3-t07` `e3-t08` `e3-t09` | 分享文字／動態模式、多人分享與選主區、簡報者檢視、防鏡像遞迴 | H1, G2 |
 | [ ] H6 | `e2-t16` | 相容矩陣（Playwright 多瀏覽器、實機清單）、`BROWSER-SUPPORT.md` 完整版 | H5 |
 

@@ -56,6 +56,8 @@
 
 **統計、訊號格與頻寬自適應（H2）**：`RoomMedia` 每 2 秒讀一次 `MediaTransport.getStats()`（全部的統計只有這一條路：免費額度回報、HD 上行檢查也用它），`src/media/stats.ts` 算出每條軌的位元率、丟包、卡頓，`src/media/quality.ts` 判好／普通／差。自己的名牌用自己的判斷，別人的由各自的瀏覽器經 `signal`（協定 v14，變了才送、最多每 5 秒，RoomDO 限速）放進 `Member.signal`。「更多 › 連線統計」是 lazy 載入的面板，讀 `StatsStore`（不經 React 狀態，面板關著時沒有重繪）。`src/media/adaptation.ts` 兩個純狀態機：下行有丟包時先降選層預算、再退訂講話者／釘選以外的鏡頭、最後建議 H3 的純音訊；上行受限時用 `setTopLayer` 關最高層；聲音不動。判斷都在瀏覽器，RoomDO 只轉訊號格的等級。細節與實測在 ADR-001「統計與頻寬自適應」。
 
+**進階噪音抑制與省電模式（H4）**：打開「進階噪音抑制」時才 lazy 載入管線（`src/media/noiseSuppression.ts`）、AudioWorklet（`rnnoise.worklet.ts`）與 RNNoise 的 wasm（BSD-3，放在自己的 `/assets/`，授權在 `THIRD_PARTY_NOTICES.md`）：麥克風 → 48 kHz `AudioContext` → worklet（480 樣本一幀，延遲約 9 ms）→ `MediaStreamDestination`，它的軌經 `RoomMedia.setLocal` → `replaceTrack` 取代麥克風（不重新協商；準備好之前、context 沒在跑時照送麥克風本身）。開著時瀏覽器自己的噪音抑制暫停；worklet 每秒回報負載，連續 5 秒超標就關掉並提示（`noiseLoad.ts`）。省電模式（`src/media/powerSaving.ts`、`RoomMedia.setPowerSaving`）：選層預算 0（收到的都是最低層）、不送 HD、鏡頭擷取 15 fps，頁面關動畫（`MotionOffContext`）並暫停進階噪音抑制。都在瀏覽器，RoomDO 不參與。細節在 ADR-001「進階噪音抑制與省電模式」。
+
 ## 4. 資料流：一個人進房
 
 1. 瀏覽器 `GET /r/abc123` → Worker 的靜態資產回 SPA。

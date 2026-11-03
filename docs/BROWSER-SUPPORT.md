@@ -1,6 +1,6 @@
 # BROWSER-SUPPORT — 瀏覽器支援
 
-最後更新 2026-11-03（B4 初版，`e11-t04`；C2 加剪貼簿與系統分享選單；D2 加分享音訊、不能分享時的說明；G4 加 Service Worker 與安裝）。完整版（Playwright 多瀏覽器、iOS／Android 實機清單）是 H6 的 `e2-t16`（AC-2.8）。
+最後更新 2026-11-03（B4 初版，`e11-t04`；C2 加剪貼簿與系統分享選單；D2 加分享音訊、不能分享時的說明；G4 加 Service Worker 與安裝；H4 加進階噪音抑制與電量）。完整版（Playwright 多瀏覽器、iOS／Android 實機清單）是 H6 的 `e2-t16`（AC-2.8）。
 
 目標瀏覽器（`PRD/00-prd.md` §9）：Chrome／Edge 最近兩版、Firefox 最近兩版、Safari 17+（macOS）、iOS Safari 17+、Android Chrome。
 
@@ -26,7 +26,7 @@
 | 發送參數（`RTCRtpSender.setParameters`，simulcast 與位元率上限） | `senderParameters` | ○ | ○ | ○ | ○ | ○ | ○ | 尚未使用；simulcast 是 M1 的 `e2-t11`（Safari 預計退化為單層） |
 | 音量表（`AudioContext`） | `audioContext` | ● | ○ | ○ | ○ | ○ | ? | 預先加入頁的音量表保持空白，其他照常 |
 | 麥克風處理開關（`getSupportedConstraints()` 的 `noiseSuppression`、`echoCancellation`、`autoGainControl`） | `audioProcessing` | ○ | ○ | ○ | ○ | ○ | ○ | 設定面板只顯示瀏覽器認得的開關，一個都不認得時「音訊」頁只有裝置選單。能不能在通話中即時改要看瀏覽器：改不了就重新開麥克風、換送出的軌（不重新協商，`e6-t01`）。都還沒實測 |
-| 進階噪音抑制（`AudioContext.audioWorklet`、`AudioWorkletNode`、`createMediaStreamDestination`、`WebAssembly`；不需要 `SharedArrayBuffer`） | `advancedNoiseSuppression` | ○ | ○ | ○ | ○ | ○ | ○ | 設定的「音訊」頁不顯示「進階噪音抑制」，只用瀏覽器自己的噪音抑制（`e6-t02`）。RNNoise 要 48 kHz：Firefox 的麥克風不是 48 kHz 時接不上，會提示「無法開啟進階噪音抑制」並關掉；有 SIMD 的瀏覽器載入較快的那一版 wasm。headless Chromium 在 CI 實際跑過（見 §3），真機都還沒實測 |
+| 進階噪音抑制（`AudioContext.audioWorklet`、`AudioWorkletNode`、`createMediaStreamDestination`、`WebAssembly`；不需要 `SharedArrayBuffer`） | `advancedNoiseSuppression` | ○ | ○ | ○ | ○ | ○ | ○ | 設定的「音訊」頁不顯示「進階噪音抑制」，只用瀏覽器自己的噪音抑制（`e6-t02`）。RNNoise 要 48 kHz：Firefox 的麥克風不是 48 kHz 時接不上，會提示「無法開啟進階噪音抑制」並關掉；有 SIMD 的瀏覽器載入較快的那一版 wasm。headless Chromium 在 CI 實際跑過（`e2e/local/noise.spec.ts`；worklet 裡沒有 `performance.now()`，用 `Date.now()` 量負載），真機都還沒實測 |
 | 裝置插拔通知（`devicechange`） | `deviceChange` | ● | ○ | ○ | ○ | ? | ? | 拔掉的裝置要等軌結束才發現；接上新裝置不會自動補回 |
 | 複製到剪貼簿（`navigator.clipboard.writeText`） | `clipboard` | ○ | ○ | ○ | ○ | ○ | ○ | 頂部條「複製連結」改用分享選單（有的話），否則提示「請手動複製」並顯示連結（`e1-t05`） |
 | 系統分享選單（Web Share，`navigator.share`） | `webShare` | ○ | ○ | ✕ | ○ | ○ | ○ | 「更多」選單不顯示「分享連結」，用「複製連結」（`e1-t05`） |
