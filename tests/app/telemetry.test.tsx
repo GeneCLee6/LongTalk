@@ -200,6 +200,19 @@ describe('AdminPage', () => {
     expect(init.headers).toEqual({ Authorization: 'Bearer secret-ish' })
   })
 
+  it('folds a password typed in full-width (IME) back to ASCII', async () => {
+    const fetch = vi.fn(async () => new Response('{}', { status: 401 }))
+    vi.stubGlobal('fetch', fetch)
+    render(<AdminPage />)
+    fireEvent.change(screen.getByLabelText(strings.admin.tokenLabel), {
+      target: { value: 'Ａｂ１＋／＝' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: strings.admin.unlock }))
+    await screen.findByRole('alert')
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
+    expect(init.headers).toEqual({ Authorization: 'Bearer Ab1+/=' })
+  })
+
   it('says when ADMIN_TOKEN is not set', async () => {
     vi.stubGlobal(
       'fetch',

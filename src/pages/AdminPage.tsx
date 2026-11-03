@@ -64,8 +64,9 @@ export default function AdminPage() {
 
   const onUnlock = (event: FormEvent) => {
     event.preventDefault()
-    if (draft.trim() === '') return
-    void load(draft.trim())
+    const password = draft.normalize('NFKC').trim()
+    if (password === '') return
+    void load(password)
     setDraft('')
   }
 
@@ -80,7 +81,9 @@ export default function AdminPage() {
             type="password"
             autoComplete="current-password"
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            // A Chinese IME left in full-width mode types Ａ-Ｚ／＋＝; the token is ASCII, so fold
+            // them back (NFKC) instead of failing with a password that looks right
+            onChange={(event) => setDraft(event.target.value.normalize('NFKC'))}
             disabled={phase === 'loading'}
           />
           {problem && <ProblemText role="alert">{problemText(problem)}</ProblemText>}
