@@ -219,4 +219,10 @@ describe('layers for several shares (e3-t07 with H1)', () => {
     )
     expect(chosen.get('main')).toBe('medium')
   })
+
+  it('power saving (a budget of 0, H4) puts every share at its lowest layer, main too', () => {
+    const chosen = chooseLayers([screen('main', 1600, 900), screen('strip', 320, 180)], 0)
+    expect(chosen.get('main')).toBe('medium')
+    expect(chosen.get('strip')).toBe('medium')
+  })
 })

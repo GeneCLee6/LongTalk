@@ -46,5 +46,16 @@ export function usePhoneLayoutQuery(): PhoneLayout {
   return portrait ? 'portrait' : landscape ? 'landscape' : null
 }
 
-/** prefers-reduced-motion: scroll and slide without animating (DESIGN.md §6) */
-export const useReducedMotion = (): boolean => useMediaQuery(media.reducedMotion)
+/**
+ * Motion turned off by the app rather than the system: 省電模式 (e6-t05) provides true in the
+ * room, and every reduced-motion path follows it (GlobalStyle's `html[data-motion='off']` for
+ * the CSS)
+ */
+export const MotionOffContext = createContext(false)
+
+/** prefers-reduced-motion, or 省電模式: scroll and slide without animating (DESIGN.md §6) */
+export const useReducedMotion = (): boolean => {
+  const system = useMediaQuery(media.reducedMotion)
+  const app = useContext(MotionOffContext)
+  return system || app
+}

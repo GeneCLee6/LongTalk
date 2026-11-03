@@ -22,6 +22,7 @@ import {
   SignalMeter,
   uplinkVerdict,
 } from '../media/quality.ts'
+import { capFrameRate, POWER_SAVING_BUDGET_BPS, POWER_SAVING_FPS } from '../media/powerSaving.ts'
 import type { ShareMode } from '../media/shareMode.ts'
 import { sampleStats, type StatsSample } from '../media/stats.ts'
 import {
@@ -113,6 +114,11 @@ import type { VideoDemandStore } from './videoDemand.ts'
 // UPLINK_SAMPLE_MS (from the latest stats sample: one getStats() path); when it is too short (media/uplink.ts) HD is held
 // back (`hdLimited`) and tried again later, longer each time.
 //
+// 省電模式 (e6-t05, `powerSaving`; media/powerSaving.ts): every received video at its lowest
+// layer (the layers are chosen within POWER_SAVING_BUDGET_BPS), our camera's 720p layer off
+// whatever HD says, and the camera captured at POWER_SAVING_FPS. Turning it off restores all
+// three; the downlink and uplink adaptation go on underneath it.
+//
 // 純音訊模式 (e6-t04, `audioOnly`; not the month's audio-only usage state, e11-t13): no camera or
 // screen of anyone else is received (unsubscribed: the SFU stops sending them), and our camera
 // sends nothing (replaceTrack null, reported muted); microphones, the screen's sound and our own
@@ -191,6 +197,8 @@ export interface RoomMediaState {
   hd: boolean
   /** HD is wanted but held back: the uplink is too short (media/uplink.ts) */
   hdLimited: boolean
+  /** 省電模式 (e6-t05): lowest layers received, no HD sent, the camera at a lower frame rate */
+  powerSaving: boolean
 }
 
 /** ICE settings for the next session, and when to ask for fresh ones (TURN credentials expire) */
@@ -233,6 +241,8 @@ export interface RoomMediaOptions {
   audioOnly?: boolean
   /** HD from the start (e6-t04); on without it */
   hd?: boolean
+  /** 省電模式 from the start (e6-t05); off without it */
+  powerSaving?: boolean
   /** How often the camera's uplink is sampled while HD is on (UPLINK_SAMPLE_MS) */
   uplinkSampleMs?: number
   /** The clock for the uplink check, for tests */
@@ -288,6 +298,7 @@ export const idleRoomMedia: RoomMediaState = {
   audioOnly: false,
   hd: true,
   hdLimited: false,
+  powerSaving: false,
 }
 
 const LAYER_ORDER: Record<Layer, number> = { high: 2, medium: 1, low: 0 }
@@ -392,6 +403,8 @@ export class RoomMedia {
   private hdRetryTimer: Timer | null = null
   /** Times HD was held back since it was last turned on: how long the next retry waits */
   private holdBacks = 0
+  /** The camera whose capture 省電模式 capped (e6-t05); null when none is */
+  private cappedCam: MediaStreamTrack | null = null
 
   /** Every other member's tracks, by trackKey (from RoomDO) */
   private desired = new Map<string, MemberTrack>()
@@ -423,6 +436,7 @@ export class RoomMedia {
       ...this.state,
       audioOnly: options.audioOnly ?? false,
       hd: options.hd ?? true,
+      powerSaving: options.powerSaving ?? false,
     }
     this.offDemand = this.demand?.subscribe(() => this.scheduleLayers()) ?? null
     this.pollIntervalMs = Math.min(options.pollIntervalMs ?? STATS_POLL_MS, this.statsIntervalMs)
@@ -477,6 +491,18 @@ export class RoomMedia {
     this.clearHdRetry()
     this.holdBacks = 0
     this.update({ hd: on, hdLimited: false })
+    if (!this.ready) return this.localQueue
+    return this.syncLocal()
+  }
+
+  /**
+   * 省電模式 on or off (e6-t05): the received layers are chosen again at once, and our camera's
+   * top layer and frame rate follow. Resolves once what we send is applied.
+   */
+  setPowerSaving(on: boolean): Promise<void> {
+    if (on === this.state.powerSaving) return this.localQueue
+    this.update({ powerSaving: on })
+    this.applyLayers()
     if (!this.ready) return this.localQueue
     return this.syncLocal()
   }
@@ -865,7 +891,8 @@ export class RoomMedia {
         current: this.state.layers[key] ?? null,
       })
     }
-    const chosen = chooseLayers(inputs, this.state.downlinkBudgetBps)
+    const budget = this.state.powerSaving ? POWER_SAVING_BUDGET_BPS : this.state.downlinkBudgetBps
+    const chosen = chooseLayers(inputs, budget)
     const changes = [...chosen].filter(([key, layer]) => this.state.layers[key] !== layer)
     if (changes.length === 0) return
     this.update({ layers: { ...this.state.layers, ...Object.fromEntries(changes) } })
@@ -926,6 +953,8 @@ export class RoomMedia {
     if (this.closed || !this.ready || transport !== this.transport) return
     await this.applyTopLayer(transport)
     if (this.closed || !this.ready || transport !== this.transport) return
+    await this.applyFrameRate()
+    if (this.closed || !this.ready || transport !== this.transport) return
     await this.applyScreen(transport)
     if (this.closed || !this.ready || transport !== this.transport) return
     await this.applyScreenTop(transport)
@@ -940,7 +969,8 @@ export class RoomMedia {
   private async applyTopLayer(transport: MediaTransport): Promise<void> {
     const own = this.state.published.find((track) => track.kind === 'cam')
     if (!own) return
-    const hdTop: Layer = this.state.hd && !this.state.hdLimited ? 'high' : 'medium'
+    const hdTop: Layer =
+      this.state.hd && !this.state.hdLimited && !this.state.powerSaving ? 'high' : 'medium'
     const top = lowerLayer(hdTop, this.state.uplink.cam)
     if (this.sendingTop === top) return
     try {
@@ -952,6 +982,25 @@ export class RoomMedia {
     if (this.closed || transport !== this.transport) return
     this.sendingTop = top
     this.uplinkCheck = top === 'high' ? startUplinkCheck(this.now()) : null
+  }
+
+  /**
+   * The camera's capture frame rate (e6-t05): capped at POWER_SAVING_FPS while saving power, the
+   * cap lifted when it ends. A new camera (a device switch) is capped when it starts sending. A
+   * low-quality month keeps its own cap (LOW_QUALITY_VIDEO).
+   */
+  private async applyFrameRate(): Promise<void> {
+    const cam = this.sending.cam
+    if (this.state.powerSaving) {
+      if (!cam || cam === this.cappedCam) return
+      this.cappedCam = cam
+      await capFrameRate(cam, POWER_SAVING_FPS)
+      return
+    }
+    const capped = this.cappedCam
+    if (!capped) return
+    this.cappedCam = null
+    if (capped.readyState !== 'ended' && this.usage === 'normal') await capFrameRate(capped, null)
   }
 
   /** The screen's highest layer as the uplink adaptation wants it (e2-t15) */
@@ -1357,6 +1406,9 @@ export class RoomMedia {
       uplink: this.uplink.state,
       paused: this.state.pausedVideos,
       audioOnly: this.state.audioOnly,
+      hd: this.state.hd,
+      hdLimited: this.state.hdLimited,
+      powerSaving: this.state.powerSaving,
     })
   }
 

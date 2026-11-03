@@ -49,6 +49,7 @@ import { LeaveDialog, PasswordDialog } from '../components/HostDialogs.tsx'
 import { Drawer } from '../components/Drawer.tsx'
 import { LeftScreen } from '../components/LeftScreen.tsx'
 import {
+  MotionOffContext,
   PhoneLayoutContext,
   type PhoneLayout,
   usePhoneLayoutQuery,
@@ -84,6 +85,7 @@ import {
   audioProcessingSupport,
   canChooseSpeaker,
   canShareScreen,
+  canSuppressNoise,
   canWebShare,
   supportsWebRtc,
 } from '../media/capabilities.ts'
@@ -116,6 +118,8 @@ import { useHeldSpeaker } from '../room/useHeldSpeaker.ts'
 import { useLocalDevices } from '../room/useLocalDevices.ts'
 import { useLocalPreview } from '../room/useLocalPreview.ts'
 import { useMediaSettings } from '../room/useMediaSettings.ts'
+import { useBatteryHint } from '../room/useBatteryHint.ts'
+import { useNoiseSuppression, type NoiseStatus } from '../room/useNoiseSuppression.ts'
 import { useMutedSpeechHint } from '../room/useMutedSpeechHint.ts'
 import { useMicSilence } from '../room/useMicSilence.ts'
 import { useMediaPermissions } from '../room/usePermissions.ts'
@@ -400,6 +404,13 @@ function PreJoinScreen({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [audioOnly, setAudioOnly] = useState(false)
   const [processingSupported] = useState(audioProcessingSupport)
+  const [noiseSupported] = useState(canSuppressNoise)
+  const advancedNoise =
+    noiseSupported && mediaSettings.advancedNoise && !mediaSettings.powerSaving
+  const previewProcessing = useMemo(
+    () => micProcessing(mediaSettings.processing, advancedNoise),
+    [mediaSettings.processing, advancedNoise],
+  )
   const phone = usePhoneLayoutQuery()
   const preview = useLocalPreview({
     mic,
@@ -408,7 +419,7 @@ function PreJoinScreen({
     camId: picked.cam,
     micLabel: labels.mic,
     camLabel: labels.cam,
-    processing: mediaSettings.processing,
+    processing: previewProcessing,
   })
   const lists = preview.devices
   const resolved: DeviceChoices = {
@@ -453,6 +464,11 @@ function PreJoinScreen({
           onHd={mediaSettings.setHd}
           audioOnly={audioOnly}
           onAudioOnly={setAudioOnly}
+          advancedNoiseSupported={noiseSupported}
+          advancedNoise={mediaSettings.advancedNoise}
+          onAdvancedNoise={mediaSettings.setAdvancedNoise}
+          powerSaving={mediaSettings.powerSaving}
+          onPowerSaving={mediaSettings.setPowerSaving}
         />
       )}
       <PreJoin
@@ -713,8 +729,21 @@ function Room({
   useEffect(() => {
     if (chat.preview) sounds.play('chat')
   }, [chat.preview, sounds])
+  // 設定 (H3, H4): the processing switches, HD, the advanced noise suppression and 省電模式,
+  // remembered with the pre-join screen's
+  const mediaSettings = useMediaSettings()
+  const powerSaving = mediaSettings.powerSaving
+  // 省電模式 turns motion off (e6-t05): the reduced-motion paths, in JS (MotionOffContext) and
+  // CSS (GlobalStyle)
+  useEffect(() => {
+    if (!powerSaving) return
+    document.documentElement.dataset.motion = 'off'
+    return () => {
+      delete document.documentElement.dataset.motion
+    }
+  }, [powerSaving])
   // Reactions floating over the tiles (e5-t03); none at all while hidden
-  const reducedMotion = useReducedMotion()
+  const reducedMotion = useReducedMotion() || powerSaving
   const reactions = useReactions(onReaction, { hidden: prefs.hideReactions, reducedMotion })
   const onReact = (emoji: Reaction) => {
     if (sendReaction(emoji) === 'rateLimited') show(strings.reactions.tooFast, 'warn')
@@ -879,27 +908,55 @@ function Room({
     })),
   ]
   const onNotice = useCallback((notice: DeviceNotice) => show(noticeText(notice), 'warn'), [show])
-  // 設定 (H3: e6-t01, e6-t04): the processing switches and HD, remembered with the pre-join
-  // screen's; the dialog on a computer, the drawer on a phone
-  const mediaSettings = useMediaSettings()
+  // 設定 (H3: e6-t01, e6-t04): the dialog on a computer, the drawer on a phone
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [processingSupported] = useState(audioProcessingSupport)
   // The microphone and camera chosen on the pre-join screen, opened again for the room; the
   // toolbar turns them on and off and switches them after that (e2-t05, e2-t06). Joining in
   // 純音訊模式 leaves the camera closed (it comes on when the mode ends, if it was chosen).
+  // 進階噪音抑制 (e6-t02) runs where it can, while chosen and not held off by 省電模式; meanwhile
+  // the browser's own noise suppression pauses (no double processing: RNNoise works on the
+  // microphone as it is, and the two together dull the voice)
+  const [noiseSupported] = useState(canSuppressNoise)
+  const advancedNoise = noiseSupported && mediaSettings.advancedNoise && !powerSaving
+  const processing = useMemo(
+    () => micProcessing(mediaSettings.processing, advancedNoise),
+    [mediaSettings.processing, advancedNoise],
+  )
   const { state: local, devices } = useLocalDevices(
     { mic: choices.mic, cam: choices.cam && !choices.audioOnly },
     choices.devices,
     onNotice,
-    mediaSettings.processing,
+    processing,
   )
-  const onProcessing = (processing: AudioProcessing) => {
-    mediaSettings.setProcessing(processing)
-    void devices?.setProcessing(processing).then((outcome) => {
+  // A switch (or the advanced suppression) changed what the microphone is opened with: applied
+  // to the open one, or by opening it again (LocalDevices.setProcessing)
+  const appliedProcessing = useRef(processing)
+  useEffect(() => {
+    if (!devices || appliedProcessing.current === processing) return
+    appliedProcessing.current = processing
+    void devices.setProcessing(processing).then((outcome) => {
       if (outcome === 'failed') show(strings.settings.processingFailed, 'warn')
     })
-  }
-  const micSending = local.mic.on ? local.mic.track : null
+  }, [devices, processing, show])
+  const onProcessing = (next: AudioProcessing) => mediaSettings.setProcessing(next)
+  const noise = useNoiseSuppression({
+    mic: local.mic.track,
+    on: advancedNoise && local.ready,
+    onStop: (reason) => {
+      mediaSettings.setAdvancedNoise(false)
+      show(
+        reason === 'overloaded'
+          ? strings.settings.advancedNoiseOverloaded
+          : strings.settings.advancedNoiseFailed,
+        'warn',
+      )
+    },
+  })
+  // Low battery (Chromium's Battery Status API): 省電模式 is suggested once, never turned on
+  useBatteryHint(!powerSaving, () => show(strings.settings.batteryLow))
+  // Sent while unmuted: RNNoise's track once it runs, the microphone itself until then
+  const micSending = local.mic.on ? (noise.track ?? local.mic.track) : null
   const camSending = local.cam.on ? local.cam.track : null
   const sending = useMemo<LocalTracks | null>(
     () => (local.ready ? { mic: micSending, cam: camSending } : null),
@@ -1002,6 +1059,7 @@ function Room({
     view: state.view,
     welcomes: state.welcomes,
     hd: mediaSettings.hd,
+    powerSaving,
     initialAudioOnly: choices.audioOnly ?? false,
   })
   const usage = state.view?.usage ?? 'normal'
@@ -1455,6 +1513,7 @@ function Room({
         store={media.stats}
         describe={describeTrack}
         onExported={() => show(strings.stats.exported)}
+        noise={noiseSupported ? { status: noise.status, load: noise.load } : null}
       />
     </Suspense>
   )
@@ -1493,7 +1552,7 @@ function Room({
     (id) => byId.get(id) ?? [],
   )
   return (
-    <RoomContexts phone={phone} demand={media.demand}>
+    <RoomContexts phone={phone} demand={media.demand} motionOff={powerSaving}>
       <TopBar
         title={title}
         startedAt={roomInfo?.startedAt ?? null}
@@ -1802,6 +1861,12 @@ function Room({
           onHd={mediaSettings.setHd}
           audioOnly={audioOnly}
           onAudioOnly={media.setAudioOnly}
+          advancedNoiseSupported={noiseSupported}
+          advancedNoise={mediaSettings.advancedNoise}
+          advancedNoiseNote={noiseNote(noise.status)}
+          onAdvancedNoise={mediaSettings.setAdvancedNoise}
+          powerSaving={powerSaving}
+          onPowerSaving={mediaSettings.setPowerSaving}
         />
       )}
       {confirmLeave && (
@@ -1997,17 +2062,39 @@ function useShareStartedNotice(
 function RoomContexts({
   phone,
   demand,
+  motionOff,
   children,
 }: {
   phone: PhoneLayout
   demand: VideoDemandStore
+  /** 省電模式 (e6-t05): no animation, as with prefers-reduced-motion */
+  motionOff: boolean
   children: ReactNode
 }) {
   return (
     <PhoneLayoutContext.Provider value={phone}>
-      <VideoDemandContext.Provider value={demand}>{children}</VideoDemandContext.Provider>
+      <MotionOffContext.Provider value={motionOff}>
+        <VideoDemandContext.Provider value={demand}>{children}</VideoDemandContext.Provider>
+      </MotionOffContext.Provider>
     </PhoneLayoutContext.Provider>
   )
+}
+
+/**
+ * What the microphone is opened with (e6-t02): the switches as chosen, except that the browser's
+ * own noise suppression is off while the advanced one runs
+ */
+function micProcessing(processing: AudioProcessing, advancedNoise: boolean): AudioProcessing {
+  return advancedNoise && processing.noiseSuppression
+    ? { ...processing, noiseSuppression: false }
+    : processing
+}
+
+/** The settings' line under 進階噪音抑制 while it is on but not running yet */
+function noiseNote(status: NoiseStatus): string | null {
+  if (status === 'loading') return strings.settings.advancedNoiseLoading
+  if (status === 'paused') return strings.settings.advancedNoisePaused
+  return null
 }
 
 /** How long someone speaks before the speaker layout gives them the big tile */

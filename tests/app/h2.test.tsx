@@ -130,6 +130,9 @@ const snapshot: StatsSnapshot = {
   uplink: { cam: 'medium', screen: 'high' },
   paused: [],
   audioOnly: false,
+  hd: true,
+  hdLimited: false,
+  powerSaving: false,
 }
 
 const describeTrack = (key: string) =>

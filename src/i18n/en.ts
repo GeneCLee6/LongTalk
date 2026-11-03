@@ -290,6 +290,21 @@ export const en: Strings = {
     audioOnlyCam:
       'Audio-only mode is on, so your camera isn’t sent. Turn it off first to use your camera.',
     audioOnlyJoin: 'You’ll only have sound in the room. Turn it off in More › Settings.',
+    advancedNoise: 'Advanced noise suppression',
+    advancedNoiseHint:
+      'Filters out more typing, fans and other noise on your device with RNNoise; uses more battery',
+    advancedNoiseHandles: 'Advanced noise suppression handles noise while it’s on, so this is paused.',
+    advancedNoiseLoading: 'Loading advanced noise suppression…',
+    advancedNoisePaused: 'Click the page or press any key to start advanced noise suppression.',
+    advancedNoisePowerSaving: 'Power saving is on, so advanced noise suppression is paused.',
+    advancedNoiseOverloaded: 'Your device couldn’t keep up, so advanced noise suppression is off',
+    advancedNoiseFailed:
+      'Couldn’t start advanced noise suppression, so the browser’s own noise suppression is used',
+    powerSaving: 'Power saving',
+    powerSavingHint:
+      'Receives others’ video at the lowest quality, sends your camera at 15 fps without HD, and turns off animations and advanced noise suppression',
+    powerSavingHd: 'Power saving is on, so HD isn’t sent.',
+    batteryLow: 'Battery is low: you can turn on power saving in More › Settings › Performance',
   },
   // Speaking while muted (e6-t03, AC-6.3)
   mutedSpeech: {
@@ -786,6 +801,26 @@ export const en: Strings = {
     uplinkNormal: 'normal',
     uplinkLimited: 'your top quality is off',
     audioOnlyOn: 'Audio-only mode',
+    modes: 'Modes',
+    hd: 'HD video',
+    hdStates: {
+      on: 'On',
+      off: 'Off',
+      limited: 'Paused (upload too slow)',
+      powerSaving: 'Off (power saving)',
+    },
+    powerSaving: 'Power saving',
+    audioOnly: 'Audio-only mode',
+    on: 'On',
+    off: 'Off',
+    noise: 'Advanced noise suppression',
+    noiseStates: {
+      off: 'Off',
+      loading: 'Loading',
+      paused: 'Paused (click the page to start)',
+      on: 'On',
+    },
+    noiseLoad: (percent: string, latency: string) => `On · CPU ${percent} · delay ${latency}`,
     export: 'Export JSON',
     exportHint: 'A file for debugging: it has members’ names, no passwords, tokens or SDP.',
     exported: 'Connection stats downloaded',

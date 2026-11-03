@@ -44,6 +44,8 @@ export interface UseRoomMediaOptions {
   hd?: boolean
   /** 純音訊模式 to start with (the pre-join screen's choice); setAudioOnly changes it */
   initialAudioOnly?: boolean
+  /** 省電模式 (e6-t05): lowest layers received, no HD, the camera at a lower frame rate */
+  powerSaving?: boolean
 }
 
 export interface RoomMediaHandle extends RoomMediaState {
@@ -93,12 +95,13 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
     screenMode = 'text',
   } = options
   const hd = options.hd ?? true
+  const powerSaving = options.powerSaving ?? false
   const [media, setMedia] = useState<RoomMedia | null>(null)
   // 純音訊模式 outlives a session (rebuilds, a new member id): kept here, handed to each run
   const [audioOnly, setAudioOnly] = useState(options.initialAudioOnly ?? false)
-  const mode = useRef({ audioOnly, hd })
+  const mode = useRef({ audioOnly, hd, powerSaving })
   useEffect(() => {
-    mode.current = { audioOnly, hd }
+    mode.current = { audioOnly, hd, powerSaving }
   })
   // One store for the page's lifetime: tiles keep reporting into it across sessions
   const [demand] = useState(() => new VideoDemandStore())
@@ -123,6 +126,7 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
       stats,
       audioOnly: mode.current.audioOnly,
       hd: mode.current.hd,
+      powerSaving: mode.current.powerSaving,
     })
     setMedia(run)
     void run.start(startLocal ?? { mic: null, cam: null }, startView?.usage ?? 'normal')
@@ -165,6 +169,10 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
   useEffect(() => {
     void media?.setHd(hd)
   }, [media, hd])
+
+  useEffect(() => {
+    void media?.setPowerSaving(powerSaving)
+  }, [media, powerSaving])
 
   const members = view?.members
   const desired = useMemo<MemberTrack[]>(
@@ -209,7 +217,17 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
   const retry = useCallback(() => media?.retry(), [media])
   // The wish shows at once, before (or without) a running session
   return useMemo(
-    () => ({ ...state, audioOnly, hd, retry, demand, stats, setAudioOnly, setVideoPriority }),
-    [state, audioOnly, hd, retry, demand, stats, setVideoPriority],
+    () => ({
+      ...state,
+      audioOnly,
+      hd,
+      powerSaving,
+      retry,
+      demand,
+      stats,
+      setAudioOnly,
+      setVideoPriority,
+    }),
+    [state, audioOnly, hd, powerSaving, retry, demand, stats, setVideoPriority],
   )
 }

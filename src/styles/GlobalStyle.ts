@@ -57,4 +57,10 @@ export const GlobalStyle = createGlobalStyle`
       transition-duration: 0.01ms !important;
     }
   }
+
+  /* 省電模式 (e6-t05) turns motion off the same way */
+  html[data-motion='off'] *, html[data-motion='off'] *::before, html[data-motion='off'] *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 `
