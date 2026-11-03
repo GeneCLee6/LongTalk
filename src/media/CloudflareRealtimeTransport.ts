@@ -13,7 +13,9 @@ import {
   simulcastEncodings,
   videoSendParameters,
   withStartBitrate,
+  withTopLayer,
 } from './encoding.ts'
+import { readUplink } from './uplink.ts'
 import {
   MediaTransportError,
   trackKey,
@@ -29,8 +31,10 @@ import {
   type RemoteTrack,
   type SubscribeOptions,
   type TrackRef,
+  type TrackKind,
   type TransportStats,
   type Unsubscribe,
+  type UplinkStats,
 } from './MediaTransport.ts'
 
 // MediaTransport over Cloudflare Realtime SFU (docs/adr-001-media-layer.md). One SFU session and
@@ -114,6 +118,8 @@ export class CloudflareRealtimeTransport implements MediaTransport {
   // Realtime allows one SDP exchange at a time per session: every mutation runs in this queue
   #queue: Promise<unknown> = Promise.resolve()
   #published = new Map<string, RTCRtpTransceiver>()
+  /** What each published track is (setTopLayer needs a video's kind) */
+  #publishedKinds = new Map<string, TrackKind>()
   #subscriptions = new Map<string, Subscription>()
 
   #token: () => string | null
@@ -201,6 +207,7 @@ export class CloudflareRealtimeTransport implements MediaTransport {
       await this.#exchange(() => pc.setRemoteDescription(remote))
       if (video) await applyDegradation(transceiver.sender, video)
       this.#published.set(trackName, transceiver)
+      this.#publishedKinds.set(trackName, options.kind)
       const published: PublishedTrack = { sessionId, trackName, kind: options.kind }
       return { published, transceiver }
     })
@@ -214,6 +221,7 @@ export class CloudflareRealtimeTransport implements MediaTransport {
       const transceiver = this.#published.get(trackName)
       if (!transceiver?.mid) return
       this.#published.delete(trackName)
+      this.#publishedKinds.delete(trackName)
       await this.#closeTransceivers([transceiver])
     })
   }
@@ -327,6 +335,37 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     })
   }
 
+  async setTopLayer(trackName: string, top: Layer): Promise<void> {
+    this.#require()
+    const transceiver = this.#published.get(trackName)
+    const kind = this.#publishedKinds.get(trackName)
+    if (!transceiver) throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    if (kind !== 'cam' && kind !== 'screen') return
+    const sender = transceiver.sender
+    if (typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') {
+      return
+    }
+    // setParameters needs no SDP exchange either: the layers simply stop or start
+    const params = sender.getParameters()
+    if (!params.encodings || params.encodings.length === 0) return
+    await sender.setParameters({ ...params, encodings: withTopLayer(params.encodings, kind, top) })
+  }
+
+  async getUplink(trackName: string): Promise<UplinkStats> {
+    const { pc } = this.#require()
+    const transceiver = this.#published.get(trackName)
+    if (!transceiver) throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    const entries = (report: RTCStatsReport) => {
+      const list: Record<string, unknown>[] = []
+      report.forEach((entry: Record<string, unknown>) => list.push(entry))
+      return list
+    }
+    const own = entries(await transceiver.sender.getStats())
+    const uplink = readUplink(own)
+    if (uplink.availableOutgoingBitrate !== null) return uplink
+    return readUplink(own, entries(await pc.getStats()))
+  }
+
   async getStats(): Promise<TransportStats> {
     const { pc } = this.#require()
     const report = await pc.getStats()
@@ -386,6 +425,7 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     }
     this.#subscriptions.clear()
     this.#published.clear()
+    this.#publishedKinds.clear()
     this.#setState('closed')
     this.#emitter.clear()
   }

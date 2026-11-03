@@ -15,6 +15,7 @@ import {
   type TrackRef,
   type TransportStats,
   type Unsubscribe,
+  type UplinkStats,
 } from './MediaTransport.ts'
 
 /**
@@ -60,6 +61,10 @@ export class FakeTransport implements MediaTransport {
    * subscribers keep the track they got, like a real receiver keeps its track)
    */
   readonly sending = new Map<string, MediaStreamTrack | null>()
+  /** The highest layer each published video sends, by trackName (setTopLayer; `high` on publish) */
+  readonly topLayers = new Map<string, Layer>()
+  /** What getUplink() reports; tests set it (e6-t04) */
+  uplink: UplinkStats = { availableOutgoingBitrate: 3_000_000, limitation: 'none' }
   /** What getStats() reports as received; tests move it forward */
   bytesReceived = 0
   /** What getStats() reports as the path; tests set it (e2-t07) */
@@ -99,6 +104,9 @@ export class FakeTransport implements MediaTransport {
     this.publishOptions.set(published.trackName, options)
     this.#ownTracks.add(published.trackName)
     this.sending.set(published.trackName, track)
+    if (options.kind === 'cam' || options.kind === 'screen') {
+      this.topLayers.set(published.trackName, 'high')
+    }
     return published
   }
 
@@ -106,6 +114,7 @@ export class FakeTransport implements MediaTransport {
     const sessionId = this.#requireSession()
     if (!this.#ownTracks.delete(trackName)) return
     this.sending.delete(trackName)
+    this.topLayers.delete(trackName)
     const ref = { sessionId, trackName }
     this.sfu.published.delete(trackKey(ref))
     this.sfu.trackRemoved(ref)
@@ -149,6 +158,22 @@ export class FakeTransport implements MediaTransport {
     if (this.preferredLayers.get(trackKey(ref)) === layer) return
     this.preferredLayers.set(trackKey(ref), layer)
     this.layerRequests.push({ key: trackKey(ref), layer })
+  }
+
+  async setTopLayer(trackName: string, top: Layer): Promise<void> {
+    this.#requireSession()
+    if (!this.#ownTracks.has(trackName)) {
+      throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    }
+    if (this.topLayers.has(trackName)) this.topLayers.set(trackName, top)
+  }
+
+  async getUplink(trackName: string): Promise<UplinkStats> {
+    this.#requireSession()
+    if (!this.#ownTracks.has(trackName)) {
+      throw new MediaTransportError('not_found', `Not published: ${trackName}`)
+    }
+    return { ...this.uplink }
   }
 
   async getStats(): Promise<TransportStats> {

@@ -9,6 +9,11 @@ import {
   type MediaDevicesLike,
   type MediaProblem,
 } from '../media/devices.ts'
+import {
+  applyProcessing,
+  DEFAULT_PROCESSING,
+  type AudioProcessing,
+} from '../media/audioProcessing.ts'
 import type { DeviceChoices } from './session.ts'
 
 // The microphone and camera in the room (e2-t05, e2-t06, e2-t09): turning them on and off,
@@ -22,6 +27,10 @@ import type { DeviceChoices } from './session.ts'
 //   there is none the kind turns off with the problem `lost`. A device plugged in later is tried
 //   again for a kind that is off with `lost` or `notFound`.
 // - A device picked in the menu is required (`exact`); remembered choices are only preferred.
+// - The microphone's processing switches (e6-t01, audioProcessing.ts) go with every opening of
+//   it; `setProcessing` changes them on the open track (applyConstraints) or, where the browser
+//   will not change them live, opens the same microphone again with them, keeping it muted if
+//   it was (the room then swaps what it sends: replaceTrack, no renegotiation).
 
 export type LocalKind = 'mic' | 'cam'
 
@@ -43,7 +52,16 @@ export interface LocalDevicesState {
   devices: DeviceLists
   /** The device chosen per menu (null: the browser's default) */
   chosen: DeviceChoices
+  /** The microphone's processing switches (e6-t01) */
+  processing: AudioProcessing
 }
+
+/**
+ * How setProcessing went: changed on the open track, the microphone opened again with them, or
+ * neither (no microphone open: the next opening uses them; or the reopening failed and the
+ * current microphone stays)
+ */
+export type ProcessingOutcome = 'applied' | 'reopened' | 'later' | 'failed'
 
 /** Something to tell the person about that is not a lasting problem */
 export type DeviceNotice =
@@ -56,6 +74,8 @@ export type DeviceNotice =
 export interface LocalDevicesOptions {
   mediaDevices: MediaDevicesLike | null
   chosen: DeviceChoices
+  /** The microphone's processing switches to open it with; all on without it */
+  processing?: AudioProcessing
   /** Remembers a choice (localStorage, shared with the pre-join screen) */
   saveChoice?: (kind: keyof DeviceChoices, deviceId: string, label: string) => void
   onNotice?: (notice: DeviceNotice) => void
@@ -91,6 +111,7 @@ export class LocalDevices {
       cam: off(),
       devices: emptyDeviceLists(),
       chosen: { ...options.chosen },
+      processing: { ...(options.processing ?? DEFAULT_PROCESSING) },
     }
   }
 
@@ -123,7 +144,13 @@ export class LocalDevices {
     })
     const media = await openLocalMedia(
       this.mediaDevices,
-      { mic: wanted.mic, cam: wanted.cam, micId: chosen.mic, camId: chosen.cam },
+      {
+        mic: wanted.mic,
+        cam: wanted.cam,
+        micId: chosen.mic,
+        camId: chosen.cam,
+        processing: this.state.processing,
+      },
       this.options.createStream ?? trackBundle,
     )
     const opened = {
@@ -203,6 +230,22 @@ export class LocalDevices {
     await this.open(kind, deviceId, true)
   }
 
+  /**
+   * The settings panel's processing switches (e6-t01): applied to the open microphone at once,
+   * or by opening it again where the browser cannot change them live. The microphone stays
+   * muted or unmuted as it was.
+   */
+  async setProcessing(processing: AudioProcessing): Promise<ProcessingOutcome> {
+    if (this.closed) return 'later'
+    this.update({ processing: { ...processing } })
+    const { track } = this.state.mic
+    if (!track || track.readyState === 'ended') return 'later'
+    if (await applyProcessing(track, processing)) return 'applied'
+    if (this.closed || this.state.mic.track !== track) return 'later'
+    const deviceId = track.getSettings?.().deviceId ?? this.state.chosen.mic
+    return (await this.open('mic', deviceId ?? null, false, true)) ? 'reopened' : 'failed'
+  }
+
   /** Stops every track; the object cannot be reused */
   close(): void {
     if (this.closed) return
@@ -216,21 +259,35 @@ export class LocalDevices {
   /**
    * Opens a device of `kind`. On success it replaces the current track (keeping the microphone
    * muted if it was). On failure: a strict switch keeps the current device and reports a notice;
-   * otherwise the kind is off with the problem.
+   * otherwise the kind is off with the problem. `keep` (new processing on the same microphone)
+   * keeps it muted or not, like a switch, and on failure keeps the current track quietly.
    */
-  private async open(kind: LocalKind, deviceId: string | null, strict: boolean): Promise<boolean> {
+  private async open(
+    kind: LocalKind,
+    deviceId: string | null,
+    strict: boolean,
+    keep = false,
+  ): Promise<boolean> {
     if (this.closed) return false
     const generation = ++this.generation[kind]
     const before = this.state[kind]
     this.setDevice(kind, { ...before, opening: true })
     let track: MediaStreamTrack
     try {
-      track = await openDevice(this.mediaDevices, MEDIA_KIND[kind], deviceId, strict)
+      track = await openDevice(
+        this.mediaDevices,
+        MEDIA_KIND[kind],
+        deviceId,
+        strict,
+        kind === 'mic' ? this.state.processing : undefined,
+      )
     } catch (error) {
       if (this.closed || generation !== this.generation[kind]) return false
       const problem = error instanceof MediaOpenError ? error.problem : 'unknown'
       const current = this.state[kind]
-      if (strict && current.track) {
+      if (keep && current.track) {
+        this.setDevice(kind, { ...current, opening: false })
+      } else if (strict && current.track) {
         this.setDevice(kind, { ...current, opening: false })
         this.options.onNotice?.({ type: 'switchFailed', kind, problem })
       } else {
@@ -245,7 +302,7 @@ export class LocalDevices {
     }
     const current = this.state[kind]
     // A switch keeps the microphone muted; turning on or recovering turns it on
-    const on = strict ? current.on : true
+    const on = strict || keep ? current.on : true
     track.enabled = kind === 'cam' || on
     this.watch(track)
     this.release(current.track)

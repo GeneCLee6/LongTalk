@@ -2,6 +2,7 @@ import { useId, type KeyboardEvent, type ReactNode } from 'react'
 import styled from 'styled-components'
 import { color, fontSize, radius, size, space } from '../styles/tokens.ts'
 import { CloseIcon } from './icons.tsx'
+import { panelId, tabId } from './tabIds.ts'
 
 export interface SidePanelProps {
   /** The heading, and the region's accessible name */
@@ -92,19 +93,26 @@ export interface PanelTabsProps {
   tabs: readonly PanelTab[]
   selected: string
   onSelect: (id: string) => void
+  /**
+   * Ids for the tabs and their panels (`<prefix>-tab-<id>`, `<prefix>-panel-<id>`): with it each
+   * tab names the panel it controls (the settings panel, H3); panelId() gives the panel's id
+   */
+  idPrefix?: string
 }
 
 /**
  * The switch at the top of the side panel and the phone drawer between what they show (F1: chat
- * and participants, the mockup's segmented control). Arrow keys move between the tabs.
+ * and participants, the mockup's segmented control). Arrow keys move between the tabs, focus
+ * following.
  */
-export function PanelTabs({ label, tabs, selected, onSelect }: PanelTabsProps) {
-  const onKeyDown = (event: KeyboardEvent) => {
+export function PanelTabs({ label, tabs, selected, onSelect, idPrefix }: PanelTabsProps) {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     event.preventDefault()
     const at = tabs.findIndex((tab) => tab.id === selected)
-    const next = tabs[(at + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]
-    onSelect(next.id)
+    const index = (at + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length
+    onSelect(tabs[index].id)
+    event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[index]?.focus()
   }
   return (
     <Tabs role="tablist" aria-label={label} onKeyDown={onKeyDown}>
@@ -113,6 +121,8 @@ export function PanelTabs({ label, tabs, selected, onSelect }: PanelTabsProps) {
           key={tab.id}
           type="button"
           role="tab"
+          id={idPrefix ? tabId(idPrefix, tab.id) : undefined}
+          aria-controls={idPrefix ? panelId(idPrefix, tab.id) : undefined}
           aria-selected={tab.id === selected}
           tabIndex={tab.id === selected ? 0 : -1}
           $on={tab.id === selected}

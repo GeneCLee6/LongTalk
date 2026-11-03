@@ -59,7 +59,9 @@ import type { PermissionGuideProps } from '../components/PermissionGuide.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
 import { ShortcutsDialog } from '../components/ShortcutsDialog.tsx'
 import { ShareTile } from '../components/ShareTile.tsx'
+import { SettingsDialog } from '../components/SettingsDialog.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
+import type { DeviceChoice } from '../components/DeviceSelect.tsx'
 import { Stage } from '../components/Stage.tsx'
 import { Tile, type TileProps } from '../components/Tile.tsx'
 import { OffStageReactions } from '../components/TileReactions.tsx'
@@ -71,11 +73,13 @@ import { WaitingScreen } from '../components/WaitingScreen.tsx'
 import { useToasts } from '../components/useToasts.ts'
 import { VideoDemandContext } from '../components/useVideoDemand.ts'
 import {
+  audioProcessingSupport,
   canChooseSpeaker,
   canShareScreen,
   canWebShare,
   supportsWebRtc,
 } from '../media/capabilities.ts'
+import type { AudioProcessing } from '../media/audioProcessing.ts'
 import { activeDeviceId, type MediaProblem } from '../media/devices.ts'
 import { trackKey, type MediaTransportErrorCode } from '../media/MediaTransport.ts'
 import type { RoomConnectionState } from '../room/RoomConnection.ts'
@@ -103,6 +107,8 @@ import { useReactions } from '../room/useReactions.ts'
 import { useHeldSpeaker } from '../room/useHeldSpeaker.ts'
 import { useLocalDevices } from '../room/useLocalDevices.ts'
 import { useLocalPreview } from '../room/useLocalPreview.ts'
+import { useMediaSettings } from '../room/useMediaSettings.ts'
+import { useMutedSpeechHint } from '../room/useMutedSpeechHint.ts'
 import { useMicSilence } from '../room/useMicSilence.ts'
 import { useMediaPermissions } from '../room/usePermissions.ts'
 import { useSpeakerTest } from '../room/useSpeakerTest.ts'
@@ -142,6 +148,8 @@ export interface JoinChoices {
   devices: DeviceChoices
   /** The room's password (F3), when it has one and we join as someone new */
   password: string | null
+  /** 純音訊模式 from the start (H3, e6-t04): chosen in the pre-join screen's 設定 */
+  audioOnly?: boolean
 }
 
 /**
@@ -376,6 +384,12 @@ function PreJoinScreen({
   // browser's default meanwhile, and stays remembered
   const [picked, setPicked] = useState<DeviceChoices>(loadDevices)
   const [labels, setLabels] = useState<DeviceChoices>(loadDeviceLabels)
+  // 設定 (H3): the processing switches and HD are remembered; 純音訊模式 is for this meeting
+  const mediaSettings = useMediaSettings()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [audioOnly, setAudioOnly] = useState(false)
+  const [processingSupported] = useState(audioProcessingSupport)
+  const phone = usePhoneLayoutQuery()
   const preview = useLocalPreview({
     mic,
     cam,
@@ -383,6 +397,7 @@ function PreJoinScreen({
     camId: picked.cam,
     micLabel: labels.mic,
     camLabel: labels.cam,
+    processing: mediaSettings.processing,
   })
   const lists = preview.devices
   const resolved: DeviceChoices = {
@@ -396,9 +411,42 @@ function PreJoinScreen({
   const speakerTest = useSpeakerTest(resolved.speaker)
   const passwordField = usePasswordField(roomId, summary.password, problem)
   const permissionGuide = usePermissionGuide(preview.micProblem, preview.camProblem, preview.retry)
+  const selected = {
+    mic: resolved.mic ?? activeDeviceId(preview.stream, 'audio'),
+    cam: resolved.cam ?? activeDeviceId(preview.stream, 'video'),
+    speaker: resolved.speaker,
+  }
+  const onSelect = (choice: DeviceChoice, deviceId: string) => {
+    const list =
+      choice === 'mic' ? lists.audioinput : choice === 'cam' ? lists.videoinput : lists.audiooutput
+    const label = list.find((option) => option.deviceId === deviceId)?.label ?? ''
+    saveDevice(choice, deviceId, label)
+    setPicked((current) => ({ ...current, [choice]: deviceId }))
+    setLabels((current) => ({ ...current, [choice]: label || null }))
+  }
 
   return (
-    <PreJoin
+    <>
+      {settingsOpen && (
+        <SettingsDialog
+          phone={phone !== null}
+          onClose={() => setSettingsOpen(false)}
+          devices={preview.devices}
+          selected={selected}
+          onSelect={onSelect}
+          speakerSupported={speakerSupported}
+          processing={mediaSettings.processing}
+          processingSupported={processingSupported}
+          onProcessing={mediaSettings.setProcessing}
+          hd={mediaSettings.hd}
+          onHd={mediaSettings.setHd}
+          audioOnly={audioOnly}
+          onAudioOnly={setAudioOnly}
+        />
+      )}
+      <PreJoin
+        onSettings={() => setSettingsOpen(true)}
+        audioOnly={audioOnly}
       roomId={roomId}
       memberCount={summary.memberCount}
       roomNotice={summary.status === 'error' ? strings.prejoin.loadFailed : null}
@@ -418,23 +466,8 @@ function PreJoinScreen({
       opening={preview.opening}
       level={level}
       devices={preview.devices}
-      selected={{
-        mic: resolved.mic ?? activeDeviceId(preview.stream, 'audio'),
-        cam: resolved.cam ?? activeDeviceId(preview.stream, 'video'),
-        speaker: resolved.speaker,
-      }}
-      onSelect={(choice, deviceId) => {
-        const list =
-          choice === 'mic'
-            ? lists.audioinput
-            : choice === 'cam'
-              ? lists.videoinput
-              : lists.audiooutput
-        const label = list.find((option) => option.deviceId === deviceId)?.label ?? ''
-        saveDevice(choice, deviceId, label)
-        setPicked((current) => ({ ...current, [choice]: deviceId }))
-        setLabels((current) => ({ ...current, [choice]: label || null }))
-      }}
+      selected={selected}
+      onSelect={onSelect}
       speakerSupported={speakerSupported}
       micProblem={preview.micProblem}
       camProblem={preview.camProblem}
@@ -454,9 +487,10 @@ function PreJoinScreen({
           saveDevice(kind, now, labels[kind] ?? '')
           devices[kind] = now
         }
-        onJoin({ name: normalized, mic, cam, devices, password })
+        onJoin({ name: normalized, mic, cam, devices, password, audioOnly })
       }}
     />
+    </>
   )
 }
 
@@ -831,13 +865,26 @@ function Room({
     })),
   ]
   const onNotice = useCallback((notice: DeviceNotice) => show(noticeText(notice), 'warn'), [show])
+  // 設定 (H3: e6-t01, e6-t04): the processing switches and HD, remembered with the pre-join
+  // screen's; the dialog on a computer, the drawer on a phone
+  const mediaSettings = useMediaSettings()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [processingSupported] = useState(audioProcessingSupport)
   // The microphone and camera chosen on the pre-join screen, opened again for the room; the
-  // toolbar turns them on and off and switches them after that (e2-t05, e2-t06)
+  // toolbar turns them on and off and switches them after that (e2-t05, e2-t06). Joining in
+  // 純音訊模式 leaves the camera closed (it comes on when the mode ends, if it was chosen).
   const { state: local, devices } = useLocalDevices(
-    { mic: choices.mic, cam: choices.cam },
+    { mic: choices.mic, cam: choices.cam && !choices.audioOnly },
     choices.devices,
     onNotice,
+    mediaSettings.processing,
   )
+  const onProcessing = (processing: AudioProcessing) => {
+    mediaSettings.setProcessing(processing)
+    void devices?.setProcessing(processing).then((outcome) => {
+      if (outcome === 'failed') show(strings.settings.processingFailed, 'warn')
+    })
+  }
   const micSending = local.mic.on ? local.mic.track : null
   const camSending = local.cam.on ? local.cam.track : null
   const sending = useMemo<LocalTracks | null>(
@@ -928,9 +975,34 @@ function Room({
     you: state.you,
     view: state.view,
     welcomes: state.welcomes,
+    hd: mediaSettings.hd,
+    initialAudioOnly: choices.audioOnly ?? false,
   })
   const usage = state.view?.usage ?? 'normal'
   useUsageNotices(usage, media.videoRefused, show)
+  // 純音訊模式 (e6-t04), whoever turns it on (the settings, H2's adaptation): the camera device
+  // goes off with it (its light too) and comes back when it ends, if it was on
+  const audioOnly = media.audioOnly
+  const camBeforeAudioOnly = useRef(choices.cam && (choices.audioOnly ?? false))
+  const audioOnlyBefore = useRef(audioOnly)
+  const onAudioOnlyChange = useEffectEvent((on: boolean) => {
+    if (on) {
+      camBeforeAudioOnly.current = local.cam.on || local.cam.opening
+      if (camBeforeAudioOnly.current) void devices?.setOn('cam', false)
+    } else if (camBeforeAudioOnly.current) {
+      camBeforeAudioOnly.current = false
+      void devices?.setOn('cam', true)
+    }
+  })
+  useEffect(() => {
+    if (audioOnly === audioOnlyBefore.current) return
+    audioOnlyBefore.current = audioOnly
+    onAudioOnlyChange(audioOnly)
+  }, [audioOnly])
+  // The uplink held HD back (e6-t04): said once each time
+  useEffect(() => {
+    if (media.hdLimited) show(strings.settings.hdLimitedToast, 'warn')
+  }, [media.hdLimited, show])
   // What a host did to us (F1, AC-1.4): the room already lists the track muted; our browser
   // turns the device off itself and says who did it. Only we can turn it back on.
   const onHostNotice = useEffectEvent((notice: NoticeMessage) => {
@@ -1077,6 +1149,11 @@ function Room({
       show(strings.usage.videoRefused, 'warn')
       return false
     }
+    // 純音訊模式 sends no camera (e6-t04): say how to get it back instead of opening it
+    if (!local.cam.on && audioOnly) {
+      show(strings.settings.audioOnlyCam, 'warn')
+      return false
+    }
     void devices?.setOn('cam', !local.cam.on)
     return true
   }
@@ -1086,7 +1163,7 @@ function Room({
   const handPlace = new Map(handQueue(members).map((member, index) => [member.id, index + 1]))
   // Each member's camera as their tile shows it: ours while it sends, theirs while it is on
   const videoOf = (member: (typeof members)[number]): MediaStreamTrack | null => {
-    if (member.id === state.you) return media.videoRefused ? null : camSending
+    if (member.id === state.you) return media.videoRefused || audioOnly ? null : camSending
     const cam = member.tracks.find((t) => t.kind === 'cam')
     return (cam && !cam.muted && media.received[trackKey(cam)]?.track) || null
   }
@@ -1168,6 +1245,34 @@ function Room({
   useEffect(() => {
     if (mediaReconnecting) announce(strings.room.mediaReconnecting)
   }, [mediaReconnecting, announce])
+  // Speaking while muted (e6-t03): a hint with a one-tap unmute; nothing is sent meanwhile
+  // (useMutedSpeechHint.ts)
+  const mutedSpeech = useMutedSpeechHint({
+    track: local.mic.track,
+    muted: local.ready && !local.mic.on,
+    pushToTalk: talking,
+    disabled: !inRoom,
+  })
+  useEffect(() => {
+    if (mutedSpeech.hint) announce(strings.mutedSpeech.text)
+  }, [mutedSpeech.hint, announce])
+  // The 更多 menu's media items (H3), after the others
+  const mediaItems: MenuItem[] = [
+    {
+      id: 'audio-only',
+      label: strings.settings.audioOnly,
+      section: strings.settings.title,
+      kind: 'checkbox',
+      checked: audioOnly,
+      onSelect: () => media.setAudioOnly(!audioOnly),
+    },
+    {
+      id: 'settings',
+      label: strings.settings.menu,
+      section: strings.settings.title,
+      onSelect: () => setSettingsOpen(true),
+    },
+  ]
 
   if (gone || outcome) {
     return (
@@ -1385,6 +1490,36 @@ function Room({
                 </Alert>
               )}
               {mediaProblem && <Alert role="alert">{mediaProblem}</Alert>}
+              {/* Said by the announcer, like push-to-talk */}
+              {mutedSpeech.hint && (
+                <Note>
+                  {strings.mutedSpeech.text}
+                  <InlineButton
+                    type="button"
+                    onClick={() => {
+                      mutedSpeech.dismiss()
+                      void devices?.setOn('mic', true)
+                    }}
+                  >
+                    {strings.mutedSpeech.unmute}
+                  </InlineButton>
+                  <InlineButton
+                    type="button"
+                    aria-label={strings.mutedSpeech.dismiss}
+                    onClick={mutedSpeech.dismiss}
+                  >
+                    ×
+                  </InlineButton>
+                </Note>
+              )}
+              {inRoom && audioOnly && (
+                <Note role="status">
+                  {strings.settings.audioOnlyNote}
+                  <InlineButton type="button" onClick={() => media.setAudioOnly(false)}>
+                    {strings.settings.audioOnlyExit}
+                  </InlineButton>
+                </Note>
+              )}
               {inRoom && shown.hiddenNoVideo > 0 && (
                 <Note role="status">
                   {strings.view.hiddenNoVideo(shown.hiddenNoVideo)}
@@ -1424,7 +1559,7 @@ function Room({
           onToggleChat={() => togglePanel('chat')}
           participantsOpen={panel === 'participants'}
           onToggleParticipants={() => togglePanel('participants')}
-          moreItems={moreItems}
+          moreItems={[...moreItems, ...mediaItems]}
           onLeave={onLeave}
           micOn={local.mic.on}
           camOn={local.cam.on}
@@ -1496,6 +1631,28 @@ function Room({
         />
       )}
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsDialog
+          phone={phone !== null}
+          onClose={() => setSettingsOpen(false)}
+          devices={local.devices}
+          selected={{
+            mic: trackDevice(local.mic.track) ?? local.chosen.mic,
+            cam: trackDevice(local.cam.track) ?? local.chosen.cam,
+            speaker: local.chosen.speaker,
+          }}
+          onSelect={(choice, deviceId) => void devices?.select(choice, deviceId)}
+          speakerSupported={speakerSupported}
+          processing={mediaSettings.processing}
+          processingSupported={processingSupported}
+          onProcessing={onProcessing}
+          hd={mediaSettings.hd}
+          hdLimited={media.hdLimited}
+          onHd={mediaSettings.setHd}
+          audioOnly={audioOnly}
+          onAudioOnly={media.setAudioOnly}
+        />
+      )}
       {confirmLeave && (
         <ConfirmDialog
           title={strings.shortcuts.leaveTitle}

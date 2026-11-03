@@ -201,3 +201,41 @@ export function withStartBitrate(sdp: string, kbps: number = START_BITRATE_KBPS)
     })
     .join('\r\n')
 }
+
+/** Layers from the highest down, for comparing them */
+const LAYER_RANK: Record<Layer, number> = { high: 0, medium: 1, low: 2 }
+
+/**
+ * A sender's encodings with the layers above `top` turned off (e6-t04, HD off: the camera's
+ * 720p layer is not sent). Simulcast encodings are matched to their layer by rid (SIMULCAST); the
+ * lowest one always stays on, so something is always sent. A single-layer sender (simulcast
+ * refused) is scaled down instead: half size and the medium layer's bitrate for `medium`.
+ */
+export function withTopLayer(
+  encodings: readonly RTCRtpEncodingParameters[],
+  kind: 'cam' | 'screen',
+  top: Layer,
+): RTCRtpEncodingParameters[] {
+  const layers = SIMULCAST[kind]
+  const layered = encodings.length > 1 && encodings.every((encoding) => encoding.rid)
+  if (layered) {
+    const ranks = encodings.map((encoding) => {
+      const layer = layers.find((entry) => entry.rid === encoding.rid)?.layer
+      return layer ? LAYER_RANK[layer] : LAYER_RANK.low
+    })
+    const lowest = Math.max(...ranks)
+    return encodings.map((encoding, i) => ({
+      ...encoding,
+      active: ranks[i] >= LAYER_RANK[top] || ranks[i] === lowest,
+    }))
+  }
+  // One layer: the full-size parameters for `high`, otherwise those of the layer asked for
+  const layer =
+    layers.find((entry) => entry.layer === top) ?? layers[layers.length - 1] ?? layers[0]
+  const single = VIDEO_SEND[kind]
+  return encodings.map((encoding) => ({
+    ...encoding,
+    scaleResolutionDownBy: top === 'high' ? 1 : layer.scaleResolutionDownBy,
+    maxBitrate: top === 'high' ? single.maxBitrate : Math.min(single.maxBitrate, layer.maxBitrate),
+  }))
+}

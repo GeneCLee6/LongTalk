@@ -22,7 +22,13 @@ function fullBrowser(): CapabilityEnv {
     getUserMedia() {}
     getDisplayMedia() {}
     getSupportedConstraints() {
-      return { deviceId: true, suppressLocalAudioPlayback: true }
+      return {
+        deviceId: true,
+        suppressLocalAudioPlayback: true,
+        noiseSuppression: true,
+        echoCancellation: true,
+        autoGainControl: true,
+      }
     }
   }
   class RTCRtpSender {
