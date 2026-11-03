@@ -2,6 +2,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from '../../src/App.tsx'
 import type { AudioContextLike } from '../../src/media/levelMeter.ts'
+import { CAMERA_CAPTURE } from '../../src/media/devices.ts'
 import { MIC_LEVEL_INTERVAL_MS, useMicLevel } from '../../src/room/useMicLevel.ts'
 import { FakeStream, FakeTrack, asStream, fakeMediaDevices } from './media/fakeMedia.ts'
 import { preloadRoomPage } from './preloadRoom.ts'
@@ -55,7 +56,7 @@ describe('pre-join screen', () => {
     const fake = await openPreJoin()
     expect(await screen.findByLabelText('鏡頭預覽')).toBeInTheDocument()
     expect(screen.getByText('鏡像預覽')).toBeInTheDocument()
-    expect(fake.getUserMedia).toHaveBeenCalledWith({ audio: true, video: true })
+    expect(fake.getUserMedia).toHaveBeenCalledWith({ audio: true, video: CAMERA_CAPTURE })
     await waitFor(() => expect(select('麥克風').options).toHaveLength(2))
     expect(select('麥克風').value).toBe('mic-1')
     expect([...select('鏡頭').options].map((o) => o.text)).toEqual(['FaceTime HD Camera', '鏡頭 2'])
@@ -87,7 +88,7 @@ describe('pre-join screen', () => {
     await waitFor(() =>
       expect(fake.getUserMedia).toHaveBeenLastCalledWith({
         audio: true,
-        video: { deviceId: { ideal: 'cam-2' } },
+        video: { deviceId: { ideal: 'cam-2' }, ...CAMERA_CAPTURE },
       }),
     )
     await waitFor(() => expect(select('鏡頭').value).toBe('cam-2'))

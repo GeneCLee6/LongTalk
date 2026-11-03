@@ -9,6 +9,7 @@ import {
   type LocalTracks,
   type RoomMediaState,
 } from './RoomMedia.ts'
+import { VideoDemandStore } from './videoDemand.ts'
 
 export interface UseRoomMediaOptions {
   /**
@@ -40,6 +41,11 @@ export interface UseRoomMediaOptions {
 export interface RoomMediaHandle extends RoomMediaState {
   /** After `failed`: build a new session */
   retry: () => void
+  /**
+   * Where the tiles draw each received video (e2-t12): the room page provides it to the stage
+   * (VideoDemandContext), RoomMedia picks layers from it
+   */
+  demand: VideoDemandStore
 }
 
 const noSubscribe = () => () => {}
@@ -55,6 +61,8 @@ const idle = () => idleRoomMedia
 export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
   const { enabled, local, you, view, welcomes = 0, screen = null, screenAudio = null } = options
   const [media, setMedia] = useState<RoomMedia | null>(null)
+  // One store for the page's lifetime: tiles keep reporting into it across sessions
+  const [demand] = useState(() => new VideoDemandStore())
   // Read when a run starts, without restarting it when they change
   const latest = useRef(options)
   useEffect(() => {
@@ -71,6 +79,7 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
       createTransport: () => latest.current.createTransport(),
       iceConfig: () => latest.current.iceConfig?.() ?? Promise.resolve(null),
       send: (message) => latest.current.send(message),
+      demand,
     })
     setMedia(run)
     void run.start(startLocal ?? { mic: null, cam: null }, startView?.usage ?? 'normal')
@@ -80,7 +89,16 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
       void run.close()
       setMedia((current) => (current === run ? null : current))
     }
-  }, [enabled, ready, you])
+  }, [enabled, ready, you, demand])
+
+  // A tab in the background shows nothing: every received video drops to its lowest layer
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const update = () => demand.setPageHidden(document.visibilityState === 'hidden')
+    update()
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [demand])
 
   const mic = local?.mic ?? null
   const cam = local?.cam ?? null
@@ -116,5 +134,5 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
 
   const state = useSyncExternalStore(media?.subscribe ?? noSubscribe, media?.getState ?? idle)
   const retry = useCallback(() => media?.retry(), [media])
-  return useMemo(() => ({ ...state, retry }), [state, retry])
+  return useMemo(() => ({ ...state, retry, demand }), [state, retry, demand])
 }

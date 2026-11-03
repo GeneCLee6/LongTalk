@@ -7,11 +7,13 @@
 //   between a PeerConnection's senders by priority), up to 30 fps, and adapts by `balanced`
 //   degradation: under pressure it lowers resolution and frame rate together, instead of holding
 //   1080p and dropping to a frame or two a second (what `detail` alone did: 「卡卡的」).
-// - The camera is capped (8 people each receive 7 cameras; without simulcast, e2-t11, every
-//   receiver gets the full stream), which also leaves room for a share on the same uplink.
+// - The camera is capped, which also leaves room for a share on the same uplink.
 //
-// Simulcast (e2-t11, H1) will set per-layer encodings instead; this is the single-layer case.
-import type { TrackKind } from './MediaTransport.ts'
+// Simulcast (e2-t11, H1; ADR-001 「Simulcast」): a camera goes out in three layers and a screen in
+// two (SIMULCAST below), and each receiver asks the SFU for the one its tile needs (layers.ts,
+// e2-t12). The single-layer parameters stay for a browser that refuses simulcast encodings.
+import type { Layer, TrackKind } from './MediaTransport.ts'
+import type { SimulcastRid } from '../../shared/sfu.ts'
 
 export interface VideoSendParameters {
   maxBitrate: number
@@ -34,6 +36,89 @@ export const VIDEO_SEND: Record<'cam' | 'screen', VideoSendParameters> = {
     priority: 'high',
     degradationPreference: 'balanced',
   },
+}
+
+/** One simulcast layer as it is sent: its rid, scale, bitrate cap, and nominal short side */
+export interface SimulcastLayer {
+  layer: Layer
+  rid: SimulcastRid
+  scaleResolutionDownBy: number
+  maxBitrate: number
+  maxFramerate: number
+  /**
+   * The layer's short side in pixels for the capture size we ask for (a camera at 1280×720, a
+   * screen at most 1920×1080): what a receiver compares its tile against (layers.ts)
+   */
+  shortSide: number
+}
+
+/**
+ * The layers per kind, highest first (rids `f`／`h`／`q` = full, half, quarter: Realtime's
+ * `asciibetical` ordering treats `f` as the most desirable). The camera is captured at 1280×720
+ * (devices.ts CAMERA_CAPTURE): Chrome sends only as many layers as the source is big enough for
+ * (VP8 from 640×480: two; from 1280×720: three), so 720p is what makes three layers possible.
+ * Bitrates follow libwebrtc's own simulcast ladder for these sizes, the top layer a little under
+ * its 2.5 Mbps for 720p (a receiver only asks for it for a big tile). The screen's second layer
+ * is for small screens and thin links: half size at a lower frame rate.
+ */
+export const SIMULCAST: Record<'cam' | 'screen', readonly SimulcastLayer[]> = {
+  cam: [
+    {
+      layer: 'high',
+      rid: 'f',
+      scaleResolutionDownBy: 1,
+      maxBitrate: 1_200_000,
+      maxFramerate: 30,
+      shortSide: 720,
+    },
+    {
+      layer: 'medium',
+      rid: 'h',
+      scaleResolutionDownBy: 2,
+      maxBitrate: 400_000,
+      maxFramerate: 30,
+      shortSide: 360,
+    },
+    {
+      layer: 'low',
+      rid: 'q',
+      scaleResolutionDownBy: 4,
+      maxBitrate: 120_000,
+      maxFramerate: 15,
+      shortSide: 180,
+    },
+  ],
+  screen: [
+    {
+      layer: 'high',
+      rid: 'f',
+      scaleResolutionDownBy: 1,
+      maxBitrate: 2_500_000,
+      maxFramerate: 30,
+      shortSide: 1080,
+    },
+    {
+      layer: 'medium',
+      rid: 'h',
+      scaleResolutionDownBy: 2,
+      maxBitrate: 600_000,
+      maxFramerate: 15,
+      shortSide: 540,
+    },
+  ],
+}
+
+/** addTransceiver's sendEncodings for a simulcast camera or screen, highest layer first */
+export function simulcastEncodings(kind: 'cam' | 'screen'): RTCRtpEncodingParameters[] {
+  const { priority } = VIDEO_SEND[kind]
+  return SIMULCAST[kind].map((layer) => ({
+    rid: layer.rid,
+    scaleResolutionDownBy: layer.scaleResolutionDownBy,
+    maxBitrate: layer.maxBitrate,
+    maxFramerate: layer.maxFramerate,
+    priority,
+    networkPriority: priority,
+  }))
 }
 
 /** The parameters for a published track of this kind, or null (audio keeps the defaults) */

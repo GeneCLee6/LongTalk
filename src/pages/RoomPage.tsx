@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import styled from 'styled-components'
 import {
@@ -37,6 +45,7 @@ import { Drawer } from '../components/Drawer.tsx'
 import { LeftScreen } from '../components/LeftScreen.tsx'
 import {
   PhoneLayoutContext,
+  type PhoneLayout,
   usePhoneLayoutQuery,
   useReducedMotion,
 } from '../components/layoutContext.ts'
@@ -60,6 +69,7 @@ import { TopBar } from '../components/TopBar.tsx'
 import { TurnedAwayScreen, type TurnedAwayReason } from '../components/TurnedAwayScreen.tsx'
 import { WaitingScreen } from '../components/WaitingScreen.tsx'
 import { useToasts } from '../components/useToasts.ts'
+import { VideoDemandContext } from '../components/useVideoDemand.ts'
 import {
   canChooseSpeaker,
   canShareScreen,
@@ -103,6 +113,7 @@ import { useRoomConnection } from '../room/useRoomConnection.ts'
 import { useRoomTelemetry } from '../room/useRoomTelemetry.ts'
 import type { LocalTracks } from '../room/RoomMedia.ts'
 import { useRoomMedia } from '../room/useRoomMedia.ts'
+import type { VideoDemandStore } from '../room/videoDemand.ts'
 import { useRoomShortcuts } from '../room/useRoomShortcuts.ts'
 import { useOnline } from '../pwa/online.ts'
 import type { ShareNotice } from '../room/ScreenShare.ts'
@@ -1252,7 +1263,7 @@ function Room({
     (id) => byId.get(id) ?? [],
   )
   return (
-    <PhoneLayoutContext.Provider value={phone}>
+    <RoomContexts phone={phone} demand={media.demand}>
       <TopBar
         title={title}
         startedAt={roomInfo?.startedAt ?? null}
@@ -1530,7 +1541,7 @@ function Room({
         )}
       </div>
       <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
-    </PhoneLayoutContext.Provider>
+    </RoomContexts>
   )
 }
 
@@ -1646,6 +1657,26 @@ function useShareStartedNotice(
     }
     previous.current = sharerId
   }, [sharerId, you, name, show])
+}
+
+/**
+ * What the room's components read from context: the phone layout (e4-t07), and where received
+ * videos report their drawn size for the layer choice (e2-t12, useVideoDemand)
+ */
+function RoomContexts({
+  phone,
+  demand,
+  children,
+}: {
+  phone: PhoneLayout
+  demand: VideoDemandStore
+  children: ReactNode
+}) {
+  return (
+    <PhoneLayoutContext.Provider value={phone}>
+      <VideoDemandContext.Provider value={demand}>{children}</VideoDemandContext.Provider>
+    </PhoneLayoutContext.Provider>
+  )
 }
 
 /** How long someone speaks before the speaker layout gives them the big tile */

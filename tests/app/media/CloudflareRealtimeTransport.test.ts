@@ -84,6 +84,7 @@ class MockPc {
           currentRoundTripTime: 0.042,
           bytesSent: 10,
           bytesReceived: 20,
+          availableIncomingBitrate: 2_500_000,
           localCandidateId: 'l',
         },
       ],
@@ -396,6 +397,7 @@ describe('CloudflareRealtimeTransport', () => {
       usingRelay: true,
       bytesSent: 10,
       bytesReceived: 20,
+      availableIncomingBitrate: 2_500_000,
     })
   })
 

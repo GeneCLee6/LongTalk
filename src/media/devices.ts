@@ -95,6 +95,22 @@ export interface LocalMedia {
 const constraint = (deviceId: string | null, strict = false): MediaTrackConstraints | true =>
   deviceId ? { deviceId: strict ? { exact: deviceId } : { ideal: deviceId } } : true
 
+/**
+ * What a camera is asked for (H1, e2-t11): 1280×720 if it can (only preferred: a camera that
+ * cannot opens at what it can). Simulcast needs the size: Chrome sends three VP8 layers from
+ * 720p and only two from 640×480, its default (media/encoding.ts SIMULCAST). 16:9 also fills the
+ * 16:9 tiles without cropping a 4:3 picture.
+ */
+export const CAMERA_CAPTURE: MediaTrackConstraints = {
+  width: { ideal: 1280 },
+  height: { ideal: 720 },
+}
+
+const cameraConstraint = (deviceId: string | null, strict = false): MediaTrackConstraints => {
+  const device = constraint(deviceId, strict)
+  return device === true ? { ...CAMERA_CAPTURE } : { ...device, ...CAMERA_CAPTURE }
+}
+
 /** Makes one stream of several tracks; `new MediaStream` in the browser */
 export type CreateStream = (tracks: MediaStreamTrack[]) => MediaStream
 
@@ -120,7 +136,7 @@ export async function openLocalMedia(
     }
   }
   const audio = request.mic ? constraint(request.micId) : false
-  const video = request.cam ? constraint(request.camId) : false
+  const video = request.cam ? cameraConstraint(request.camId) : false
   try {
     return { ...none, stream: await devices.getUserMedia({ audio, video }) }
   } catch (error) {
@@ -179,11 +195,12 @@ export async function openDevice(
   strict = false,
 ): Promise<MediaStreamTrack> {
   if (!devices) throw new MediaOpenError('unsupported')
-  const wanted = constraint(deviceId, strict)
   let stream: MediaStream
   try {
     stream = await devices.getUserMedia(
-      kind === 'audio' ? { audio: wanted, video: false } : { audio: false, video: wanted },
+      kind === 'audio'
+        ? { audio: constraint(deviceId, strict), video: false }
+        : { audio: false, video: cameraConstraint(deviceId, strict) },
     )
   } catch (error) {
     throw new MediaOpenError(mediaProblem(error))

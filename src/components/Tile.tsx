@@ -23,6 +23,7 @@ import {
 import { TileVisibleContext } from './layoutContext.ts'
 import { TileReactions } from './TileReactions.tsx'
 import { useTrack } from './useTrack.ts'
+import { useVideoDemand } from './useVideoDemand.ts'
 
 export interface TileProps {
   name: string
@@ -78,6 +79,8 @@ export function Tile({
   const visible = useContext(TileVisibleContext)
   const shown = visible ? video : null
   const videoRef = useTrack<HTMLVideoElement>(shown)
+  // How big the received camera is drawn picks its simulcast layer (e2-t12)
+  useVideoDemand(videoRef, you ? null : shown)
   const outlined = speaking && !micMuted && !reconnecting
   return (
     <Frame
