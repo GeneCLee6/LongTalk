@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { ChatMessage } from '../shared/chat.ts'
 import {
+  CloseCode,
   HEARTBEAT_PING,
   HEARTBEAT_PONG,
   MAX_CLIENT_MESSAGE_CHARS,
@@ -22,9 +23,15 @@ import {
 import { addressKey, type GuessRecord, type PasswordRecord } from './password.ts'
 import type { Schedule } from './scheduler.ts'
 import { USAGE_OBJECT } from './usage.ts'
+import { requestClientKey } from './client-key.ts'
+import { GUARD_OBJECT } from './guard.ts'
+import type { OffenceKind } from '../shared/abuse.ts'
 
-/** What each hibernatable socket carries, so the connections survive the object waking up */
-type Attachment = OpenSocket
+/**
+ * What each hibernatable socket carries, so the connections survive the object waking up;
+ * `client` is its client key (worker/client-key.ts) for telling GuardDO about abuse (I1)
+ */
+type Attachment = OpenSocket & { client?: string | null }
 
 const ROOM_KEY = 'room'
 const REV_KEY = 'rev'
@@ -99,6 +106,13 @@ export class RoomDO extends DurableObject<Env> {
       now: Date.now,
       newMemberId: () => crypto.randomUUID(),
       newToken: newSessionToken,
+      offence: (connId, _ip, kind) => {
+        if (connId === null) return
+        for (const ws of ctx.getWebSockets(connId)) {
+          const client = (ws.deserializeAttachment() as Attachment).client
+          if (client) this.noteOffence(client, kind)
+        }
+      },
     })
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG))
     void ctx.blockConcurrencyWhile(async () => {
@@ -174,17 +188,27 @@ export class RoomDO extends DurableObject<Env> {
       await this.flushUsage()
     }
     const { 0: client, 1: server } = new WebSocketPair()
-    const admission = this.host.admit(new URL(request.url).searchParams.get('v'))
+    // The guess limit (F3) and the upgrade rate (I1) count per network address too: kept as a
+    // digest bound to this room
+    const ip = await addressKey(request.headers.get('CF-Connecting-IP'), this.roomId(request))
+    const clientKey = await requestClientKey(request, this.env)
+    const admission = this.host.admit(new URL(request.url).searchParams.get('v'), ip)
     if (!admission.ok) {
+      if (admission.code === CloseCode.rateLimited && clientKey) {
+        this.noteOffence(clientKey, 'connectLimit')
+      }
       // A hibernatable socket closed before the 101 goes out stays open in workerd, so a refused
       // one is a plain socket, closed once the upgrade is done
       server.accept()
       server.close(admission.code, admission.reason)
       return new Response(null, { status: 101, webSocket: client })
     }
-    // The guess limit (F3) counts per network address too: kept as a digest bound to this room
-    const ip = await addressKey(request.headers.get('CF-Connecting-IP'), this.roomId(request))
-    const attachment: Attachment = { conn: crypto.randomUUID(), openedAt: Date.now(), ip }
+    const attachment: Attachment = {
+      conn: crypto.randomUUID(),
+      openedAt: Date.now(),
+      ip,
+      client: clientKey,
+    }
     this.ctx.acceptWebSocket(server, [attachment.conn])
     server.serializeAttachment(attachment)
     this.host.opened(attachment.conn, ip)
@@ -194,8 +218,19 @@ export class RoomDO extends DurableObject<Env> {
 
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer) {
     const { conn } = ws.deserializeAttachment() as Attachment
-    // Binary frames and oversized text are not part of the protocol: answered with an error
-    if (typeof data !== 'string' || data.length > MAX_CLIENT_MESSAGE_CHARS) {
+    // Binary frames are not part of the protocol: answered with an error. Oversized text closes
+    // the socket (1009, Message Too Big; I1): no client of ours sends one
+    if (typeof data === 'string' && data.length > MAX_CLIENT_MESSAGE_CHARS) {
+      const { client } = ws.deserializeAttachment() as Attachment
+      if (client) this.noteOffence(client, 'flood')
+      try {
+        ws.close(1009, 'message too big')
+      } catch {
+        // Already closed
+      }
+      return
+    }
+    if (typeof data !== 'string') {
       this.host.message(conn, '')
       return
     }
@@ -205,6 +240,12 @@ export class RoomDO extends DurableObject<Env> {
     await this.host.message(conn, data)
     // `leave` may empty the room or hand the host on
     await this.syncAlarm()
+  }
+
+  /** Tells GuardDO (I1) that `client` hit a limit here; best effort, never waited for */
+  private noteOffence(client: string, kind: OffenceKind): void {
+    const guard = this.env.GUARD.get(this.env.GUARD.idFromName(GUARD_OBJECT))
+    void guard.note(client, kind).catch((error: unknown) => console.error('guard note', error))
   }
 
   async webSocketClose(ws: WebSocket) {

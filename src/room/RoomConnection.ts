@@ -43,6 +43,7 @@ import { Backoff } from './backoff.ts'
  * - `passwordRequired`, `passwordWrong`: the room has a password, and the join carried none or a
  *   wrong one (F3); final (the pre-join screen asks again)
  * - `passwordWait`: too many wrong passwords; `passwordWaitUntil` says until when (F3); final
+ * - `rateLimited`: the room closed us for too many connections or messages (I1); final
  */
 export type RoomStatus =
   | 'connecting'
@@ -62,6 +63,7 @@ export type RoomStatus =
   | 'passwordRequired'
   | 'passwordWrong'
   | 'passwordWait'
+  | 'rateLimited'
 
 /** Where we are in the waiting room (F2): the latest `lobby` */
 export type LobbyState = Pick<LobbyMessage, 'position' | 'count' | 'room' | 'hostPresent'>
@@ -166,6 +168,8 @@ function finalStatus(code: number): RoomStatus | null {
       return 'passwordWrong'
     case CloseCode.passwordWait:
       return 'passwordWait'
+    case CloseCode.rateLimited:
+      return 'rateLimited'
     default:
       return null
   }

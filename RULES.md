@@ -21,6 +21,8 @@
 - **伺服器把關**：權限、房間狀態、錄影與同意，只在 RoomDO 判斷；前端只是按鈕。
 - **DRY**：顏色只在 `styles/tokens.ts`；介面文字只在 `strings.ts`。`npm run lint` 會擋（G5，`scripts/literals.ts`）：`src/` 的程式碼（註解不算）裡有中文字或全形標點、顏色字面值（`#rgb`、`rgb()`、`hsl()`）、JSX 標籤之間的文字、`aria-label`／`title`／`placeholder`／`alt`／`label` 的字面文字就失敗；字典、`tokens.ts`、`brand.ts` 除外，真的需要的那一行在行尾寫 `// literal-ok: <理由>`。
 - **lazy**：會議室頁是獨立 chunk；白板、背景模糊、錄影、標註都要 `lazy()`，不能進首頁或會議室的初始 JS。
+- **secrets 不進前端**（I1）：`src/`、`public/` 不能出現 Worker secret 的名字（`ADMIN_TOKEN`、`TURNSTILE_SECRET_KEY`…，連介面文字也不行）或像 secret 的值；`npm run lint` 掃原始碼、`npm run budget` 掃 `dist/client`（`scripts/secrets.ts`，`DEPLOY.md` §11）。真的需要的那一行在行尾寫 `// secret-ok: <理由>`。新的 secret 要加進 `scripts/secretScan.ts` 的 `SECRET_NAMES`。
+- **安全標頭**（I1）：頁面的標頭改 `shared/security-headers.ts` 再同步 `public/_headers`（測試比對）；要從別的網域載入任何東西（script、iframe、fetch）都要先改 CSP，並在 `DEPLOY.md` §11 寫理由。
 
 ### 介面文字與語言（G1，`e4-t15`）
 

@@ -39,7 +39,7 @@ import {
 } from '../../shared/layout.ts'
 import { isRoomId } from '../../shared/room-id.ts'
 import type { UsageState } from '../../shared/usage.ts'
-import { getRoom } from '../api/rooms.ts'
+import { BlockedError, getRoom } from '../api/rooms.ts'
 import { fetchIceConfig } from '../api/turn.ts'
 import { Button } from '../components/Button.tsx'
 import { ChatPanel } from '../components/ChatPanel.tsx'
@@ -292,7 +292,7 @@ function RoomEntry({ roomId }: { roomId: string }) {
 
 type Summary =
   | {
-      status: 'loading' | 'missing' | 'error' | 'locked'
+      status: 'loading' | 'missing' | 'error' | 'locked' | 'blocked'
       memberCount: null
       waitingRoom: false
       password: false
@@ -352,8 +352,10 @@ function PreJoinGate({
                 },
         )
       },
-      () => {
-        if (!cancelled) setSummary({ status: 'error', ...NONE })
+      (error: unknown) => {
+        if (cancelled) return
+        // This network is on the owner's blocklist (I1): no point in the pre-join screen
+        setSummary({ status: error instanceof BlockedError ? 'blocked' : 'error', ...NONE })
       },
     )
     return () => {
@@ -366,6 +368,8 @@ function PreJoinGate({
       return <p role="status">{strings.room.connecting}</p>
     case 'missing':
       return <NotFound />
+    case 'blocked':
+      return <NotFound text={strings.room.blocked} />
     case 'locked':
       return (
         <TurnedAwayScreen
@@ -2304,13 +2308,15 @@ function statusText({ status, view }: RoomConnectionState): string {
       return strings.room.outdated
     case 'replaced':
       return strings.room.replaced
+    case 'rateLimited':
+      return strings.room.rateLimited
   }
 }
 
-function NotFound() {
+function NotFound({ text }: { text?: string }) {
   return (
     <Panel>
-      <p role="alert">{strings.room.notFound}</p>
+      <p role="alert">{text ?? strings.room.notFound}</p>
       <Link to="/">{strings.room.backHome}</Link>
     </Panel>
   )

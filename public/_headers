@@ -1,8 +1,9 @@
-# Cache headers for the brand files (e4-t19, DEPLOY.md §9). Workers Static Assets reads this
-# file and does not serve it. Everything else keeps the default (revalidate with the ETag every
-# time). Not /assets/*, although Vite's file names carry a content hash: a chunk a stale tab still
-# asks for after a deploy falls through to index.html (single-page-application), and that answer
-# must not be cached for a year under the chunk's name.
+# Headers for the static assets. Workers Static Assets reads this file and does not serve it.
+# Cache headers for the brand files (e4-t19, DEPLOY.md §9); everything else keeps the default
+# cache rule (revalidate with the ETag every time). Security headers on everything at the end
+# (e11-t06, DEPLOY.md §11). Not /assets/*, although Vite's file names carry a content hash: a
+# chunk a stale tab still asks for after a deploy falls through to index.html
+# (single-page-application), and that answer must not be cached for a year under the chunk's name.
 
 # Brand files keep their names across deploys: a day, then revalidate
 /favicon.ico
@@ -24,3 +25,15 @@
 # Browsers already skip the HTTP cache for it (updateViaCache: imports); this keeps proxies honest.
 /sw.js
   Cache-Control: no-cache
+
+# Security headers (I1, e11-t06) on every page and file: shared/security-headers.ts PAGE_HEADERS says why
+# each source is allowed, and tests/worker/headers.test.ts keeps this block equal to it.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; report-uri /api/csp-report; report-to csp
+  Reporting-Endpoints: csp="/api/csp-report"
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Permissions-Policy: camera=(self), microphone=(self), display-capture=(self), autoplay=(self), clipboard-write=(self), fullscreen=(self), picture-in-picture=(self), accelerometer=(), browsing-topics=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), midi=(), otp-credentials=(), payment=(), screen-wake-lock=(), serial=(), usb=(), window-management=(), xr-spatial-tracking=()
+  Cross-Origin-Opener-Policy: same-origin
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY

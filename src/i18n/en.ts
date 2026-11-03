@@ -17,6 +17,11 @@ export const en: Strings = {
     createRoom: 'Start a room',
     creatingRoom: 'Starting…',
     createRoomFailed: 'Couldn’t start a room. Please try again.',
+    verifying: 'Checking…',
+    createRoomVerifyFailed: 'The human check didn’t pass. Please try again.',
+    createRoomRateLimited: (minutes: number) =>
+      `Too many rooms from this network. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+    createRoomBlocked: 'This network can’t start or join rooms right now.',
     joinLabel: 'Room link or code',
     joinPlaceholder: 'Paste a link or type a code',
     join: 'Join',
@@ -168,6 +173,9 @@ export const en: Strings = {
       'Couldn’t find this room. Check the link; a room also closes by itself after 10 minutes with nobody in it.',
     youAreHost: 'You’re the host now',
     full: 'This room is full.',
+    blocked: 'This network can’t join rooms right now.',
+    rateLimited:
+      'Too many connections or messages, so the room disconnected you for now. Wait a minute, then reload the page.',
     outdated: 'LongTalk has been updated. Please reload the page.',
     reconnectingSelf: 'Connection lost. Reconnecting…',
     lost: 'Can’t reach the room. Check your connection, then press “Retry”.',
@@ -564,13 +572,13 @@ export const en: Strings = {
     title: 'LongTalk admin',
     lockedTitle: 'Admin',
     lockedBody:
-      'This page is for the owner of LongTalk only. Enter the admin password (the Worker’s ADMIN_TOKEN) to view it.',
+      'This page is for the owner of LongTalk only. Enter the admin password (the Worker’s admin secret, DEPLOY.md §8) to view it.',
     tokenLabel: 'Admin password',
     unlock: 'View',
     unlocking: 'Loading…',
     wrongToken: 'Wrong password.',
     notConfigured:
-      'ADMIN_TOKEN isn’t set for this deployment. Set it as DEPLOY.md describes, then try again.',
+      'This deployment has no admin password yet. Set it as DEPLOY.md §8 describes, then try again.',
     loadFailed: 'Couldn’t load. Please try again.',
     lock: 'Lock',
     refresh: 'Refresh',
@@ -626,6 +634,44 @@ export const en: Strings = {
         : 'This deployment has no Analytics Engine binding; only the counts above.',
     privacy:
       'Only event types and reasons are counted: no names, room codes, chat or IP addresses.',
+    abuse: {
+      title: 'Abuse protection and blocklist',
+      unavailable: 'Couldn’t read the blocklist. Please refresh.',
+      turnstile: (on: boolean) =>
+        on
+          ? 'Starting a room needs a Turnstile check.'
+          : 'Turnstile isn’t set up; starting a room isn’t checked (DEPLOY.md §11).',
+      pepper: (on: boolean) =>
+        on
+          ? 'Addresses are hashed with the secret pepper.'
+          : 'No secret pepper set: addresses get a plain hash (DEPLOY.md §11).',
+      ipLabel: 'IP address (IPv6 blocks the whole /64)',
+      durationLabel: 'Block for',
+      duration: (hours: number) =>
+        hours < 24
+          ? `${hours} hour${hours === 1 ? '' : 's'}`
+          : `${hours / 24} day${hours === 24 ? '' : 's'}`,
+      noteLabel: 'Note (optional)',
+      block: 'Block',
+      failed: 'That didn’t work: check the address, or refresh and try again.',
+      hashNote:
+        'Only a hash of the address is kept, never the address. A blocked network can’t start or join rooms; people already in a meeting stay.',
+      blocksTitle: 'Blocked',
+      noBlocks: 'Nothing is blocked.',
+      until: (time: string) => `until ${time}`,
+      unblock: 'Unblock',
+      unblockLabel: (key: string) => `Unblock ${key}`,
+      offendersTitle: 'Networks that recently hit a limit',
+      noOffenders: 'None lately.',
+      kinds: {
+        createLimit: 'too many rooms',
+        turnstile: 'failed check',
+        connectLimit: 'too many connections',
+        flood: 'too many messages',
+      },
+      blockDay: 'Block for a day',
+      blockKeyLabel: (key: string) => `Block ${key} for a day`,
+    },
   },
   left: {
     title: 'You left the room',

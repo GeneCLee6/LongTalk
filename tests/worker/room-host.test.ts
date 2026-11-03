@@ -1988,3 +1988,51 @@ describe('RoomHost spotlight (G2, e4-t11)', () => {
     expect(older.host.view().room.spotlight).toBeNull()
   })
 })
+
+describe('RoomHost abuse limits (I1, e11-t05)', () => {
+  it('closes a socket that floods frames with rateLimited, and marks its member away', async () => {
+    const { ROOM_CONNECT_RATE, SOCKET_MESSAGE_RATE } = await import('../../shared/abuse.ts')
+    const offences: string[] = []
+    const t = setup()
+    ;(t.host as unknown as { deps: { offence: unknown } }).deps.offence = (
+      conn: string | null,
+      _ip: string | null,
+      kind: string,
+    ) => offences.push(`${conn}:${kind}`)
+    t.host.create(ROOM)
+    const alice = t.join('Alice')
+    const bob = t.join('Bob')
+    // The join was one frame; the rest of the window fills up without trouble
+    for (let i = 1; i < SOCKET_MESSAGE_RATE.count; i++) t.host.message(alice.conn, '{"t":"resync"}')
+    expect(alice.client.closed).toBeNull()
+    t.host.message(alice.conn, '{"t":"resync"}')
+    expect(alice.client.closed).toEqual({ code: CloseCode.rateLimited, reason: 'too many messages' })
+    expect(offences).toEqual([`${alice.conn}:flood`])
+    expect(bob.client.view?.members[alice.id].reconnecting).toBe(true)
+    // Further frames on the closed connection are ignored
+    t.host.message(alice.conn, JSON.stringify({ t: 'rename', name: 'Eve' }))
+    expect(bob.client.view?.members[alice.id].name).toBe('Alice')
+    // A new window lets a well-behaved socket go on for ever
+    t.tick(SOCKET_MESSAGE_RATE.windowMs)
+    for (let i = 0; i < SOCKET_MESSAGE_RATE.count - 1; i++) t.host.message(bob.conn, '{"t":"resync"}')
+    t.tick(SOCKET_MESSAGE_RATE.windowMs)
+    for (let i = 0; i < SOCKET_MESSAGE_RATE.count - 1; i++) t.host.message(bob.conn, '{"t":"resync"}')
+    expect(bob.client.closed).toBeNull()
+    expect(ROOM_CONNECT_RATE.count).toBeGreaterThan(MAX_MEMBERS / 2)
+  })
+
+  it('refuses upgrades over ROOM_CONNECT_RATE from one address, not from others', async () => {
+    const { ROOM_CONNECT_RATE } = await import('../../shared/abuse.ts')
+    const t = setup()
+    t.host.create(ROOM)
+    for (let i = 0; i < ROOM_CONNECT_RATE.count; i++) {
+      expect(t.host.admit(V, 'net-a')).toEqual({ ok: true })
+    }
+    expect(t.host.admit(V, 'net-a')).toMatchObject({ ok: false, code: CloseCode.rateLimited })
+    expect(t.host.admit(V, 'net-b')).toEqual({ ok: true })
+    // Unknown addresses (local development) are not limited
+    expect(t.host.admit(V, null)).toEqual({ ok: true })
+    t.tick(ROOM_CONNECT_RATE.windowMs)
+    expect(t.host.admit(V, 'net-a')).toEqual({ ok: true })
+  })
+})

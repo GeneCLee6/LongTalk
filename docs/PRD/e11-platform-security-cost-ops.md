@@ -48,9 +48,9 @@ depends_on: []
 - [ ] AC-11.2 — CI：lint、typecheck、test、build、budget 全綠才可合併；M1 加視覺回歸與 Lighthouse。（M0 部分 2026-10-31 完成：`main` 受保護，`CI / verify` 必過、禁止 force-push、管理員同樣受限；M1 部分等 `e4-t14`、`e4-t17`）
 - [ ] AC-11.3 — 進房成功率、失敗原因、重連、TURN 比例、評分可在 `/admin` 看；錯誤有告警。（D4 起評分也在 `/admin`：平均與 1–5 分分布，`e4-t18`。還不勾：告警只是 `/admin` 上的紅字旗標，不會主動通知，主動通知在 `e11-t09`）
 - [ ] AC-11.4 — 成本儀表板：各項用量與預估費用、月預算、自動降級可演練、告警。
-- [ ] AC-11.5 — 建房速率限制與 Turnstile、訊息速率、上傳配額、IP 黑名單；濫用測試。
+- [ ] AC-11.5 — 建房速率限制與 Turnstile、訊息速率、上傳配額、IP 黑名單；濫用測試。（I1 #36 做了上傳配額以外的全部；上傳配額等檔案上傳 I5 `e5-t05`；正式站的 Turnstile 等擁有者設定 key，`DEPLOY.md` §11）
 - [x] AC-11.6 — `BROWSER-SUPPORT.md` 完整且與 `capabilities.ts` 一致。（H6 #35：18 項能力 × 6 個瀏覽器全部有記號與退路；一致性兩道檢查：`tests/app/media/capabilities.test.ts` 比對列、順序、欄位與記號，`e2e/local/browsers.spec.ts` 在 Chromium、Firefox、WebKit 裡跑 app 自己的偵測和 Chrome、Firefox、Safari 欄比對。實機的 ● 是 AC-2.8 的事）
-- [ ] AC-11.7 — CSP、HSTS、Permissions-Policy、COOP；`npm audit` 無高風險；secrets 不進前端（lint 擋）。
+- [x] AC-11.7 — CSP、HSTS、Permissions-Policy、COOP；`npm audit` 無高風險；secrets 不進前端（lint 擋）。（I1 #36：`public/_headers`＝`shared/security-headers.ts`；CI 的 `npm audit --omit=dev --audit-level=high`；`scripts/secrets.ts` 在 lint 與 budget）
 - [ ] AC-11.8 — 隱私權政策頁、資料保留表、錄影同意清單、刪除請求流程；R2 到期刪除與 D1 備份有排程測試。
 - [ ] AC-11.9 — E2EE 可行性 ADR。
 - [ ] AC-11.10 — 多租戶：帳號配額、方案、擁有者後台。
@@ -68,8 +68,8 @@ depends_on: []
 
 ### M1
 
-- [ ] `e11-t05` 濫用防護：建房速率、Turnstile、訊息速率、IP 黑名單 · AC-11.5 · M · ← e1-t02
-- [ ] `e11-t06` 安全標頭、CSP、Permissions-Policy、secrets lint、依賴稽核進 CI · AC-11.7 · S · ← e11-t02
+- [x] `e11-t05` 濫用防護：建房速率、Turnstile、訊息速率、IP 黑名單（全站一個 `GuardDO`：每個網路（IPv4、IPv6 /64，只存雜湊，可選 `IP_HASH_PEPPER`）建房 10 分鐘 10 間、一天 60 間；Turnstile 在兩把 key 都設了才開，Worker 打 siteverify；封鎖名單有到期、`/admin` 管理，`/api/rooms/*` 一律 403；RoomDO 每房每網路每分鐘 60 次升級、每連線 10 秒 120 個訊息，超過 4420，超大訊息 1009；協定 v16；`scripts/abuse.ts` 在每個 PR 預覽跑） · AC-11.5 · #36
+- [x] `e11-t06` 安全標頭、CSP、Permissions-Policy、secrets lint、依賴稽核進 CI（CSP 回報進遙測；`e2e/local/security.spec.ts` 確認 RNNoise、service worker、喇叭測試、`/admin` 在 CSP 下都正常） · AC-11.7 · #36
 - [ ] `e11-t07` 法遵：隱私權政策頁、資料保留表、錄影同意清單、刪除請求 · AC-11.8 · S · ← e8-t02
 - [ ] `e11-t08` R2 到期刪除 cron、D1 每日備份到 R2、還原演練 · AC-11.8 · S · ← e11-t02
 

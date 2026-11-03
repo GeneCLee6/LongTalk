@@ -10,6 +10,7 @@
 // Adding a kind: add it to ClientEvent and to parseEvent; a Worker that does not know a kind yet
 // drops just that event, so browsers may be deployed first. D4 added `rating` (e4-t18): the
 // after-leave screen's one question, a score and nothing else (no comment, no room, no member).
+import type { AbuseSummary } from './abuse.ts'
 import type { UsageStatus } from './usage.ts'
 
 /** At most this many events per request */
@@ -230,6 +231,8 @@ export type AdminSummary = {
   usage: UsageStatus | null
   /** Whether events also go to Workers Analytics Engine (the EVENTS binding) */
   analyticsEngine: boolean
+  /** The blocklist and recent offenders (I1, e11-t05); null when the guard could not be read */
+  abuse: AbuseSummary | null
 }
 
 export const ADMIN_SUMMARY_PATH = '/api/admin/summary'
