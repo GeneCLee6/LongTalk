@@ -13,7 +13,14 @@ import {
   type WaitingEntry,
 } from '../../shared/protocol.ts'
 import { can } from '../../shared/roles.ts'
-import { pickSpeaker } from '../../shared/layout.ts'
+import {
+  focusFirst,
+  pickSpeaker,
+  stageFocus,
+  stageLayout,
+  visibleTiles,
+  type LayoutChoice,
+} from '../../shared/layout.ts'
 import { isRoomId } from '../../shared/room-id.ts'
 import type { UsageState } from '../../shared/usage.ts'
 import { getRoom } from '../api/rooms.ts'
@@ -24,11 +31,7 @@ import { ChatPreview } from '../components/ChatPreview.tsx'
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx'
 import { Drawer } from '../components/Drawer.tsx'
 import { LeftScreen } from '../components/LeftScreen.tsx'
-import {
-  PhoneLayoutContext,
-  usePhoneLayoutQuery,
-  type PhoneLayout,
-} from '../components/layoutContext.ts'
+import { PhoneLayoutContext, usePhoneLayoutQuery } from '../components/layoutContext.ts'
 import { MemberAudio } from '../components/MemberAudio.tsx'
 import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
@@ -37,7 +40,7 @@ import { PreJoin } from '../components/PreJoin.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
 import { ShareTile } from '../components/ShareTile.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
-import { Stage, type StageMode } from '../components/Stage.tsx'
+import { Stage } from '../components/Stage.tsx'
 import { Tile, type TileProps } from '../components/Tile.tsx'
 import { ToastViewport } from '../components/Toast.tsx'
 import { Toolbar } from '../components/Toolbar.tsx'
@@ -60,10 +63,14 @@ import {
   loadDevices,
   loadName,
   loadSession,
+  loadView,
   saveDevice,
   saveName,
+  saveView,
   type DeviceChoices,
+  type ViewPrefs,
 } from '../room/session.ts'
+import { useHeldSpeaker } from '../room/useHeldSpeaker.ts'
 import { useLocalDevices } from '../room/useLocalDevices.ts'
 import { useLocalPreview } from '../room/useLocalPreview.ts'
 import { useMicLevel } from '../room/useMicLevel.ts'
@@ -413,8 +420,82 @@ function Room({
       }),
     [onError, show],
   )
-  // Whoever spoke last, for the speaker layout (phones held sideways)
+  // Whoever spoke last, for the speaker layout (phones held sideways, the desktop's 演講者)
   const [lastHeard, setLastHeard] = useState<string | null>(null)
+  // What the stage shows (G2, e4-t10, e4-t11): the layout and 隱藏自己 are remembered
+  // (session.ts); the pin and 隱藏沒有視訊的人 are for this meeting. The spotlight is the room's
+  // (RoomDO decides who may set it, worker/roles.ts).
+  const [view, setView] = useState<ViewPrefs>(loadView)
+  const updateView = (changes: Partial<ViewPrefs>) => {
+    const next = { ...view, ...changes }
+    saveView(next)
+    setView(next)
+  }
+  const [hideNoVideo, setHideNoVideo] = useState(false)
+  const [pinned, setPinned] = useState<string | null>(null)
+  const pinnedId = pinned !== null && state.view?.members[pinned] ? pinned : null
+  const spotlight = roomInfo?.spotlight ?? null
+  const maySpotlight = can(role, 'spotlight')
+  const setSpotlight = (memberId: string | null) => send({ t: 'spotlight', memberId })
+  useSpotlightNotice(spotlight, state.you, show)
+  const togglePin = (memberId: string) => {
+    if (pinnedId === memberId) {
+      setPinned(null)
+      return
+    }
+    setPinned(memberId)
+    show(strings.view.pinnedToast(state.view?.members[memberId]?.name ?? ''))
+  }
+  const viewSection = strings.view.section
+  const layouts: readonly LayoutChoice[] = ['grid', 'speaker']
+  const viewItems: MenuItem[] = [
+    // Phones follow how they are held (C3); a pin or a spotlight still makes someone big
+    ...(phone === null
+      ? layouts.map((layout) => ({
+          id: `layout-${layout}`,
+          label: strings.view[layout],
+          section: viewSection,
+          checked: view.layout === layout,
+          onSelect: () => updateView({ layout }),
+        }))
+      : []),
+    {
+      id: 'hide-self',
+      label: strings.view.hideSelf,
+      section: viewSection,
+      kind: 'checkbox',
+      checked: view.hideSelf,
+      onSelect: () => updateView({ hideSelf: !view.hideSelf }),
+    },
+    {
+      id: 'hide-no-video',
+      label: strings.view.hideNoVideo,
+      section: viewSection,
+      kind: 'checkbox',
+      checked: hideNoVideo,
+      onSelect: () => setHideNoVideo((on) => !on),
+    },
+    ...(pinnedId !== null
+      ? [
+          {
+            id: 'unpin',
+            label: strings.view.unpinMenu,
+            section: viewSection,
+            onSelect: () => setPinned(null),
+          },
+        ]
+      : []),
+    ...(spotlight !== null && maySpotlight
+      ? [
+          {
+            id: 'unspotlight',
+            label: strings.view.unspotlightMenu,
+            section: viewSection,
+            onSelect: () => setSpotlight(null),
+          },
+        ]
+      : []),
+  ]
   const [webShare] = useState(canWebShare)
   const [screenShareSupported] = useState(canShareScreen)
   const link = roomUrl(roomId)
@@ -437,6 +518,7 @@ function Room({
     ...(can(role, 'renameRoom')
       ? [{ id: 'rename-room', label: strings.rename.room, onSelect: () => setRenaming('room') }]
       : []),
+    ...viewItems,
   ]
   const onNotice = useCallback((notice: DeviceNotice) => show(noticeText(notice), 'warn'), [show])
   // The microphone and camera chosen on the pre-join screen, opened again for the room; the
@@ -626,6 +708,23 @@ function Room({
     void devices?.setOn('cam', !local.cam.on)
   }
 
+  const members = Object.values(state.view?.members ?? {})
+  // Each member's camera as their tile shows it: ours while it sends, theirs while it is on
+  const videoOf = (member: (typeof members)[number]): MediaStreamTrack | null => {
+    if (member.id === state.you) return media.videoRefused ? null : camSending
+    const cam = member.tracks.find((t) => t.kind === 'cam')
+    return (cam && !cam.muted && media.received[trackKey(cam)]?.track) || null
+  }
+  const shown = visibleTiles({
+    tiles: members.map((member) => ({ id: member.id, video: videoOf(member) !== null })),
+    you: state.you,
+    hideSelf: view.hideSelf,
+    hideNoVideo,
+    keep: [pinnedId, spotlight],
+  })
+  const speaker = useHeldSpeaker(pickSpeaker(shown.ids, state.you, lastHeard), shown.ids)
+  const focus = stageFocus(shown.ids, pinnedId, spotlight, speaker)
+
   if (gone || outcome) {
     return (
       <Centered>
@@ -660,7 +759,6 @@ function Room({
       </Centered>
     )
   }
-  const members = Object.values(state.view?.members ?? {})
   // Gave up rebuilding the media session (e2-t08): say so, with a retry
   const mediaLost =
     media.status === 'failed' &&
@@ -676,11 +774,6 @@ function Room({
     const mic = member.tracks.find((t) => t.kind === 'mic')
     return (mic && media.received[trackKey(mic)]?.track) || null
   }
-  const speaker = pickSpeaker(
-    members.map((member) => member.id),
-    state.you,
-    lastHeard,
-  )
   // Someone else shares: their screen takes the main area (e3-t05, e4-t08). Our own share is not
   // shown back to us (it would mirror endlessly; the presenter view is e3-t08): the bar says it.
   const sharer = roomShare ? state.view?.members[roomShare.memberId] : undefined
@@ -726,6 +819,12 @@ function Room({
         video={(sharerScreen && media.received[trackKey(sharerScreen)]?.track) || null}
       />
     ) : undefined
+  // The tiles in the stage's order; in the share's strip the pinned or spotlighted one first
+  // (the share keeps the main area: choosing between shares and people is H5's)
+  const byId = new Map(members.map((member) => [member.id, member]))
+  const stageMembers = (shareTile ? focusFirst(shown.ids, focus) : shown.ids).flatMap(
+    (id) => byId.get(id) ?? [],
+  )
   return (
     <PhoneLayoutContext.Provider value={phone}>
       <TopBar
@@ -753,21 +852,17 @@ function Room({
             {inRoom && (
               <Stage
                 share={shareTile}
-                mode={stageMode(phone)}
+                mode={stageLayout(view.layout, phone, focus)}
+                // A desktop's strip is a row under the speaker (PRD e4); phones keep C3's
+                stripSide={phone === null ? 'bottom' : 'auto'}
                 speaker={Math.max(
                   0,
-                  members.findIndex((member) => member.id === speaker),
+                  stageMembers.findIndex((member) => member.id === focus?.id),
                 )}
               >
-                {members.map((member) => {
+                {stageMembers.map((member) => {
                   const you = member.id === state.you
-                  const listed = (kind: 'mic' | 'cam') => member.tracks.find((t) => t.kind === kind)
-                  const received = (kind: 'mic' | 'cam') => {
-                    const track = listed(kind)
-                    return (track && media.received[trackKey(track)]?.track) || null
-                  }
-                  const cam = listed('cam')
-                  const mic = listed('mic')
+                  const mic = member.tracks.find((t) => t.kind === 'mic')
                   const audio = you ? null : remoteAudio(member)
                   return (
                     <MemberTile
@@ -776,14 +871,16 @@ function Room({
                       you={you}
                       reconnecting={you ? selfReconnecting : member.reconnecting}
                       relayed={you && media.usingRelay}
-                      video={
-                        you
-                          ? media.videoRefused
-                            ? null
-                            : camSending
-                          : cam && !cam.muted
-                            ? received('cam')
-                            : null
+                      video={videoOf(member)}
+                      pinned={member.id === pinnedId}
+                      spotlighted={member.id === spotlight}
+                      // Pinning is for others (we know what we look like). The room decides who
+                      // may spotlight (worker/roles.ts); the button only shows for them.
+                      onTogglePin={you ? undefined : () => togglePin(member.id)}
+                      onToggleSpotlight={
+                        maySpotlight
+                          ? () => setSpotlight(spotlight === member.id ? null : member.id)
+                          : undefined
                       }
                       // The speaking outline follows our own microphone while it sends, theirs
                       // while it is on
@@ -816,6 +913,14 @@ function Room({
                 </Alert>
               )}
               {mediaProblem && <Alert role="alert">{mediaProblem}</Alert>}
+              {inRoom && shown.hiddenNoVideo > 0 && (
+                <Note role="status">
+                  {strings.view.hiddenNoVideo(shown.hiddenNoVideo)}
+                  <InlineButton type="button" onClick={() => setHideNoVideo(false)}>
+                    {strings.view.showAll}
+                  </InlineButton>
+                </Note>
+              )}
               <DeviceProblems local={local} onRetry={(kind) => void devices?.retry(kind)} />
             </Notices>
           </StageBox>
@@ -950,11 +1055,23 @@ function Room({
   )
 }
 
-/** Phones (e4-t07): held upright the gallery pages, held sideways the speaker is big */
-function stageMode(phone: PhoneLayout): StageMode {
-  if (phone === 'portrait') return 'paged'
-  if (phone === 'landscape') return 'speaker'
-  return 'grid'
+/**
+ * Tells the member spotlighted (G2, e4-t11) that everyone now sees them big, and when it ends:
+ * nobody is shown to the whole room without knowing it
+ */
+function useSpotlightNotice(
+  spotlight: string | null,
+  you: string | null,
+  show: (text: string) => void,
+) {
+  const previous = useRef(spotlight)
+  useEffect(() => {
+    const was = previous.current
+    previous.current = spotlight
+    if (you === null || was === spotlight) return
+    if (spotlight === you) show(strings.view.spotlightOnYou)
+    else if (was === you) show(strings.view.spotlightOffYou)
+  }, [spotlight, you, show])
 }
 
 /**
@@ -1322,6 +1439,19 @@ const Note = styled.p`
   border-radius: ${radius.pill};
   background: ${color.overlay};
   font-size: ${fontSize.small};
+`
+
+/** A text button inside a Note (「全部顯示」) */
+const InlineButton = styled.button`
+  margin-left: ${space(2)};
+  padding: 0;
+  border: none;
+  background: none;
+  color: ${color.primary};
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
 `
 
 const ToolbarArea = styled.footer`

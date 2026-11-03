@@ -1,8 +1,17 @@
 import { useContext } from 'react'
 import styled, { css, keyframes } from 'styled-components'
 import { strings } from '../strings.ts'
-import { avatar, avatarColor, color, fontSize, motion, radius, space } from '../styles/tokens.ts'
-import { MicOffIcon, ReconnectIcon, SpeakingIcon } from './icons.tsx'
+import {
+  avatar,
+  avatarColor,
+  color,
+  fontSize,
+  media,
+  motion,
+  radius,
+  space,
+} from '../styles/tokens.ts'
+import { MicOffIcon, PinIcon, ReconnectIcon, SpeakingIcon, SpotlightIcon } from './icons.tsx'
 import { TileVisibleContext } from './layoutContext.ts'
 import { useTrack } from './useTrack.ts'
 
@@ -20,6 +29,14 @@ export interface TileProps {
   speaking?: boolean
   /** Our own media goes through a TURN relay (e2-t07): a quiet note on our own nameplate */
   relayed?: boolean
+  /** We pinned this tile for ourselves (G2, e4-t10): a 「已釘選」 badge */
+  pinned?: boolean
+  /** A host or co-host spotlighted this member for everyone (G2, e4-t11): a 「聚光燈」 badge */
+  spotlighted?: boolean
+  /** Pin or unpin it (local): a button top-right, shown on hover or focus (always on touch) */
+  onTogglePin?: () => void
+  /** Spotlight or end it (a host or co-host only: the room decides, worker/roles.ts) */
+  onToggleSpotlight?: () => void
 }
 
 /**
@@ -38,6 +55,10 @@ export function Tile({
   micMuted = false,
   speaking = false,
   relayed = false,
+  pinned = false,
+  spotlighted = false,
+  onTogglePin,
+  onToggleSpotlight,
 }: TileProps) {
   const visible = useContext(TileVisibleContext)
   const shown = visible ? video : null
@@ -65,12 +86,54 @@ export function Tile({
           {[...name][0]?.toUpperCase()}
         </Avatar>
       )}
-      {reconnecting && (
-        <Badge>
-          <ReconnectIcon />
-          {strings.room.reconnecting}
-        </Badge>
-      )}
+      <Corner>
+        {reconnecting && (
+          <Badge>
+            <ReconnectIcon />
+            {strings.room.reconnecting}
+          </Badge>
+        )}
+        {spotlighted && (
+          <Badge $tone="brand">
+            <SpotlightIcon />
+            {strings.view.spotlightBadge}
+          </Badge>
+        )}
+        {pinned && (
+          <Badge $tone="brand">
+            <PinIcon />
+            {strings.view.pinnedBadge}
+          </Badge>
+        )}
+        {(onTogglePin || onToggleSpotlight) && (
+          <Actions>
+            {onTogglePin && (
+              <Action
+                type="button"
+                aria-label={pinned ? strings.view.unpin(name) : strings.view.pin(name)}
+                aria-pressed={pinned}
+                title={pinned ? strings.view.unpin(name) : strings.view.pin(name)}
+                onClick={onTogglePin}
+              >
+                <PinIcon />
+              </Action>
+            )}
+            {onToggleSpotlight && (
+              <Action
+                type="button"
+                aria-label={
+                  spotlighted ? strings.view.unspotlight(name) : strings.view.spotlight(name)
+                }
+                aria-pressed={spotlighted}
+                title={spotlighted ? strings.view.unspotlight(name) : strings.view.spotlight(name)}
+                onClick={onToggleSpotlight}
+              >
+                <SpotlightIcon />
+              </Action>
+            )}
+          </Actions>
+        )}
+      </Corner>
       <Nameplate>
         {micMuted ? (
           <Mark $tone="danger" role="img" aria-label={strings.room.micMuted}>
@@ -155,23 +218,87 @@ const Avatar = styled.span`
   user-select: none;
 `
 
-const Badge = styled.span`
+/** Top-right (DESIGN.md §5: 釘選、舉手在右上): the badges, then the tile's own buttons */
+const Corner = styled.div`
   position: absolute;
   top: ${space(2)};
   right: ${space(2)};
+  left: ${space(2)};
+  display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: ${space(1)};
+  pointer-events: none;
+
+  & > * {
+    pointer-events: auto;
+  }
+`
+
+const Badge = styled.span<{ $tone?: 'warn' | 'brand' }>`
   display: inline-flex;
   align-items: center;
   gap: ${space(1)};
   padding: ${space(1)} ${space(2)};
   border-radius: ${radius.pill};
-  background: ${color.overlay};
-  color: ${color.warn};
+  background: ${({ $tone }) => ($tone === 'brand' ? color.primary : color.overlay)};
+  color: ${({ $tone }) => ($tone === 'brand' ? color.onPrimary : color.warn)};
   font-size: ${fontSize.nameplate};
   font-weight: 600;
+  white-space: nowrap;
 
   svg {
     width: 14px;
     height: 14px;
+  }
+`
+
+/**
+ * Pin and spotlight: shown while the pointer is over the tile or a button has focus; on a touch
+ * screen (no hover) always, small
+ */
+const Actions = styled.span`
+  display: inline-flex;
+  gap: ${space(1)};
+  opacity: 0;
+  transition: opacity ${motion.fast} ease-out;
+
+  figure:hover &,
+  &:focus-within {
+    opacity: 1;
+  }
+  @media ${media.touchPrimary} {
+    opacity: 1;
+  }
+`
+
+const Action = styled.button`
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: ${color.overlay};
+  color: ${color.fg};
+  cursor: pointer;
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+  &:hover {
+    color: ${color.primary};
+  }
+  &[aria-pressed='true'] {
+    background: ${color.primary};
+    color: ${color.onPrimary};
+  }
+  &:focus-visible {
+    outline: 2px solid ${color.focus};
+    outline-offset: 2px;
   }
 `
 

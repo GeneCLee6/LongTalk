@@ -27,6 +27,7 @@ class FakeRoom {
       share: null,
       locked: false,
       waitingRoom: false,
+      spotlight: null,
     },
     members: {},
     waiting: {},

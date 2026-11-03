@@ -177,6 +177,13 @@ const STRIP_MAX = 240
 /** Strip tiles never get smaller than this (px, the short side): past that the strip scrolls */
 const STRIP_TILE_MIN = 72
 
+/**
+ * Where the strip goes: `auto` is a column right of a wide stage and a row under a tall one (a
+ * phone, the share layout); the desktop speaker layout always has a row under the speaker
+ * (PRD e4: 講話者大格＋底部列)
+ */
+export type StripSide = 'auto' | 'right' | 'bottom'
+
 /** Where the others go beside a big tile: a column right of a wide stage, a row under a tall one */
 export interface Strip {
   side: 'right' | 'bottom'
@@ -195,10 +202,11 @@ function stripFor(
   height: number,
   aspect: number,
   spacing: number,
+  side: StripSide = 'auto',
 ): Strip {
   const bound = (length: number) =>
     Math.min(Math.max(Math.round(length * STRIP_SHARE), STRIP_MIN), STRIP_MAX, length / 2)
-  if (width >= height) {
+  if (side === 'right' || (side === 'auto' && width >= height)) {
     // A column on the right: tiles as wide as the strip, or smaller so everyone fits
     const fitHeight = (height - spacing * (others - 1)) / others
     const tileHeight = Math.floor(
@@ -230,9 +238,9 @@ export interface SpeakerLayout {
 const NO_SPEAKER: SpeakerLayout = { main: { width: 0, height: 0 }, strip: null }
 
 /**
- * The speaker layout (a phone held sideways, AC-4.6): the speaker's tile as big as the room left
- * by the strip allows, the others in a strip of equal tiles that scrolls when they do not fit
- * (stripFor)
+ * The speaker layout (a phone held sideways, AC-4.6; the desktop's 演講者, e4-t10, AC-4.4): the
+ * speaker's tile as big as the room left by the strip allows, the others in a strip of equal
+ * tiles that scrolls when they do not fit (stripFor). `side`: where the strip goes (StripSide).
  */
 export function speakerLayout({
   count,
@@ -240,7 +248,8 @@ export function speakerLayout({
   height,
   aspect = DEFAULT_TILE_ASPECT,
   gap = DEFAULT_GRID_GAP,
-}: GridInput): SpeakerLayout {
+  side = 'auto',
+}: GridInput & { side?: StripSide }): SpeakerLayout {
   const n = Math.floor(count)
   if (!(n > 0) || !(width > 0) || !(height > 0) || !(aspect > 0)) return NO_SPEAKER
   const spacing = Math.max(0, gap)
@@ -249,7 +258,7 @@ export function speakerLayout({
     return { width: fit.tileWidth, height: fit.tileHeight }
   }
   if (n === 1) return { main: main({ width, height }), strip: null }
-  const strip = stripFor(n - 1, width, height, aspect, spacing)
+  const strip = stripFor(n - 1, width, height, aspect, spacing, side)
   return { main: main(besideStrip(width, height, strip, spacing)), strip }
 }
 
@@ -299,4 +308,159 @@ export function pickSpeaker(
 ): string | null {
   if (lastHeard !== null && lastHeard !== you && ids.includes(lastHeard)) return lastHeard
   return ids.find((id) => id !== you) ?? ids[0] ?? null
+}
+
+// ---------------------------------------------------------------------------------------------
+// What the stage shows (e4-t10, e4-t11; AC-4.4): which tiles, which one is big, and in which
+// layout. The person chooses the gallery or the speaker layout (desktop; phones follow how they
+// are held), may pin anyone for themselves, and a host or co-host may spotlight someone for
+// everyone (RoomInfo.spotlight). Precedence for the big tile: our own pin, then the spotlight,
+// then the last person heard. A share still takes the main area (e4-t08): then the pinned or
+// spotlighted person goes first in the strip instead.
+
+/** The layout the person chose (desktop): the gallery, or the speaker big with a strip */
+export type LayoutChoice = 'grid' | 'speaker'
+
+export const isLayoutChoice = (value: unknown): value is LayoutChoice =>
+  value === 'grid' || value === 'speaker'
+
+/** One member's tile, as far as choosing what to show goes */
+export interface TileEntry {
+  id: string
+  /** Their camera is on (and, for others, received): hide-non-video leaves them out otherwise */
+  video: boolean
+}
+
+export interface VisibleInput {
+  /** Every member, in the room's order */
+  tiles: readonly TileEntry[]
+  /** Our own id (null before the room welcomed us) */
+  you: string | null
+  /** 隱藏自己: our own tile is left out */
+  hideSelf: boolean
+  /** 隱藏沒有視訊的人: others without video are left out (our own tile follows hideSelf) */
+  hideNoVideo: boolean
+  /** Shown whatever the settings say: the pinned and the spotlighted member */
+  keep?: readonly (string | null)[]
+}
+
+export interface VisibleTiles {
+  /** The tiles to show, in the room's order */
+  ids: string[]
+  /** Others left out for having no video (the stage says how many, with a way to show them) */
+  hiddenNoVideo: number
+}
+
+/**
+ * The tiles to show. Hiding ourselves never empties the stage: alone (or with everyone else
+ * hidden) our tile stays. The pinned and the spotlighted member always show. Their sound plays
+ * on either way: it is not in the tiles (MemberAudio).
+ */
+export function visibleTiles({
+  tiles,
+  you,
+  hideSelf,
+  hideNoVideo,
+  keep = [],
+}: VisibleInput): VisibleTiles {
+  const kept = (id: string) => keep.includes(id)
+  let hiddenNoVideo = 0
+  const others = tiles.filter((tile) => {
+    if (tile.id === you) return false
+    if (hideNoVideo && !tile.video && !kept(tile.id)) {
+      hiddenNoVideo += 1
+      return false
+    }
+    return true
+  })
+  const selfShown =
+    you !== null &&
+    tiles.some((tile) => tile.id === you) &&
+    (!hideSelf || kept(you) || others.length === 0)
+  const ids = tiles
+    .filter((tile) => (tile.id === you ? selfShown : others.includes(tile)))
+    .map((tile) => tile.id)
+  return { ids, hiddenNoVideo }
+}
+
+/** Why a tile is the big one: our pin, the host's spotlight, or the last person heard */
+export type FocusReason = 'pin' | 'spotlight' | 'speaker'
+
+export interface StageFocus {
+  id: string
+  reason: FocusReason
+}
+
+/**
+ * The big tile among `ids` (the tiles shown): our pin, else the spotlight, else the speaker
+ * (pickSpeaker, held by holdSpeaker); null when there are no tiles
+ */
+export function stageFocus(
+  ids: readonly string[],
+  pinned: string | null,
+  spotlight: string | null,
+  speaker: string | null,
+): StageFocus | null {
+  if (pinned !== null && ids.includes(pinned)) return { id: pinned, reason: 'pin' }
+  if (spotlight !== null && ids.includes(spotlight)) return { id: spotlight, reason: 'spotlight' }
+  if (speaker !== null && ids.includes(speaker)) return { id: speaker, reason: 'speaker' }
+  return ids[0] === undefined ? null : { id: ids[0], reason: 'speaker' }
+}
+
+/** The pinned or spotlighted member first, the rest in the room's order (the share's strip) */
+export function focusFirst(ids: readonly string[], focus: StageFocus | null): string[] {
+  if (!focus || focus.reason === 'speaker' || !ids.includes(focus.id)) return [...ids]
+  return [focus.id, ...ids.filter((id) => id !== focus.id)]
+}
+
+/** The phone layout in use (src/components/layoutContext.ts), null on a desktop */
+export type PhoneOrientation = 'portrait' | 'landscape' | null
+
+/** The stage's layouts: the gallery, a phone's pages, the speaker big with a strip */
+export type StageLayout = 'grid' | 'paged' | 'speaker'
+
+/**
+ * The layout: a pin or a spotlight turns any layout into the speaker one (the person asked to
+ * see someone big); otherwise a phone held upright pages, held sideways shows the speaker, and a
+ * desktop shows what the person chose
+ */
+export function stageLayout(
+  choice: LayoutChoice,
+  phone: PhoneOrientation,
+  focus: StageFocus | null,
+): StageLayout {
+  const forced = focus !== null && focus.reason !== 'speaker'
+  if (phone === 'landscape' || forced) return 'speaker'
+  if (phone === 'portrait') return 'paged'
+  return choice
+}
+
+/** How long the big tile stays with someone before another speaker may take it */
+export const SPEAKER_SWITCH_MS = 3000
+
+/** Who has the big tile in the speaker layout, since when */
+export interface HeldSpeaker {
+  id: string
+  since: number
+}
+
+/**
+ * Hysteresis for the big tile (on top of pickSpeaker's second of speech, e4-t07): the speaker
+ * keeps it for at least `holdMs`, so two people talking over each other do not flip it back and
+ * forth. `wanted` is pickSpeaker's answer now; `ids` who is on the stage (someone who left gives
+ * it up at once). `wait` is how long until `wanted` may take it (0: it has it, or nobody does).
+ */
+export function holdSpeaker(
+  held: HeldSpeaker | null,
+  wanted: string | null,
+  ids: readonly string[],
+  now: number,
+  holdMs = SPEAKER_SWITCH_MS,
+): { held: HeldSpeaker | null; wait: number } {
+  if (wanted === null) return { held: null, wait: 0 }
+  if (held?.id === wanted) return { held, wait: 0 }
+  if (!held || !ids.includes(held.id)) return { held: { id: wanted, since: now }, wait: 0 }
+  const elapsed = now - held.since
+  if (elapsed >= holdMs) return { held: { id: wanted, since: now }, wait: 0 }
+  return { held, wait: holdMs - elapsed }
 }

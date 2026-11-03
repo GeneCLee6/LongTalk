@@ -92,6 +92,27 @@ export const strings = {
     next: '下一頁',
     strip: '其他參與者',
   },
+  // What the stage shows (G2, e4-t10, e4-t11): the layout, pinning, the spotlight, hiding tiles
+  view: {
+    section: '版面',
+    grid: '格狀',
+    speaker: '演講者',
+    hideSelf: '隱藏自己',
+    hideNoVideo: '隱藏沒有視訊的人',
+    pin: (name: string) => `釘選 ${name}`,
+    unpin: (name: string) => `取消釘選 ${name}`,
+    unpinMenu: '取消釘選',
+    pinnedBadge: '已釘選',
+    pinnedToast: (name: string) => `已釘選 ${name}，只有你的畫面會這樣排`,
+    spotlight: (name: string) => `把 ${name} 設為聚光燈`,
+    unspotlight: (name: string) => `取消 ${name} 的聚光燈`,
+    unspotlightMenu: '取消聚光燈',
+    spotlightBadge: '聚光燈',
+    spotlightOnYou: '你被設為聚光燈：每個人的主畫面都是你',
+    spotlightOffYou: '你的聚光燈已取消',
+    hiddenNoVideo: (count: number) => `已隱藏 ${count} 位沒有開視訊的人`,
+    showAll: '全部顯示',
+  },
   // The room's microphone, camera and speaker (e2-t05, e2-t06, e2-t09)
   devices: {
     controls: '會議控制',

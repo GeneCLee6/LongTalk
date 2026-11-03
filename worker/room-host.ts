@@ -265,6 +265,7 @@ export class RoomHost {
           share: null,
           locked: false,
           waitingRoom: false,
+          spotlight: null,
           ...info,
         }
       : null
@@ -311,6 +312,11 @@ export class RoomHost {
     // A sharer that is no longer a member (a defensive repair: removing a member ends its share)
     const share = this.info?.share
     if (share && !this.members.has(share.memberId)) this.info = { ...this.info!, share: null }
+    // The same for the spotlight (G2)
+    const spotlight = this.info?.spotlight ?? null
+    if (spotlight !== null && !this.inRoomMember(spotlight)) {
+      this.info = { ...this.info!, spotlight: null }
+    }
     this.sent = info ? this.view() : null
     if (!info) return
     const now = this.deps.now()
@@ -359,6 +365,7 @@ export class RoomHost {
       share: null,
       locked: false,
       waitingRoom: false,
+      spotlight: null,
     }
     this.deps.storage.saveRoom(this.info)
     this.usageAt = this.deps.now()
@@ -499,7 +506,33 @@ export class RoomHost {
       case 'host':
         this.control(connId, conn.member!, message)
         return
+      case 'spotlight':
+        this.spotlight(connId, conn.member!, message.memberId)
+        return
     }
+  }
+
+  /**
+   * `spotlight` (G2, e4-t11): a host or co-host puts a member in everyone's main area, or ends it
+   * (worker/roles.ts `spotlight`, CLAUDE.md rule 1). Refused with `forbidden` when the member may
+   * not, or the target is not in the room (gone, or still waiting).
+   */
+  private spotlight(connId: string, memberId: string, targetId: string | null): void {
+    if (
+      !this.allowed(memberId, 'spotlight') ||
+      (targetId !== null && !this.inRoomMember(targetId))
+    ) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    if (this.info!.spotlight === targetId) return
+    this.setRoom({ spotlight: targetId })
+  }
+
+  /** A member in the meeting (not one in the waiting room) */
+  private inRoomMember(memberId: string): boolean {
+    const member = this.members.get(memberId)
+    return member !== undefined && member.role !== 'waiting'
   }
 
   /** Whether `memberId` may do `action` (to `targetId`), by worker/roles.ts */
@@ -573,8 +606,8 @@ export class RoomHost {
     }
   }
 
-  /** Changes the room's switches (F2) and tells everyone */
-  private setRoom(changes: Partial<Pick<RoomInfo, 'locked' | 'waitingRoom'>>): void {
+  /** Changes the room's switches (F2) or its spotlight (G2) and tells everyone */
+  private setRoom(changes: Partial<Pick<RoomInfo, 'locked' | 'waitingRoom' | 'spotlight'>>): void {
     this.info = { ...this.info!, ...changes }
     this.deps.storage.saveRoom(this.info)
     this.publish()
@@ -1204,6 +1237,11 @@ export class RoomHost {
     // A sharer who left takes the share along (D1)
     if (this.info?.share?.memberId === memberId) {
       this.info = { ...this.info, share: null }
+      this.deps.storage.saveRoom(this.info)
+    }
+    // So does someone spotlighted (G2)
+    if (this.info?.spotlight === memberId) {
+      this.info = { ...this.info, spotlight: null }
       this.deps.storage.saveRoom(this.info)
     }
     this.baselines.delete(memberId)
