@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.svg text eol=lf
+# The .ics golden files are byte for byte what RFC 5545 asks for: CRLF line ends, kept as they are
+*.ics -text

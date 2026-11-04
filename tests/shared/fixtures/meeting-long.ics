@@ -1,0 +1,23 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//LongTalk//Meetings//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:Qm9va2VkTWVldGluZzAx@longtalk.example
+DTSTAMP:20261104T093015Z
+SEQUENCE:3
+DTSTART:20261110T030000Z
+DTEND:20261110T040000Z
+SUMMARY:產品週會\; 第 12 次\, 請準時 \\ 謝謝
+DESCRIPTION:議程：\n1. 上週進度（每人 3 分鐘）\, 2. 本週計
+ 畫\; 3. 其他\n\n🎉 這段說明故意寫得很長，讓它超過七
+ 十五個位元組，好測試摺行不會把一個中文字或表情符
+ 號切成兩半。\n\n加入會議：https://longtalk.example/m/Qm9va2VkTW
+ VldGluZzAx
+URL:https://longtalk.example/m/Qm9va2VkTWVldGluZzAx
+LOCATION:https://longtalk.example/m/Qm9va2VkTWVldGluZzAx
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+END:VEVENT
+END:VCALENDAR
