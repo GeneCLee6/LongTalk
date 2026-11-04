@@ -83,7 +83,15 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
   npx wrangler d1 migrations apply longtalk --local                       # 本機（npm run dev、vite preview、UI checks）
   ```
 
-  `deploy.yml` 與 `preview.yml` 部署前會自己跑一次；GitHub 的 `CLOUDFLARE_API_TOKEN` 沒有 **D1 Edit** 權限時只留警告、照常部署（Cloudflare 儀表板 → My Profile → API Tokens → 那把 token → Edit → 加 `Account` › `D1` › `Edit`）。0001 已由 I2 手動套用到兩個資料庫。預覽共用一個資料庫：e2e 建的帳號與固定會議室在測試最後自己刪掉；PR 關閉時不清 D1（裡面只剩測試沒刪乾淨的帳號，可以用 `wrangler d1 execute longtalk-preview --remote --command "DELETE FROM accounts"` 清）。
+  `deploy.yml` 與 `preview.yml` 部署前會自己跑一次；GitHub 的 `CLOUDFLARE_API_TOKEN` 沒有 **D1 Edit** 權限時只留警告、照常部署（Cloudflare 儀表板 → My Profile → API Tokens → 那把 token → Edit → 加 `Account` › `D1` › `Edit`）。0001 已由 I2 手動套用到兩個資料庫。**0002（I3 預定會議，`migrations/0002_meetings.sql`）要擁有者套用**（token 有 D1 Edit 之後 workflow 會自己做；沒有之前，`/me` 的其他部分照常（預定會議的清單是空的，刪固定會議室與刪帳號也照常），但建立預定會議回 503「帳號服務暫時無法使用」、公開頁回「讀取失敗」）：
+
+  ```sh
+  npx wrangler d1 migrations apply longtalk-preview --env preview --remote  # 先套預覽（PR 的 e2e 要用）
+  npx wrangler d1 migrations apply longtalk --remote                        # 合併前或合併時套正式站
+  npx wrangler d1 migrations list longtalk --remote                         # 確認 0002_meetings.sql 已套用
+  ```
+
+  migration 只新增表，舊版 Worker 不受影響，所以可以在合併前先套。預覽共用一個資料庫：e2e 建的帳號與固定會議室在測試最後自己刪掉；PR 關閉時不清 D1（裡面只剩測試沒刪乾淨的帳號，可以用 `wrangler d1 execute longtalk-preview --remote --command "DELETE FROM accounts"` 清）。
 - secret（SFU App token、TURN key、Turnstile secret key、AI 金鑰）只用 `wrangler secret put` 放在 Worker，**不進前端、不進 repo**（CLAUDE.md 規則 3；`npm run lint` 與 `npm run budget` 的 `scripts/secrets.ts` 會擋，§11）。要設定的 secret 見 §5。
 
 ## 5. Secrets 與 Realtime 互通測試（A2，B1 起改用會議室頁）
@@ -379,6 +387,14 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
     - **刪除**：A 刪除固定會議室（連結變成「找不到這間會議室」）、再刪除帳號（`/me` 回到登入畫面）；到系統的密碼管理（Windows 設定 › 帳戶 › 通行金鑰、iPhone 設定 › 密碼）把 LongTalk 的通行密鑰刪掉。Chrome 132+ 登入一把網站已刪掉的通行密鑰時，會提示並自己移除。
     - **不支援的瀏覽器**：沒有通行密鑰的瀏覽器（例如很舊的 Android WebView）打開 `/me` 說「這個瀏覽器不能使用通行密鑰」，首頁與會議照常。結果寫進 `BROWSER-SUPPORT.md` 的 `passkeys` 列。
     - **AC**：AC-1.6 要上面全部通過（至少一種電腦平台驗證器與一種手機）才勾。
+27. **預定會議與日曆（I3，AC-1.7 的實機部分）**：先確認 0002 已套用到正式站（§4）。A 電腦（已登入、有一間固定會議室），B 手機（沒登入），各用自己的日曆 App。
+    - **建立**：A 在 `/me`「預定會議 › 預定會議」填主題、說明（兩三行，含逗號與分號）、明天的日期與時間、時長 45 分鐘，選固定會議室：表單寫出這台電腦的時區（例如「澳洲東部時間（GMT+11）· Australia/Sydney」）；儲存後出現在「接下來」，時間對。手機上再建一場：日期與時間是系統的選擇器、可以用。
+    - **邀請**：「複製邀請」貼到 LINE：主題、時間（主辦人時區）、`/m/<id>` 連結、說明；固定會議室有密碼時先問「邀請裡附上會議室密碼」，不勾就沒有密碼、勾了才有。
+    - **公開頁**：B 開連結：標題、主辦人名字、「你的時間」（手機時區）；把手機的時區改成別的（設定 › 一般 › 日期與時間），重新整理：「你的時間」跟著變、多一行「主辦人的時間」；倒數在動；開始前 15 分鐘以前「加入會議」是灰的，之後能按、進得了那間固定會議室。
+    - **匯入**：在 A 下載 `.ics`，分別匯入 **Google 日曆**（網頁 › 設定 › 匯入）、**Outlook**（雙擊或 outlook.com 新增行事曆 › 從檔案）、**Apple 行事曆**（Mac 雙擊；iPhone 在 Safari 點「下載 .ics」→「加入全部」）：時間對（各自的時區）、標題與說明（換行、逗號、分號、中文都正常）、地點／網址是 `/m/<id>`。A 改時間後再下載一次匯入 Apple 行事曆或 Outlook：是**更新**原本那一筆，不是多一筆（UID 與 SEQUENCE）。
+    - **日曆連結**：「Google 日曆」「Outlook.com」「Outlook（公司或學校）」各開新分頁、新活動表單已經填好主題、時間、說明、地點；儲存後時間對。
+    - **刪除**：A 刪掉一場：公開頁變成「找不到這場會議」；刪固定會議室：它的預定會議一起不見。
+    - 結果寫進 issue；不需要兩台以上的媒體互通，所以 AC-1.7 已經在 I3 勾了，這一步不通就開 issue 修、必要時取消勾選。
 
 常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「媒體伺服器不認得這個分頁」＝ session token 過期（房間把成員移除了），重新整理；一直沒有對方的畫面 ＝ 網路擋 UDP，檢查 TURN secret 有沒有設（`/api/turn` 的 `turn` 要是 `true`）。
 
@@ -576,6 +592,9 @@ curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engin
 | 建帳號（每個網路，I2） | 1 小時 5 個、一天 20 個；Turnstile 開著時也要過 | 429 `rate_limited`；`/me` 說「嘗試太多次了，請 N 分鐘後再試」 | `GuardDO`（全站） |
 | 開始登入（每個網路，I2） | 10 分鐘 30 次、一天 300 次 | 429 | `GuardDO`（全站） |
 | 固定會議室（每個帳號，I2） | 5 間；建立也算一次建房 | 409 `too_many_rooms`／429 | Worker＋D1、`GuardDO` |
+| 儲存預定會議（每個網路，I3） | 10 分鐘 30 次、一天 200 次（建立與修改） | 429 `rate_limited` | `GuardDO`（全站） |
+| 預定會議（每個帳號，I3） | 50 場（含結束後 90 天內的） | 409 `too_many_meetings` | Worker＋D1 |
+| `/api/meetings/<id>`（公開頁，I3） | 每個 isolate 10 秒 60 次；封鎖名單 | 429；403 | Worker |
 | `/api/account/*`（I2） | 每個 isolate 10 秒 60 次；非 GET 要本站 `Origin` 與 JSON | 429；403 `forbidden_origin`；415 | Worker |
 | 封鎖名單 | 擁有者在 `/admin` 設定，1 小時／1 天／7 天／30 天 | `/api/rooms/*` 一律 403 `blocked`（首頁與預先加入頁說「這個網路目前不能開房／加入會議室」）；已經在會議裡的連線不受影響 | `GuardDO`，Worker 每 30 秒讀一次 |
 

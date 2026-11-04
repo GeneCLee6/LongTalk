@@ -1,18 +1,20 @@
 import { DatabaseSync } from 'node:sqlite'
 import accounts from '../../migrations/0001_accounts.sql?raw'
+import meetings from '../../migrations/0002_meetings.sql?raw'
 
 // A D1 stand-in on Node's SQLite (I2): the real migrations, the real SQL, so the account tests run
 // what production runs. Only what worker/account-db.ts calls: prepare/bind/first/all/run and
 // batch (one transaction, like D1's).
 
-const MIGRATIONS = [accounts]
+/** Every migration, in order (wrangler applies them the same way) */
+export const MIGRATIONS = [accounts, meetings]
 
 type Params = unknown[]
 
-export function fakeD1(): { db: D1Database; sqlite: DatabaseSync } {
+export function fakeD1(migrations = MIGRATIONS): { db: D1Database; sqlite: DatabaseSync } {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec('PRAGMA foreign_keys = ON')
-  for (const sql of MIGRATIONS) sqlite.exec(sql)
+  for (const sql of migrations) sqlite.exec(sql)
   const statement = (sql: string, params: Params = []) => ({
     sql,
     params,

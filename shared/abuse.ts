@@ -30,14 +30,24 @@ export const SIGNIN_LIMITS: readonly RateWindow[] = [
 ]
 
 /**
- * What GuardDO counts per network (GuardStore.limit): rooms made (`create`, random rooms and
- * persistent ones alike), accounts made, sign-ins started
+ * Scheduled meetings one network may save (I3, POST and PUT /api/account/meetings): someone
+ * planning a term of classes is fine, a script filling D1 is not
  */
-export type LimitKind = 'create' | 'register' | 'signin'
+export const MEETING_SAVE_LIMITS: readonly RateWindow[] = [
+  { count: 30, windowMs: 10 * 60_000 },
+  { count: 200, windowMs: 24 * 60 * 60_000 },
+]
+
+/**
+ * What GuardDO counts per network (GuardStore.limit): rooms made (`create`, random rooms and
+ * persistent ones alike), accounts made, sign-ins started, meetings saved
+ */
+export type LimitKind = 'create' | 'register' | 'signin' | 'meeting'
 export const LIMITS: Readonly<Record<LimitKind, readonly RateWindow[]>> = {
   create: ROOM_CREATE_LIMITS,
   register: ACCOUNT_CREATE_LIMITS,
   signin: SIGNIN_LIMITS,
+  meeting: MEETING_SAVE_LIMITS,
 }
 
 /**

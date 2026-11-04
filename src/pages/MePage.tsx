@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import styled from 'styled-components'
 import {
   MAX_PERSISTENT_ROOMS,
   type MeResponse,
@@ -34,8 +33,28 @@ import { TextField } from '../components/Field.tsx'
 import { Logo } from '../components/Logo.tsx'
 import { canCopy, canUsePasskeys } from '../media/capabilities.ts'
 import { formatDateTime, getLocale, strings } from '../strings.ts'
-import { color, font, fontSize, radius, space } from '../styles/tokens.ts'
 import { turnstileToken } from '../turnstile.ts'
+import {
+  Actions,
+  ButtonLink,
+  Card,
+  Challenge,
+  Check,
+  Content,
+  Form,
+  Header,
+  Item,
+  ItemHead,
+  List,
+  Message,
+  Mono,
+  Muted,
+  Page,
+  Row,
+  Small,
+  Top,
+} from './accountStyles.tsx'
+import { MeetingsCard } from './MeetingsCard.tsx'
 
 /** What the page says after an action: an error (role alert) or a confirmation (role status) */
 type Notice = { tone: 'error' | 'ok'; text: string } | null
@@ -48,6 +67,9 @@ function errorText(error: unknown): string {
   if (error.code === 'slug_invalid' && error.slugProblem) {
     return strings.account.slugProblems[error.slugProblem]
   }
+  if (error.code === 'meeting_invalid' && error.meetingProblem) {
+    return strings.meetings.problems[error.meetingProblem]
+  }
   return text[error.code]
 }
 
@@ -56,7 +78,7 @@ type Phase = { at: 'loading' } | { at: 'signedOut' } | { at: 'signedIn'; me: MeR
 /**
  * /me (I2, e1-t12): accounts are optional, passkeys only. Signed out: sign in, or make an account
  * (a display name and a passkey on this device). Signed in: the name, personal persistent rooms
- * (e1-t13), passkeys, signed-in browsers and deleting everything. Lazy-loaded: none of this, nor
+ * (e1-t13), scheduled meetings (I3, e1-t14), passkeys, signed-in browsers and deleting everything. Lazy-loaded: none of this, nor
  * the WebAuthn code, is in the home page's JS. Every rule is the Worker's (worker/accounts.ts).
  */
 export default function MePage() {
@@ -242,6 +264,7 @@ function SignedIn({ me, run, onSignedOut }: { me: MeResponse; run: Run; onSigned
       </Header>
       <NameCard name={me.account.name} run={run} />
       <RoomsCard rooms={me.rooms} run={run} ask={ask} />
+      <MeetingsCard meetings={me.meetings} rooms={me.rooms} organizer={me.account.name} run={run} ask={ask} />
       <PasskeysCard passkeys={me.passkeys} run={run} ask={ask} />
       <SessionsCard sessions={me.sessions} run={run} />
       <Card aria-labelledby="delete-account">
@@ -598,168 +621,3 @@ function SessionsCard({ sessions, run }: { sessions: SessionInfo[]; run: Run }) 
     </Card>
   )
 }
-
-function ButtonLink({ to, children }: { to: string; children: ReactNode }) {
-  return <StyledLink to={to}>{children}</StyledLink>
-}
-
-const Page = styled.main`
-  min-height: 100dvh;
-  font-family: ${font.current};
-  background: ${color.bg};
-  color: ${color.fg};
-
-  a {
-    color: ${color.primary};
-  }
-`
-
-const Top = styled.header`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: ${space(4)};
-  max-width: 760px;
-  margin: 0 auto;
-`
-
-const Content = styled.div`
-  display: grid;
-  gap: ${space(4)};
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 0 ${space(4)} ${space(7)};
-
-  h1 {
-    margin: 0;
-    font-size: ${fontSize.title};
-  }
-`
-
-const Card = styled.section`
-  display: grid;
-  gap: ${space(3)};
-  padding: ${space(5)};
-  border: 1px solid ${color.line};
-  border-radius: ${radius.panel};
-  background: ${color.surface};
-
-  h2 {
-    margin: 0;
-    font-size: 20px;
-  }
-`
-
-const Header = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: ${space(3)};
-  font-weight: 600;
-`
-
-const Form = styled.form`
-  display: grid;
-  gap: ${space(3)};
-  padding-top: ${space(3)};
-  border-top: 1px solid ${color.line};
-
-  h3 {
-    margin: 0;
-    font-size: ${fontSize.base};
-  }
-`
-
-const Row = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: ${space(3)};
-
-  > label {
-    flex: 1 1 240px;
-  }
-`
-
-const List = styled.ul`
-  display: grid;
-  gap: ${space(2)};
-  margin: 0;
-  padding: 0;
-  list-style: none;
-`
-
-const Item = styled.li`
-  display: grid;
-  gap: ${space(2)};
-  padding: ${space(3)};
-  border: 1px solid ${color.line};
-  border-radius: ${radius.tile};
-`
-
-const ItemHead = styled.div`
-  display: grid;
-  gap: ${space(1)};
-  min-width: 0;
-`
-
-const Actions = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: ${space(2)};
-`
-
-const Check = styled.label`
-  display: flex;
-  align-items: center;
-  gap: ${space(2)};
-  min-height: 32px;
-
-  input {
-    width: 20px;
-    height: 20px;
-    accent-color: ${color.primary};
-  }
-`
-
-const Muted = styled.p`
-  margin: 0;
-  color: ${color.muted};
-`
-
-const Small = styled.span`
-  font-size: ${fontSize.small};
-  color: ${color.muted};
-`
-
-const Mono = styled.span`
-  font-family: ${font.mono};
-  font-size: ${fontSize.small};
-  overflow-wrap: anywhere;
-`
-
-const Message = styled.p<{ $tone: 'error' | 'ok' }>`
-  margin: 0;
-  font-weight: 600;
-  color: ${({ $tone }) => ($tone === 'error' ? color.danger : color.fg)};
-`
-
-/** Turnstile's widget, when it asks for a click; takes no room while empty */
-const Challenge = styled.div`
-  &:empty {
-    display: none;
-  }
-`
-
-const StyledLink = styled(Link)`
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 ${space(4)};
-  border-radius: ${radius.button};
-  background: ${color.primary};
-  color: ${color.onPrimary} !important;
-  font-weight: 600;
-  text-decoration: none;
-`

@@ -3,6 +3,8 @@
 // passkeys only (WebAuthn, the owner's decision in e1): no e-mail, no password. Accounts are
 // optional: everything else works the same without one.
 
+import type { MeetingInfo } from './meeting.ts'
+
 /** Every account endpoint is under this */
 export const ACCOUNT_API = '/api/account'
 
@@ -92,6 +94,8 @@ export type MeResponse = {
   passkeys: PasskeyInfo[]
   sessions: SessionInfo[]
   rooms: PersistentRoomInfo[]
+  /** Scheduled meetings (I3), soonest first; past ones until MEETING_RETENTION_MS */
+  meetings: MeetingInfo[]
 }
 
 /** PATCH /api/account/rooms/<slug>: what to change; `password` null clears it */
@@ -107,7 +111,8 @@ export type RoomViewer = { name: string; owner: boolean }
 
 /**
  * Why an account call failed (the `error` of the JSON answer; the /me page's text for each is in
- * the dictionaries). `slug_invalid` comes with `problem` (shared/slug.ts SlugProblem);
+ * the dictionaries). `slug_invalid` comes with `problem` (shared/slug.ts SlugProblem), and so does
+ * `meeting_invalid` (shared/meeting.ts MeetingProblem);
  * `rate_limited` with `retryAfter` seconds; `turnstile_required` with `siteKey`.
  */
 export type AccountError =
@@ -127,6 +132,8 @@ export type AccountError =
   | 'slug_invalid'
   | 'slug_taken'
   | 'too_many_rooms'
+  | 'meeting_invalid'
+  | 'too_many_meetings'
   | 'not_found'
   | 'unavailable'
 

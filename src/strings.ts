@@ -175,3 +175,56 @@ export function formatDay(day: string): string {
     weekday: 'short',
   }).format(at)
 }
+
+/** The browser's own IANA time zone (UTC when it names none) */
+export function browserTimeZone(): string {
+  try {
+    return new Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
+
+/** A scheduled meeting's day in `timeZone` (the browser's when left out): 2026年11月10日 週二; Tue 10 Nov 2026 */
+export function formatMeetingDate(at: number, timeZone?: string): string {
+  return format(`meetingDate|${timeZone ?? ''}`, {
+    timeZone,
+    year: 'numeric',
+    month: locale === 'zh-TW' ? 'long' : 'short',
+    day: 'numeric',
+    weekday: 'short',
+  }).format(at)
+}
+
+/** A scheduled meeting's time of day in `timeZone`: 14:00; 2:00 pm */
+export function formatMeetingClock(at: number, timeZone?: string): string {
+  return locale === 'zh-TW'
+    ? format(`meetingClock|${timeZone ?? ''}`, {
+        timeZone,
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      }).format(at)
+    : format(`meetingClock|${timeZone ?? ''}`, { timeZone, hour: 'numeric', minute: '2-digit' }).format(at)
+}
+
+/**
+ * A time zone as people read it at `at` (daylight saving included): its name in the current
+ * language and its offset, e.g. 澳洲東部時間 and GMT+11. The IANA id stands in for a name the
+ * runtime does not have
+ */
+export function formatZone(at: number, timeZone?: string): { name: string; offset: string } {
+  const zone = timeZone ?? browserTimeZone()
+  const part = (style: 'longGeneric' | 'shortOffset') => {
+    try {
+      return format(`zone|${style}|${zone}`, { timeZone: zone, timeZoneName: style })
+        .formatToParts(at)
+        .find((p) => p.type === 'timeZoneName')?.value
+    } catch {
+      return undefined
+    }
+  }
+  const offset = part('shortOffset') ?? zone
+  const name = part('longGeneric')
+  return { name: name && name !== offset ? name : zone, offset }
+}

@@ -8,6 +8,7 @@ import {
   type RoomSettingsChange,
 } from '../../shared/account.ts'
 import { TURNSTILE_HEADER } from '../../shared/abuse.ts'
+import type { MeetingInfo, MeetingInput, MeetingProblem } from '../../shared/meeting.ts'
 import type { SlugProblem } from '../../shared/slug.ts'
 import { forgetAccountHint, rememberAccountHint } from '../room/session.ts'
 import {
@@ -26,13 +27,16 @@ export class AccountApiError extends Error {
   readonly code: AccountError | 'failed'
   readonly retryAfter: number
   readonly slugProblem: SlugProblem | null
+  readonly meetingProblem: MeetingProblem | null
   readonly siteKey: string | null
 
   constructor(code: AccountError | 'failed', body: Record<string, unknown> = {}) {
     super(`account API: ${code}`)
     this.code = code
     this.retryAfter = typeof body.retryAfter === 'number' ? body.retryAfter : 60
-    this.slugProblem = typeof body.problem === 'string' ? (body.problem as SlugProblem) : null
+    const problem = typeof body.problem === 'string' ? body.problem : null
+    this.slugProblem = code === 'slug_invalid' ? (problem as SlugProblem | null) : null
+    this.meetingProblem = code === 'meeting_invalid' ? (problem as MeetingProblem | null) : null
     this.siteKey = typeof body.siteKey === 'string' ? body.siteKey : null
   }
 }
@@ -170,4 +174,20 @@ export async function updatePersistentRoom(
 
 export async function deletePersistentRoom(slug: string): Promise<void> {
   await call('DELETE', `/rooms/${encodeURIComponent(slug)}`)
+}
+
+// Scheduled meetings (I3, e1-t14)
+
+export async function createMeeting(input: MeetingInput): Promise<MeetingInfo> {
+  const { meeting } = await call<{ meeting: MeetingInfo }>('POST', '/meetings', input)
+  return meeting
+}
+
+export async function updateMeeting(id: string, input: MeetingInput): Promise<MeetingInfo> {
+  const { meeting } = await call<{ meeting: MeetingInfo }>('PUT', `/meetings/${encodeURIComponent(id)}`, input)
+  return meeting
+}
+
+export async function deleteMeeting(id: string): Promise<void> {
+  await call('DELETE', `/meetings/${encodeURIComponent(id)}`)
 }

@@ -12,13 +12,15 @@ import {
   type RoomSettingsChange,
 } from '../shared/account.ts'
 import { TURNSTILE_HEADER, type LimitKind } from '../shared/abuse.ts'
+import { MAX_MEETINGS, isMeetingId, parseMeetingInput, type MeetingInput } from '../shared/meeting.ts'
 import { normalizePassword } from '../shared/password.ts'
 import { MAX_ROOM_NAME_CHARS, normalizeName } from '../shared/protocol.ts'
 import { normalizeSlug, slugProblem } from '../shared/slug.ts'
 import { isBlocked, takeIsolateRate, type GuardDeps } from './abuse.ts'
-import { AccountDb, type AccountRow, type CredentialRow } from './account-db.ts'
+import { AccountDb, type AccountRow, type CredentialRow, type MeetingValues } from './account-db.ts'
 import type { Env } from './app.ts'
 import { requestClientKey } from './client-key.ts'
+import { keptAfter, meetingInfo } from './meetings.ts'
 import type { RoomDO } from './room.ts'
 import {
   authenticate,
@@ -61,13 +63,17 @@ import {
 //   DELETE /api/account/sessions           signs every other browser out
 //   POST   /api/account/rooms              { slug, name? } → a persistent room
 //   PATCH  /api/account/rooms/<slug>       RoomSettingsChange
-//   DELETE /api/account/rooms/<slug>
+//   DELETE /api/account/rooms/<slug>      (its scheduled meetings with it)
+//   POST   /api/account/meetings          MeetingInput → a scheduled meeting (I3, e1-t14)
+//   PUT    /api/account/meetings/<id>     MeetingInput: the whole meeting again
+//   DELETE /api/account/meetings/<id>
+//   (the public page's GET /api/meetings/<id> is worker/meetings.ts)
 //
 // CSRF: the session cookie is SameSite=Lax, and every call but GET must come with an Origin
 // header equal to this site's (a page elsewhere, even a preview on the same workers.dev site,
 // gets 403 forbidden_origin) and a JSON body type, which a cross-site form cannot send. Abuse:
 // blocked networks get 403; every call counts against the per-isolate rate; account creation and
-// sign-in are counted per network in GuardDO (shared/abuse.ts LIMITS).
+// sign-in are counted per network in GuardDO (shared/abuse.ts LIMITS), and so are meetings saved.
 
 /** What the account API needs besides the bindings (fakes in tests) */
 export interface AccountDeps {
@@ -160,7 +166,7 @@ function toResponse(reply: Reply): Response {
 async function route(c: Context): Promise<Reply> {
   const path = c.url.pathname.slice(ACCOUNT_API.length)
   const method = c.request.method
-  const sub = path === '/passkeys/options' ? null : /^\/(passkeys|sessions|rooms)\/([^/]+)$/.exec(path)
+  const sub = path === '/passkeys/options' ? null : /^\/(passkeys|sessions|rooms|meetings)\/([^/]+)$/.exec(path)
   switch (`${method} ${sub ? `/${sub[1]}/:id` : path}`) {
     case 'GET ':
       return withAccount(c, () => me(c))
@@ -194,6 +200,12 @@ async function route(c: Context): Promise<Reply> {
       return withAccount(c, () => updateRoom(c, sub![2]))
     case 'DELETE /rooms/:id':
       return withAccount(c, () => deleteRoom(c, sub![2]))
+    case 'POST /meetings':
+      return withAccount(c, () => createMeeting(c))
+    case 'PUT /meetings/:id':
+      return withAccount(c, () => updateMeeting(c, sub![2]))
+    case 'DELETE /meetings/:id':
+      return withAccount(c, () => deleteMeeting(c, sub![2]))
     default:
       return fail(404, 'not_found')
   }
@@ -381,10 +393,15 @@ async function logout(c: Context): Promise<Reply> {
 
 async function me(c: Context): Promise<Reply> {
   const { id } = account(c)
-  const [credentials, sessions, rooms] = await Promise.all([
+  const [credentials, sessions, rooms, meetings] = await Promise.all([
     c.db.credentials(id),
     c.db.sessions(id, c.now),
     c.db.rooms(id),
+    // A database 0002 was not applied to yet (DEPLOY.md §4) still shows the rest of /me
+    c.db.meetings(id, keptAfter(c.now)).catch((error: unknown) => {
+      console.error('meetings unavailable', error)
+      return []
+    }),
   ])
   const roomInfos = await Promise.all(
     rooms.map(async (room): Promise<PersistentRoomInfo> => {
@@ -413,6 +430,7 @@ async function me(c: Context): Promise<Reply> {
       current: row.id === c.auth!.session.id,
     })),
     rooms: roomInfos,
+    meetings: meetings.map(meetingInfo),
   }
   return new Reply(200, response)
 }
@@ -593,8 +611,85 @@ async function deleteRoom(c: Context, raw: string): Promise<Reply> {
   const slug = await ownRoom(c, raw)
   if (!slug) return fail(404, 'not_found')
   // The room's own storage first: if the row went first and this failed, the settings would stay
-  // behind under a slug anyone could take
+  // behind under a slug anyone could take. Its scheduled meetings go with the row
   await c.deps.room(slug).destroy()
   await c.db.deleteRoom(slug, account(c).id)
+  return new Reply(204, null)
+}
+
+// Scheduled meetings (I3, e1-t14)
+
+/**
+ * The meeting in the body, checked (shared/meeting.ts), in one of this account's persistent
+ * rooms; a refusal otherwise
+ */
+async function meetingInput(c: Context, keepStart: number | null): Promise<MeetingInput | Reply> {
+  const parsed = parseMeetingInput(await body(c), c.now, keepStart)
+  if ('problem' in parsed) return fail(400, 'meeting_invalid', { problem: parsed.problem })
+  const room = await c.db.room(parsed.input.roomSlug)
+  if (!room || room.account_id !== account(c).id) {
+    return fail(400, 'meeting_invalid', { problem: 'room' })
+  }
+  return parsed.input
+}
+
+const meetingValues = (input: MeetingInput): MeetingValues => ({
+  room_slug: input.roomSlug,
+  title: input.title,
+  description: input.description,
+  starts_at: input.startsAt,
+  duration_min: input.durationMin,
+  time_zone: input.timeZone,
+})
+
+async function createMeeting(c: Context): Promise<Reply> {
+  const input = await meetingInput(c, null)
+  if (input instanceof Reply) return input
+  const { id: accountId } = account(c)
+  if ((await c.db.meetingCount(accountId, keptAfter(c.now))) >= MAX_MEETINGS) {
+    return fail(409, 'too_many_meetings')
+  }
+  const refused = await limited(c, 'meeting')
+  if (refused) return refused
+  const values = meetingValues(input)
+  const row = {
+    id: newId(),
+    account_id: accountId,
+    ...values,
+    ends_at: values.starts_at + values.duration_min * 60_000,
+    sequence: 0,
+    created_at: c.now,
+    updated_at: c.now,
+  }
+  await c.db.addMeeting(row, keptAfter(c.now))
+  return new Reply(201, { meeting: meetingInfo(row) })
+}
+
+/** The account's own meeting by the id in the path; null for anyone else's, or none */
+async function ownMeeting(c: Context, raw: string) {
+  const id = decodeURIComponent(raw)
+  if (!isMeetingId(id)) return null
+  const row = await c.db.meeting(id, keptAfter(c.now))
+  return row && row.account_id === account(c).id ? row : null
+}
+
+async function updateMeeting(c: Context, raw: string): Promise<Reply> {
+  // Someone else's meeting is as missing as one that never was (404, never 403)
+  const row = await ownMeeting(c, raw)
+  if (!row) return fail(404, 'not_found')
+  const input = await meetingInput(c, row.starts_at)
+  if (input instanceof Reply) return input
+  const refused = await limited(c, 'meeting')
+  if (refused) return refused
+  if (!(await c.db.updateMeeting(row.id, row.account_id, meetingValues(input), c.now))) {
+    return fail(404, 'not_found')
+  }
+  const saved = await c.db.meeting(row.id, keptAfter(c.now))
+  return saved ? new Reply(200, { meeting: meetingInfo(saved) }) : fail(404, 'not_found')
+}
+
+async function deleteMeeting(c: Context, raw: string): Promise<Reply> {
+  const row = await ownMeeting(c, raw)
+  if (!row || !(await c.db.deleteMeeting(row.id, row.account_id))) return fail(404, 'not_found')
   return new Reply(204, null)
 }

@@ -19,6 +19,8 @@ import { GUARD_OBJECT } from './guard.ts'
 import { CSP_REPORT_PATH, withApiHeaders } from './headers.ts'
 import type { RoomDO } from './room.ts'
 import { handleAccount } from './accounts.ts'
+import { handleMeetingView } from './meetings.ts'
+import { MEETINGS_API } from '../shared/meeting.ts'
 import { handleRooms } from './rooms.ts'
 import { handleSfu, type SfuEnv } from './sfu.ts'
 import { handleTurn, type TurnEnv } from './turn.ts'
@@ -38,8 +40,8 @@ export interface Env
   /** One object for the whole deployment: room-creation limits, IP blocklist (e11-t05) */
   GUARD: DurableObjectNamespace<GuardDO>
   /**
-   * Accounts, passkeys, sessions and persistent rooms (I2, migrations/). Optional so a
-   * deployment without it still serves rooms; /api/account then answers 503
+   * Accounts, passkeys, sessions, persistent rooms (I2) and scheduled meetings (I3), migrations/.
+   * Optional so a deployment without it still serves rooms; /api/account then answers 503
    */
   DB?: D1Database
   // Set at deploy time (wrangler deploy --var APP_VERSION:<commit>)
@@ -127,6 +129,9 @@ async function handleApi(
       guard: guardDeps(env),
       room: (slug) => env.ROOM.get(env.ROOM.idFromName(slug)),
     })
+  }
+  if (url.pathname.startsWith(`${MEETINGS_API}/`)) {
+    return handleMeetingView(request, env, url, { guard: guardDeps(env) })
   }
   if (url.pathname.startsWith('/api/sfu/')) {
     return handleSfu(request, env, {

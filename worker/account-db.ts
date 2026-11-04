@@ -44,6 +44,27 @@ export type ChallengeRow = {
 
 export type RoomRow = { slug: string; account_id: string; created_at: number }
 
+export type MeetingRow = {
+  id: string
+  account_id: string
+  room_slug: string
+  title: string
+  description: string | null
+  starts_at: number
+  duration_min: number
+  ends_at: number
+  time_zone: string
+  sequence: number
+  created_at: number
+  updated_at: number
+}
+
+/** A meeting's values as a create or an edit saves them */
+export type MeetingValues = Pick<
+  MeetingRow,
+  'room_slug' | 'title' | 'description' | 'starts_at' | 'duration_min' | 'time_zone'
+>
+
 /** A new session: its public id, the hash of its token and when it ends */
 export type NewSession = { id: string; tokenHash: string; expiresAt: number }
 
@@ -105,13 +126,16 @@ export class AccountDb {
 
   /** Everything the account has, gone (its rooms' own storage is the caller's to clear first) */
   async deleteAccount(id: string): Promise<void> {
-    await this.db.batch([
-      this.db.prepare('DELETE FROM rooms WHERE account_id = ?').bind(id),
-      this.db.prepare('DELETE FROM sessions WHERE account_id = ?').bind(id),
-      this.db.prepare('DELETE FROM credentials WHERE account_id = ?').bind(id),
-      this.db.prepare('DELETE FROM challenges WHERE account_id = ?').bind(id),
-      this.db.prepare('DELETE FROM accounts WHERE id = ?').bind(id),
-    ])
+    await this.withMeetings(
+      [this.db.prepare('DELETE FROM meetings WHERE account_id = ?').bind(id)],
+      [
+        this.db.prepare('DELETE FROM rooms WHERE account_id = ?').bind(id),
+        this.db.prepare('DELETE FROM sessions WHERE account_id = ?').bind(id),
+        this.db.prepare('DELETE FROM credentials WHERE account_id = ?').bind(id),
+        this.db.prepare('DELETE FROM challenges WHERE account_id = ?').bind(id),
+        this.db.prepare('DELETE FROM accounts WHERE id = ?').bind(id),
+      ],
+    )
   }
 
   // Passkeys
@@ -283,10 +307,119 @@ export class AccountDb {
     return result.meta.changes > 0
   }
 
+  /** The room's row and its meetings with it (their links stop working) */
   async deleteRoom(slug: string, accountId: string): Promise<boolean> {
+    const results = await this.withMeetings(
+      [this.db.prepare('DELETE FROM meetings WHERE room_slug = ? AND account_id = ?').bind(slug, accountId)],
+      [this.db.prepare('DELETE FROM rooms WHERE slug = ? AND account_id = ?').bind(slug, accountId)],
+    )
+    return results.at(-1)!.meta.changes > 0
+  }
+
+  /**
+   * `meetings` then `rest` in one batch; just `rest` on a database migration 0002 has not reached
+   * yet (DEPLOY.md §4: the deploy token may not apply it), so I2's deletes keep working there
+   */
+  private async withMeetings(meetings: D1PreparedStatement[], rest: D1PreparedStatement[]) {
+    try {
+      return await this.db.batch([...meetings, ...rest])
+    } catch (error) {
+      if (!/no such table: meetings/i.test(String(error))) throw error
+      console.warn('meetings table missing: apply migrations/0002_meetings.sql')
+      return this.db.batch(rest)
+    }
+  }
+
+  // Scheduled meetings (I3, e1-t14; migrations/0002_meetings.sql). A meeting that ended more than
+  // MEETING_RETENTION_MS ago is gone: `keptAfter` is now minus that; older rows are never read,
+  // and are deleted whenever anyone saves a meeting
+
+  /** The account's meetings still kept, soonest first */
+  async meetings(accountId: string, keptAfter: number): Promise<MeetingRow[]> {
+    const { results } = await this.db
+      .prepare('SELECT * FROM meetings WHERE account_id = ? AND ends_at > ? ORDER BY starts_at, created_at')
+      .bind(accountId, keptAfter)
+      .all<MeetingRow>()
+    return results
+  }
+
+  async meetingCount(accountId: string, keptAfter: number): Promise<number> {
+    const row = await this.db
+      .prepare('SELECT COUNT(*) AS count FROM meetings WHERE account_id = ? AND ends_at > ?')
+      .bind(accountId, keptAfter)
+      .first<{ count: number }>()
+    return row?.count ?? 0
+  }
+
+  async meeting(id: string, keptAfter: number): Promise<MeetingRow | null> {
+    return this.db
+      .prepare('SELECT * FROM meetings WHERE id = ? AND ends_at > ?')
+      .bind(id, keptAfter)
+      .first<MeetingRow>()
+  }
+
+  /** A meeting and its organizer's display name (the public page shows nothing else of theirs) */
+  async publicMeeting(id: string, keptAfter: number) {
+    return this.db
+      .prepare(
+        'SELECT m.*, a.name AS organizer FROM meetings m JOIN accounts a ON a.id = m.account_id WHERE m.id = ? AND m.ends_at > ?',
+      )
+      .bind(id, keptAfter)
+      .first<MeetingRow & { organizer: string }>()
+  }
+
+  /** A new meeting; meetings past retention (anyone's) go at the same time */
+  async addMeeting(row: MeetingRow, keptAfter: number): Promise<void> {
+    await this.db.batch([
+      this.db.prepare('DELETE FROM meetings WHERE ends_at <= ?').bind(keptAfter),
+      this.db
+        .prepare(
+          'INSERT INTO meetings (id, account_id, room_slug, title, description, starts_at, duration_min, ends_at, time_zone, sequence, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        )
+        .bind(
+          row.id,
+          row.account_id,
+          row.room_slug,
+          row.title,
+          row.description,
+          row.starts_at,
+          row.duration_min,
+          row.ends_at,
+          row.time_zone,
+          row.sequence,
+          row.created_at,
+          row.updated_at,
+        ),
+    ])
+  }
+
+  /** The owner's edit: every value replaced, one more in `sequence`. False when it is not theirs */
+  async updateMeeting(id: string, accountId: string, values: MeetingValues, now: number): Promise<boolean> {
     const result = await this.db
-      .prepare('DELETE FROM rooms WHERE slug = ? AND account_id = ?')
-      .bind(slug, accountId)
+      .prepare(
+        'UPDATE meetings SET room_slug = ?, title = ?, description = ?, starts_at = ?, duration_min = ?, ends_at = ?, time_zone = ?, sequence = sequence + 1, updated_at = ? WHERE id = ? AND account_id = ?',
+      )
+      .bind(
+        values.room_slug,
+        values.title,
+        values.description,
+        values.starts_at,
+        values.duration_min,
+        values.starts_at + values.duration_min * 60_000,
+        values.time_zone,
+        now,
+        id,
+        accountId,
+      )
+      .run()
+    return result.meta.changes > 0
+  }
+
+  /** False when the account has no such meeting */
+  async deleteMeeting(id: string, accountId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare('DELETE FROM meetings WHERE id = ? AND account_id = ?')
+      .bind(id, accountId)
       .run()
     return result.meta.changes > 0
   }

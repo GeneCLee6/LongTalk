@@ -33,6 +33,7 @@ const ME: MeResponse = {
       memberCount: 0,
     },
   ],
+  meetings: [],
 }
 
 type Call = { method: string; path: string; body: unknown }

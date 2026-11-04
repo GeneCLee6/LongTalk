@@ -11,6 +11,8 @@ const RoomPage = lazy(() => import('./pages/RoomPage.tsx'))
 const AdminPage = lazy(() => import('./pages/AdminPage.tsx'))
 // The account page (I2): its own chunk, with the WebAuthn code; accounts are optional
 const MePage = lazy(() => import('./pages/MePage.tsx'))
+// A scheduled meeting's public page (I3): its own chunk too, without the account API
+const MeetingPage = lazy(() => import('./pages/MeetingPage.tsx'))
 
 export function App() {
   // Switching language (G1, e4-t15) re-renders everything from here down with the other
@@ -26,6 +28,7 @@ export function App() {
             <Route path="/r/:roomId" element={<RoomPage />} />
             <Route path="/admin" element={<AdminPage />} />
             <Route path="/me" element={<MePage />} />
+            <Route path="/m/:meetingId" element={<MeetingPage />} />
             <Route path="*" element={<HomePage />} />
           </Routes>
         </Suspense>
