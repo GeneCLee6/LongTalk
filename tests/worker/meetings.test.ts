@@ -231,6 +231,10 @@ describe('migration 0002', () => {
     const alice = await owner(t)
     expect((await alice.me()).meetings).toEqual([])
     expect((await alice.call('POST', '/meetings', input(t))).status).toBe(503)
+    // I2's deletes still work there
+    expect((await alice.call('DELETE', '/rooms/alice-room')).status).toBe(204)
+    expect((await alice.call('DELETE', '')).status).toBe(204)
+    expect(t.count('accounts')).toBe(0)
   })
 
   it('applies on top of 0001 with rows in it, and the foreign keys hold', () => {

@@ -126,14 +126,16 @@ export class AccountDb {
 
   /** Everything the account has, gone (its rooms' own storage is the caller's to clear first) */
   async deleteAccount(id: string): Promise<void> {
-    await this.db.batch([
-      this.db.prepare('DELETE FROM meetings WHERE account_id = ?').bind(id),
-      this.db.prepare('DELETE FROM rooms WHERE account_id = ?').bind(id),
-      this.db.prepare('DELETE FROM sessions WHERE account_id = ?').bind(id),
-      this.db.prepare('DELETE FROM credentials WHERE account_id = ?').bind(id),
-      this.db.prepare('DELETE FROM challenges WHERE account_id = ?').bind(id),
-      this.db.prepare('DELETE FROM accounts WHERE id = ?').bind(id),
-    ])
+    await this.withMeetings(
+      [this.db.prepare('DELETE FROM meetings WHERE account_id = ?').bind(id)],
+      [
+        this.db.prepare('DELETE FROM rooms WHERE account_id = ?').bind(id),
+        this.db.prepare('DELETE FROM sessions WHERE account_id = ?').bind(id),
+        this.db.prepare('DELETE FROM credentials WHERE account_id = ?').bind(id),
+        this.db.prepare('DELETE FROM challenges WHERE account_id = ?').bind(id),
+        this.db.prepare('DELETE FROM accounts WHERE id = ?').bind(id),
+      ],
+    )
   }
 
   // Passkeys
@@ -307,11 +309,25 @@ export class AccountDb {
 
   /** The room's row and its meetings with it (their links stop working) */
   async deleteRoom(slug: string, accountId: string): Promise<boolean> {
-    const [, result] = await this.db.batch([
-      this.db.prepare('DELETE FROM meetings WHERE room_slug = ? AND account_id = ?').bind(slug, accountId),
-      this.db.prepare('DELETE FROM rooms WHERE slug = ? AND account_id = ?').bind(slug, accountId),
-    ])
-    return result!.meta.changes > 0
+    const results = await this.withMeetings(
+      [this.db.prepare('DELETE FROM meetings WHERE room_slug = ? AND account_id = ?').bind(slug, accountId)],
+      [this.db.prepare('DELETE FROM rooms WHERE slug = ? AND account_id = ?').bind(slug, accountId)],
+    )
+    return results.at(-1)!.meta.changes > 0
+  }
+
+  /**
+   * `meetings` then `rest` in one batch; just `rest` on a database migration 0002 has not reached
+   * yet (DEPLOY.md §4: the deploy token may not apply it), so I2's deletes keep working there
+   */
+  private async withMeetings(meetings: D1PreparedStatement[], rest: D1PreparedStatement[]) {
+    try {
+      return await this.db.batch([...meetings, ...rest])
+    } catch (error) {
+      if (!/no such table: meetings/i.test(String(error))) throw error
+      console.warn('meetings table missing: apply migrations/0002_meetings.sql')
+      return this.db.batch(rest)
+    }
   }
 
   // Scheduled meetings (I3, e1-t14; migrations/0002_meetings.sql). A meeting that ended more than

@@ -83,7 +83,7 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
   npx wrangler d1 migrations apply longtalk --local                       # 本機（npm run dev、vite preview、UI checks）
   ```
 
-  `deploy.yml` 與 `preview.yml` 部署前會自己跑一次；GitHub 的 `CLOUDFLARE_API_TOKEN` 沒有 **D1 Edit** 權限時只留警告、照常部署（Cloudflare 儀表板 → My Profile → API Tokens → 那把 token → Edit → 加 `Account` › `D1` › `Edit`）。0001 已由 I2 手動套用到兩個資料庫。**0002（I3 預定會議，`migrations/0002_meetings.sql`）要擁有者套用**（token 有 D1 Edit 之後 workflow 會自己做；沒有之前，`/me` 的其他部分照常（預定會議的清單是空的），但建立預定會議回 503「帳號服務暫時無法使用」、公開頁回「讀取失敗」）：
+  `deploy.yml` 與 `preview.yml` 部署前會自己跑一次；GitHub 的 `CLOUDFLARE_API_TOKEN` 沒有 **D1 Edit** 權限時只留警告、照常部署（Cloudflare 儀表板 → My Profile → API Tokens → 那把 token → Edit → 加 `Account` › `D1` › `Edit`）。0001 已由 I2 手動套用到兩個資料庫。**0002（I3 預定會議，`migrations/0002_meetings.sql`）要擁有者套用**（token 有 D1 Edit 之後 workflow 會自己做；沒有之前，`/me` 的其他部分照常（預定會議的清單是空的，刪固定會議室與刪帳號也照常），但建立預定會議回 503「帳號服務暫時無法使用」、公開頁回「讀取失敗」）：
 
   ```sh
   npx wrangler d1 migrations apply longtalk-preview --env preview --remote  # 先套預覽（PR 的 e2e 要用）
