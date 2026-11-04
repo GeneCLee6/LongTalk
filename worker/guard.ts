@@ -1,8 +1,9 @@
 import {
+  LIMITS,
   MAX_BLOCKS,
   MAX_OFFENDERS,
-  ROOM_CREATE_LIMITS,
   takeFromWindows,
+  type LimitKind,
   type AbuseSummary,
   type BlockEntry,
   type OffenceKind,
@@ -25,8 +26,8 @@ export interface GuardStorage {
 
 const BLOCKS_KEY = 'blocks'
 const OFFENDERS_KEY = 'offenders'
-/** One client's recent room creations: `create:` and its key */
-const createKey = (key: string) => `create:${key}`
+/** One client's recent room creations (`create:` and its key), accounts, sign-ins (I2) */
+const limitKey = (kind: LimitKind, key: string) => `${kind}:${key}`
 
 /** Whether a create may go ahead */
 export type CreateDecision = { ok: true } | { ok: false; retryAfterMs: number }
@@ -58,15 +59,24 @@ export class GuardStore {
 
   /** Counts one room creation by `key`, or refuses it (ROOM_CREATE_LIMITS) */
   async create(key: string, now: number): Promise<CreateDecision> {
-    let times = this.creations.get(key)
-    if (!times) times = (await this.storage.get<number[]>(createKey(key))) ?? []
-    const result = takeFromWindows(times, ROOM_CREATE_LIMITS, now)
-    this.creations.set(key, result.times)
+    return this.limit('create', key, now)
+  }
+
+  /**
+   * Counts one `kind` (LIMITS: rooms, accounts, sign-ins) by `key`, or refuses it and notes the
+   * offence
+   */
+  async limit(kind: LimitKind, key: string, now: number): Promise<CreateDecision> {
+    const stored = limitKey(kind, key)
+    let times = this.creations.get(stored)
+    if (!times) times = (await this.storage.get<number[]>(stored)) ?? []
+    const result = takeFromWindows(times, LIMITS[kind], now)
+    this.creations.set(stored, result.times)
     if (!result.ok) {
-      await this.note(key, 'createLimit', now)
+      await this.note(key, kind === 'create' ? 'createLimit' : 'accountLimit', now)
       return { ok: false, retryAfterMs: result.retryAfterMs }
     }
-    await this.storage.put(createKey(key), result.times)
+    await this.storage.put(stored, result.times)
     // A long-lived object would otherwise keep every client it ever saw
     if (this.creations.size > 5000) this.creations.clear()
     return { ok: true }

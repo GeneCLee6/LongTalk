@@ -156,6 +156,10 @@ async function fakeGuard() {
       calls.push(`create:${key}`)
       return store.create(key, Date.now())
     },
+    limit: async (kind, key) => {
+      calls.push(`${kind}:${key}`)
+      return store.limit(kind, key, Date.now())
+    },
     note: async (key, kind) => {
       calls.push(`note:${kind}`)
       await store.note(key, kind, Date.now())

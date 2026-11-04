@@ -39,7 +39,7 @@ import {
   visibleTiles,
   type LayoutChoice,
 } from '../../shared/layout.ts'
-import { isRoomId } from '../../shared/room-id.ts'
+import { isRoomKey } from '../../shared/slug.ts'
 import type { UsageState } from '../../shared/usage.ts'
 import { BlockedError, getRoom } from '../api/rooms.ts'
 import { fetchIceConfig } from '../api/turn.ts'
@@ -209,7 +209,7 @@ function resume(roomId: string): JoinChoices | null {
 
 export default function RoomPage() {
   const { roomId = '' } = useParams()
-  if (!isRoomId(roomId)) {
+  if (!isRoomKey(roomId)) {
     return (
       <Page>
         <NotFound />
@@ -223,7 +223,7 @@ export default function RoomPage() {
 type Stage =
   | { at: 'prejoin'; problem?: PasswordProblem }
   | { at: 'room'; choices: JoinChoices }
-  | { at: 'left'; reason: LeftReason | TurnedAwayReason; roomName: string }
+  | { at: 'left'; reason: LeftReason | TurnedAwayReason; roomName: string; persistent?: boolean }
 
 /**
  * `left`: pressed 「離開」; `closed`: the room was gone when we came back to it; `ended`, `removed`:
@@ -260,7 +260,9 @@ function RoomEntry({ roomId }: { roomId: string }) {
         <Room
           roomId={roomId}
           choices={stage.choices}
-          onLeft={(reason, roomName) => setStage({ at: 'left', reason, roomName })}
+          onLeft={(reason, roomName, persistent) =>
+            setStage({ at: 'left', reason, roomName, persistent })
+          }
           onPasswordRefused={(problem) => setStage({ at: 'prejoin', problem })}
         />
       </Shell>
@@ -285,6 +287,7 @@ function RoomEntry({ roomId }: { roomId: string }) {
         <LeftScreen
           reason={stage.reason}
           roomName={stage.roomName}
+          persistent={stage.persistent}
           onRate={(score) => {
             // Sent at once: the next thing the person does may well be closing the tab
             telemetry.track({ type: 'rating', score })
@@ -320,6 +323,7 @@ type Summary =
       waitingRoom: false
       password: false
       recorders: readonly string[]
+      accountName: null
     }
   | {
       status: 'ok'
@@ -328,9 +332,17 @@ type Summary =
       password: boolean
       /** Who records the meeting (I4): the pre-join screen says so and asks */
       recorders: readonly string[]
+      /** The signed-in account's name (I2): the name field starts with it */
+      accountName: string | null
     }
 
-const NONE = { memberCount: null, waitingRoom: false, password: false, recorders: [] } as const
+const NONE = {
+  memberCount: null,
+  waitingRoom: false,
+  password: false,
+  recorders: [],
+  accountName: null,
+} as const
 const LOADING: Summary = { status: 'loading', ...NONE }
 
 /**
@@ -369,17 +381,21 @@ function PreJoinGate({
     getRoom(roomId).then(
       (room) => {
         if (cancelled) return
+        // The owner of a persistent room (I2) is let in past the lock, the waiting room and
+        // the password: the room checks again, this only spares the screens
+        const owner = room?.viewer?.owner === true
         setSummary(
           !room
             ? { status: 'missing', ...NONE }
-            : room.locked
+            : room.locked && !owner
               ? { status: 'locked', ...NONE }
               : {
                   status: 'ok',
                   memberCount: room.memberCount,
-                  waitingRoom: !!room.waitingRoom,
+                  waitingRoom: !!room.waitingRoom && !owner,
                   // A room from before v11 has no password time: none
-                  password: room.passwordSetAt != null,
+                  password: room.passwordSetAt != null && !owner,
+                  accountName: room.viewer?.name ?? null,
                   // ... before v17 no recordings
                   recorders: Object.values(room.recordings ?? {}).map(recordingKey),
                 },
@@ -438,7 +454,8 @@ function PreJoinScreen({
   onJoin: (choices: JoinChoices) => void
   onHome: () => void
 }) {
-  const [name, setName] = useState(loadName)
+  // A signed-in account's name first (I2), else the one this browser remembers
+  const [name, setName] = useState(() => summary.accountName ?? loadName())
   const [mic, setMic] = useState(true)
   const [cam, setCam] = useState(true)
   // The recording question (I4): asked here when the room is being recorded
@@ -671,7 +688,8 @@ function Room({
 }: {
   roomId: string
   choices: JoinChoices
-  onLeft: (reason: LeftReason | TurnedAwayReason, roomName: string) => void
+  /** `persistent` (I2): the room outlives this meeting */
+  onLeft: (reason: LeftReason | TurnedAwayReason, roomName: string, persistent?: boolean) => void
   /** The room did not take our password (F3): back to the pre-join screen, which says why */
   onPasswordRefused: (problem: PasswordProblem) => void
 }) {
@@ -694,6 +712,11 @@ function Room({
   const lobby = state.lobby
   const waiting = lobby !== null
   const title = roomTitle(roomId, roomInfo ?? lobby?.room ?? null)
+  // Whether this is a persistent room (I2), as last seen: the view may be gone once it ends
+  const persistent = useRef(false)
+  useEffect(() => {
+    if (roomInfo) persistent.current = roomInfo.persistent === true
+  }, [roomInfo])
   const gone = state.status === 'notFound'
   // The host removed us or ended the meeting (F1), or did not let us in (F2): the after-leave
   // screen, or the turned-away one, says which
@@ -731,6 +754,7 @@ function Room({
           ? 'declined'
           : reason,
       title,
+      persistent.current,
     )
   })
   useEffect(() => {

@@ -1,4 +1,5 @@
 import { TURNSTILE_HEADER, type CreateRoomRefusal } from '../../shared/abuse.ts'
+import type { RoomViewer } from '../../shared/account.ts'
 import { roomInfoPath, type CreateRoomResponse, type RoomSummary } from '../../shared/protocol.ts'
 import { isRoomId } from '../../shared/room-id.ts'
 
@@ -73,7 +74,9 @@ export async function createRoom(turnstileToken?: string): Promise<string> {
  * GET /api/rooms/<id>: the room, or null when there is no such room. Throws BlockedError when
  * this network is blocked, an Error on other failures.
  */
-export async function getRoom(roomId: string): Promise<RoomSummary | null> {
+export async function getRoom(
+  roomId: string,
+): Promise<(RoomSummary & { viewer?: RoomViewer | null }) | null> {
   const res = await fetch(roomInfoPath(roomId))
   if (res.status === 404) return null
   if (res.status === 403 && (await refusal(res))?.error === 'blocked') throw new BlockedError()
@@ -82,5 +85,6 @@ export async function getRoom(roomId: string): Promise<RoomSummary | null> {
   if (body.id !== roomId || typeof body.memberCount !== 'number') {
     throw new Error(`GET ${roomInfoPath(roomId)}: unexpected body`)
   }
-  return body as RoomSummary
+  // `viewer` (I2): this browser's account, when it is signed in
+  return body as RoomSummary & { viewer?: RoomViewer | null }
 }

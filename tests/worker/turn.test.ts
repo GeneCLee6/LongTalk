@@ -124,7 +124,7 @@ describe('TURN credentials', () => {
   it('answers 404 and 405 for other paths and methods', async () => {
     const t = setup()
     expect(
-      (await handleTurn(req(t.token, 'POST', '/api/turn/nope'), configured, t.deps)).status,
+      (await handleTurn(req(t.token, 'POST', '/api/turn/no_pe'), configured, t.deps)).status,
     ).toBe(404)
     const get = await handleTurn(req(t.token, 'GET'), configured, t.deps)
     expect(get.status).toBe(405)

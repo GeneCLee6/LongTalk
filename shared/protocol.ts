@@ -169,6 +169,8 @@
 //   `stopRecording`, `allowRecord`, notices `recordingStopped`, `recordAllowed`, `recordRevoked`.
 //   A v16 browser could not show that the room records, so it is refused like any older one.
 //   Also `RecordingInfo.consented`, `consent`, `lobby.recording`, close code `recordingDeclined`.
+// v17 → v18 (I2): `RoomInfo.persistent` (a personal persistent room, /r/<slug>: its ended screen
+//   offers to come back, the room is still there). Room keys may be slugs (shared/slug.ts).
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -181,7 +183,7 @@ import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 17
+export const PROTOCOL_VERSION = 18
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -297,6 +299,12 @@ export type RoomInfo = RoomInit & {
    * itself never leaves the room (only a digest is kept)
    */
   passwordSetAt: number | null
+  /**
+   * A personal persistent room (I2, e1-t13): it outlives its meetings, keeping its name, password,
+   * waiting room and lock. Who owns it is never sent (the room knows; the owner joins as host).
+   * Absent means false
+   */
+  persistent?: boolean
   /**
    * Who records the meeting now, by member id (I4, e8-t02): everyone sees it (the top bar's red
    * light, the pre-join notice), CLAUDE.md rule 4

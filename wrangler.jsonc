@@ -22,6 +22,16 @@
       { "name": "GUARD", "class_name": "GuardDO" }
     ]
   },
+  // Accounts, passkeys, sessions and persistent rooms (I2, e1-t12, e1-t13). Tables in migrations/,
+  // applied by the deploy workflow (`wrangler d1 migrations apply longtalk --remote`, DEPLOY.md §4)
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "longtalk",
+      "database_id": "603098a9-d685-4b7a-9911-55a629bd6882",
+      "migrations_dir": "migrations"
+    }
+  ],
   // Workers Analytics Engine (e11-t03): every accepted telemetry event, for ad-hoc SQL. Off until
   // the owner enables Analytics Engine on the account (a deploy with the binding fails with code
   // 10089 before that); then uncomment this and the preview's line below (DEPLOY.md §8). Optional:
@@ -59,6 +69,16 @@
           { "name": "GUARD", "class_name": "GuardDO" }
         ]
       },
+      // Every PR preview shares one database (accounts made by its e2e test delete themselves);
+      // preview.yml applies the migrations before each deploy. Never production's
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "longtalk-preview",
+          "database_id": "f50ae59d-26a1-425f-b39f-9910783281ee",
+          "migrations_dir": "migrations"
+        }
+      ],
       // "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "longtalk_events_preview" }],
       // Turnstile's public test keys (DEPLOY.md §11): an invisible widget that always passes and a
       // secret that always validates, so every preview runs the whole room-creation flow. Never

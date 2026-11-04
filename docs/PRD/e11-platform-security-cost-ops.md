@@ -42,6 +42,20 @@ depends_on: []
 - 複製淡江牌桌的 CI、效能預算腳本、`scripts/load/` 手法；不共用程式碼 repo。
 - `/admin` 只給擁有者帳號；儀表板資料從 Analytics Engine SQL API 讀。D3 的骨架改讀 `TelemetryDO` 的計數（不需要另外的 Cloudflare API token），帳號登入前以 Worker secret `ADMIN_TOKEN` 保護；Analytics Engine SQL 留給細查。
 
+### 帳號資料（I2，`e1-t12`、`e1-t13`；隱私權政策頁 `e11-t07` 照這張寫）
+
+帳號是選用的，只用通行密鑰（passkey）：**沒有 Email、沒有密碼、沒有電話**。D1（`migrations/0001_accounts.sql`）存的就是下面這些，沒有別的：
+
+| 資料 | 內容 | 保留多久 |
+| --- | --- | --- |
+| 帳號 | 隨機 id（也是 WebAuthn 的 user handle）、顯示名稱、建立時間 | 到使用者刪除帳號 |
+| 通行密鑰 | credential id、公鑰（不是私鑰：私鑰一直在使用者的裝置或密碼管理工具）、演算法、簽章計數器、transports、AAGUID（驗證器型號的公開 id，只用來在 `/me` 寫「iCloud 鑰匙圈」這類名字）、是否已同步、建立與上次使用時間 | 到使用者移除那把或刪除帳號 |
+| 登入的瀏覽器（session） | 隨機 id、token 的 SHA-256（不是 token）、建立、上次使用、到期時間；**不記 IP、不記瀏覽器或裝置** | 30 天沒用、登入後 90 天、登出、被「登出其他」或刪帳號時刪除；過期的在下一次有人登入時清掉 |
+| 登入用的 challenge | 隨機值、種類、（註冊時）準備給新帳號的 id 與名字 | 用掉就刪；沒用的 5 分鐘後過期，下一次有人要 challenge 時清掉 |
+| 固定會議室 | slug、擁有者帳號 id、建立時間（D1）；名稱、密碼的加鹽雜湊、等候室、鎖定（那間房的 RoomDO） | 到擁有者刪除那間房或帳號；會議本身的資料（成員、聊天、錄影狀態）在會議結束或空房 10 分鐘時清掉，和隨機會議室一樣 |
+
+**刪除帳號**（`/me`，`DELETE /api/account`）：先刪每一間固定會議室的 RoomDO 資料（正在裡面的人看到會議結束），再刪 D1 裡這個帳號的所有列（帳號、通行密鑰、session、challenge、固定會議室），這台瀏覽器同時登出；不留備份（D1 的每日備份是 I5，`e11-t08`，到時候備份的保留期要寫進這裡）。使用者裝置裡的通行密鑰網站刪不到：`/me` 提醒自己刪，Chrome 132+ 用那把登入時會收到 `signalUnknownCredential` 並移除。遙測（`TelemetryDO`）不記帳號 id。
+
 ## 驗收條件
 
 - [x] AC-11.1 — Workers（帶靜態資產）＋DO 部署；preview 與 production；合併 `main` 自動上線；`DEPLOY.md`。（2026-10-31 驗證：正式站 https://longtalk.genelee-pro.workers.dev 由 Deploy workflow 部署、smoke test 通過；PR 預覽見 #6）

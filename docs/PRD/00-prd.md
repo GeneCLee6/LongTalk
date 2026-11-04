@@ -227,7 +227,7 @@ AC 編號是 `AC-<epic>.<序號>`；勾選狀態與完整文字以各 epic 為�
       **A:** 2026-10-30 擁有者拍板：名稱是「LongTalk」，只用英文，不取中文名；標誌與介面都只寫「LongTalk」，標誌標語改英文「The meeting room that never cuts out」。中文候選名「長談」不用。
 - [ ] **Q:** 媒體層第一選擇 Cloudflare Realtime SFU，還是自架 LiveKit？（E2 `e2-t01` 決策紀錄）
       **A:** _(建議 Cloudflare Realtime，理由見 `ARCHITECTURE.md` §3；未拍板)_
-- [ ] **Q:** M1 的帳號要不要和淡江牌桌共用 Worker 與帳號系統？（E1 AC-1.6）
-      **A:** _(建議不共用：使用者群不同；但可複製程式碼)_
+- [x] **Q:** M1 的帳號要不要和淡江牌桌共用 Worker 與帳號系統？（E1 AC-1.6）
+      **A:** 不共用（I2 #38）：LongTalk 自己的 D1 與 Worker，登入只用 passkey（擁有者 2026-11-04 拍板），RP ID 是 LongTalk 自己的網域。
 - [ ] **Q:** AI 摘要用哪一家模型、金鑰由誰出？（E8 AC-8.5）
       **A:** _(unanswered)_

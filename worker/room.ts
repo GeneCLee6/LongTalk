@@ -15,6 +15,9 @@ import {
   RoomHost,
   type Ban,
   type OpenSocket,
+  type PersistentRecord,
+  type RoomSettings,
+  type SettingsChange,
   type SessionRecord,
   type SfuAccess,
   type SfuTrackRef,
@@ -26,6 +29,7 @@ import { USAGE_OBJECT } from './usage.ts'
 import { requestClientKey } from './client-key.ts'
 import { GUARD_OBJECT } from './guard.ts'
 import type { OffenceKind } from '../shared/abuse.ts'
+import { ACCOUNT_HEADER } from './session.ts'
 
 /**
  * What each hibernatable socket carries, so the connections survive the object waking up;
@@ -44,6 +48,8 @@ const BANS_KEY = 'bans'
 const PASSWORD_KEY = 'password'
 const GUESSES_KEY = 'guesses'
 const ENDED_KEY = 'ended'
+/** A personal persistent room's slug and owner (I2, e1-t13) */
+const PERSISTENT_KEY = 'persistent'
 /** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
 const CHAT_PREFIX = 'chat:'
 const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
@@ -100,7 +106,12 @@ export class RoomDO extends DurableObject<Env> {
         savePassword: (record) =>
           void (record === null ? storage.delete(PASSWORD_KEY) : storage.put(PASSWORD_KEY, record)),
         saveGuesses: (guesses) => void storage.put(GUESSES_KEY, guesses),
-        saveEnded: (until) => void storage.put(ENDED_KEY, until),
+        saveEnded: (until) =>
+          void (until === null ? storage.delete(ENDED_KEY) : storage.put(ENDED_KEY, until)),
+        savePersistent: (record) =>
+          void (record === null
+            ? storage.delete(PERSISTENT_KEY)
+            : storage.put(PERSISTENT_KEY, record)),
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -125,7 +136,7 @@ export class RoomDO extends DurableObject<Env> {
         storage.getAlarm(),
         storage.list<ChatMessage>({ prefix: CHAT_PREFIX }),
         storage.get<Ban[]>(BANS_KEY),
-        storage.get<unknown>([PASSWORD_KEY, GUESSES_KEY, ENDED_KEY]),
+        storage.get<unknown>([PASSWORD_KEY, GUESSES_KEY, ENDED_KEY, PERSISTENT_KEY]),
       ])
       const sockets = ctx
         .getWebSockets()
@@ -145,6 +156,7 @@ export class RoomDO extends DurableObject<Env> {
           password: (extras.get(PASSWORD_KEY) as PasswordRecord | undefined) ?? null,
           guesses: (extras.get(GUESSES_KEY) as GuessRecord[] | undefined) ?? [],
           endedUntil: (extras.get(ENDED_KEY) as number | undefined) ?? null,
+          persistent: (extras.get(PERSISTENT_KEY) as PersistentRecord | undefined) ?? null,
         },
       )
       // A room stored before C2 has no schedule: restore made one
@@ -159,9 +171,39 @@ export class RoomDO extends DurableObject<Env> {
     return created
   }
 
-  /** RPC from GET /api/rooms/<id>: null when there is no such room */
-  async summary(): Promise<RoomSummary | null> {
-    return this.host.summary()
+  /**
+   * RPC from GET /api/rooms/<id>: null when there is no such room. `account`: the signed-in
+   * account asking (I2), to say whether it owns this persistent room
+   */
+  async summary(account: string | null = null): Promise<(RoomSummary & { owner: boolean }) | null> {
+    return this.host.summary(account)
+  }
+
+  /** RPC from POST /api/account/rooms (I2, e1-t13): false when the slug's room exists */
+  async createPersistent(record: PersistentRecord, name: string | null): Promise<boolean> {
+    const created = this.host.createPersistent(record, name)
+    await this.syncAlarm()
+    return created
+  }
+
+  /** RPC from /me (I2): a persistent room's settings, null for any other room */
+  async settings(): Promise<RoomSettings | null> {
+    return this.host.settings()
+  }
+
+  /** RPC from PATCH /api/account/rooms/<slug> (I2): the owner changed the settings */
+  async updateSettings(change: SettingsChange): Promise<RoomSettings | null> {
+    const settings = await this.host.updateSettings(change)
+    await this.syncAlarm()
+    return settings
+  }
+
+  /** RPC from DELETE /api/account/rooms/<slug> and account deletion (I2): the room is gone */
+  async destroy(): Promise<void> {
+    this.host.destroy()
+    await this.ctx.storage.deleteAll()
+    await this.ctx.storage.deleteAlarm()
+    this.alarmAt = null
   }
 
   /** RPC from the SFU proxy (worker/sfu.ts) before every call */
@@ -203,15 +245,19 @@ export class RoomDO extends DurableObject<Env> {
       server.close(admission.code, admission.reason)
       return new Response(null, { status: 101, webSocket: client })
     }
+    // The account the Worker found signed in on this upgrade (I2): only the Worker can reach this
+    // object, and it always replaces the header with what it checked (worker/rooms.ts)
+    const account = request.headers.get(ACCOUNT_HEADER) || null
     const attachment: Attachment = {
       conn: crypto.randomUUID(),
       openedAt: Date.now(),
       ip,
       client: clientKey,
+      account,
     }
     this.ctx.acceptWebSocket(server, [attachment.conn])
     server.serializeAttachment(attachment)
-    this.host.opened(attachment.conn, ip)
+    this.host.opened(attachment.conn, ip, account)
     await this.syncAlarm()
     return new Response(null, { status: 101, webSocket: client })
   }

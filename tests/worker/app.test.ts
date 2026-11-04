@@ -151,10 +151,10 @@ describe('GET /api/rooms/:id', () => {
     const res = await handleRequest(new Request('https://x/api/rooms/abcdefghij'), e)
     expect(res.status).toBe(200)
     expect(res.headers.get('cache-control')).toBe('no-store')
-    expect(await res.json()).toEqual({ id: 'abcdefghij', createdAt: 1, memberCount: 2 })
+    expect(await res.json()).toEqual({ id: 'abcdefghij', createdAt: 1, memberCount: 2, viewer: null })
     const missing = await handleRequest(new Request('https://x/api/rooms/bbbbbbbbbb'), e)
     expect(missing.status).toBe(404)
-    const bad = await handleRequest(new Request('https://x/api/rooms/nope'), e)
+    const bad = await handleRequest(new Request('https://x/api/rooms/no_pe'), e)
     expect(bad.status).toBe(404)
   })
 
@@ -197,8 +197,8 @@ describe('GET /api/rooms/:id/ws', () => {
   it('refuses a path that cannot be a room without waking any object', async () => {
     const rooms = fakeRooms()
     for (const path of [
-      '/api/rooms/short/ws',
-      '/api/rooms/abcdefghi0/ws',
+      '/api/rooms/Short/ws',
+      '/api/rooms/abcdefghI0/ws',
       '/api/rooms/abcdefghij/other',
     ]) {
       const res = await handleRequest(

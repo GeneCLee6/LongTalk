@@ -38,6 +38,9 @@ const ENGINE_DIFFERENCES: Record<string, Partial<Record<Capability, string>>> = 
     // I4: Playwright's Linux WebKit (GTK) does not write any of src/record/format.ts' types;
     // Safari 14.1+ records MP4 (and WebM from 18.4). Real Safari: DEPLOY.md §5 step 25
     localRecording: "Playwright's Linux WebKit has no MediaRecorder format we record; Safari does",
+    // I2: Playwright's Linux WebKit (GTK) has no WebAuthn; Safari 13+ has passkeys (DEPLOY.md §5
+    // step 26)
+    passkeys: "Playwright's Linux WebKit has no WebAuthn; Safari does",
   },
 }
 
@@ -118,7 +121,7 @@ test('home page, and a room made from it', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: strings.tagline })).toBeVisible()
   // An invalid link is caught before anything is asked of the server
-  await page.getByRole('textbox', { name: strings.home.joinLabel }).fill('nope')
+  await page.getByRole('textbox', { name: strings.home.joinLabel }).fill('no pe')
   await page.getByRole('button', { name: strings.home.join, exact: true }).click()
   await expect(page.getByText(strings.home.joinInvalid)).toBeVisible()
   await page.getByRole('button', { name: strings.home.createRoom }).click()

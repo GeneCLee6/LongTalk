@@ -345,7 +345,7 @@ describe('SFU proxy: what it forwards', () => {
     ['POST', `${base}/sess-g/datachannels/new`],
     ['GET', '/api/sfu/apps'],
     ['POST', '/api/sfu/sessions'],
-    ['POST', '/api/sfu/not-a-room/sessions'],
+    ['POST', '/api/sfu/not_a_room/sessions'],
   ])('refuses %s %s, which is not on the allow-list', async (method, path) => {
     const t = setup({})
     const res = await handleSfu(req(method, path, t.gene.token), configured, t.deps)

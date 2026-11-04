@@ -19,6 +19,11 @@ export interface LeftScreenProps {
   /** The one question's answer, given at most once (the page sends it as telemetry) */
   onRate: (score: RatingScore) => void
   onRejoin: () => void
+  /**
+   * A persistent room's meeting ended (I2): the room is still there, so 重新加入 starts the next
+   * meeting
+   */
+  persistent?: boolean
   onHome: () => void
 }
 
@@ -27,10 +32,21 @@ export interface LeftScreenProps {
  * quality (1–5, nothing typed, nothing that identifies anyone), 「重新加入」 back through the
  * pre-join screen and 「回首頁」.
  */
-export function LeftScreen({ reason, roomName, onRate, onRejoin, onHome }: LeftScreenProps) {
+export function LeftScreen({
+  reason,
+  roomName,
+  onRate,
+  onRejoin,
+  onHome,
+  persistent = false,
+}: LeftScreenProps) {
   const [rated, setRated] = useState<RatingScore | null>(null)
-  // `declined` (I4): did not agree to the recording; joining again asks again
-  const closed = reason !== 'left' && reason !== 'declined'
+  // `declined` (I4): did not agree to the recording; joining again asks again. A persistent
+  // room (I2) outlives an ended meeting
+  const closed =
+    reason !== 'left' &&
+    reason !== 'declined' &&
+    !(persistent && (reason === 'ended' || reason === 'endedSelf'))
   const heading = {
     left: strings.left.title,
     closed: strings.left.closedTitle,

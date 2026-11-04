@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import styled from 'styled-components'
-import { parseRoomInput } from '../../shared/room-id.ts'
+import { parseRoomAddress } from '../../shared/slug.ts'
 import { createRoom, CreateRoomError, type CreateRoomProblem } from '../api/rooms.ts'
 import { Button } from '../components/Button.tsx'
 import { TextInput } from '../components/Field.tsx'
@@ -14,6 +14,7 @@ import { Logo } from '../components/Logo.tsx'
 import { useOnline } from '../pwa/online.ts'
 import { getLocale, strings } from '../strings.ts'
 import { breakpoint, color, font, fontSize, radius, space } from '../styles/tokens.ts'
+import { loadAccountHint } from '../room/session.ts'
 import { turnstileToken } from '../turnstile.ts'
 
 /** What went wrong creating a room (I1): the notice under the buttons */
@@ -48,6 +49,8 @@ export function HomePage() {
   const [joinInvalid, setJoinInvalid] = useState(false)
   // The shell opens offline (e4-t12); rooms need the network
   const online = useOnline()
+  // Signed in (I2)? Only a hint kept in this browser: /me asks the Worker
+  const [signedIn] = useState(() => loadAccountHint() !== null)
 
   /**
    * POST /api/rooms; when the server asks for Turnstile (I1), the widget's token and once more.
@@ -91,7 +94,7 @@ export function HomePage() {
 
   function onJoin(event: FormEvent) {
     event.preventDefault()
-    const roomId = parseRoomInput(joinInput)
+    const roomId = parseRoomAddress(joinInput)
     if (roomId) navigate(`/r/${roomId}`)
     else setJoinInvalid(true)
   }
@@ -103,6 +106,9 @@ export function HomePage() {
         <Preferences>
           <ThemeSelect />
           <LanguageSelect />
+          <AccountLink to="/me">
+            {signedIn ? strings.account.homeLinkSignedIn : strings.account.homeLink}
+          </AccountLink>
         </Preferences>
       </Top>
       <Hero>
@@ -242,6 +248,13 @@ const JoinForm = styled.form`
     flex: none;
     white-space: nowrap;
   }
+`
+
+/** 登入 or 我的帳號 (I2): accounts are optional, so a quiet link, not a button */
+const AccountLink = styled(Link)`
+  align-self: center;
+  color: ${color.primary};
+  font-weight: 600;
 `
 
 /** Turnstile's widget, when it asks for a click; takes no room while empty */

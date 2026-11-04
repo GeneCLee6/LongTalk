@@ -72,6 +72,12 @@ jobs:
         run: |
           npm ci
           CLOUDFLARE_ENV=preview APP_VERSION="$HEAD_SHA" npm run build
+          # Every preview shares the longtalk-preview D1 database (I2, DEPLOY.md §4): its tables
+          # first. Migrations only ever add, so previews of older branches keep working
+          # A deploy token without D1 permission cannot (DEPLOY.md §4 owner step): warn and go on,
+          # the tables already there keep serving
+          npx wrangler d1 migrations apply longtalk-preview --env preview --remote ||
+            echo "::warning::D1 migrations not applied: give CLOUDFLARE_API_TOKEN the D1 Edit permission, or apply them by hand (DEPLOY.md §4)"
           npx wrangler deploy --name "$WORKER" --var "APP_VERSION:$HEAD_SHA" --message "PR #$PR $HEAD_SHA" | tee deploy.log
           echo "url=$(grep -o 'https://[^ ]*workers.dev' deploy.log | head -1)" >> "$GITHUB_OUTPUT"
 
