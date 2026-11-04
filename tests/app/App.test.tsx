@@ -165,7 +165,7 @@ describe('home page', () => {
     visit('/')
     const box = screen.getByRole('textbox', { name: '會議室連結或代碼' })
     expect(screen.getByRole('button', { name: '加入' })).toBeDisabled()
-    fireEvent.change(box, { target: { value: 'hello' } })
+    fireEvent.change(box, { target: { value: 'hello world' } })
     fireEvent.click(screen.getByRole('button', { name: '加入' }))
     expect(screen.getByRole('alert')).toHaveTextContent('看不出這是哪一間房')
     expect(box).toHaveAttribute('aria-invalid', 'true')
@@ -335,7 +335,7 @@ describe('joining a room', () => {
 
   it('does not even look up a room id that cannot exist', async () => {
     const fetch = stubApi()
-    visit('/r/abc123')
+    visit('/r/Abc_123')
     expect(await screen.findByRole('alert')).toHaveTextContent('找不到這間會議室')
     expect(fetch).not.toHaveBeenCalled()
   })

@@ -6,6 +6,7 @@ import {
   canCopy,
   canMeasureLevel,
   canSuppressNoise,
+  canUsePasskeys,
   canShareAudio,
   canShareScreen,
   canWebShare,
@@ -61,6 +62,7 @@ function fullBrowser(): CapabilityEnv {
       captureStream() {}
     },
     indexedDB: {},
+    PublicKeyCredential: class {},
     onbeforeinstallprompt: null,
     navigator: {
       serviceWorker: {},
@@ -70,6 +72,7 @@ function fullBrowser(): CapabilityEnv {
       share() {},
       permissions: { query() {} },
       getBattery() {},
+      credentials: { create() {}, get() {} },
     },
   }
 }
@@ -89,6 +92,12 @@ describe('capabilities (e11-t04)', () => {
     expect(canSuppressNoise({ ...fullBrowser(), WebAssembly: undefined })).toBe(false)
     // SharedArrayBuffer (cross-origin isolation) is not asked for
     expect('SharedArrayBuffer' in fullBrowser()).toBe(false)
+  })
+
+  it('passkeys need PublicKeyCredential and navigator.credentials (I2)', () => {
+    expect(canUsePasskeys(fullBrowser())).toBe(true)
+    expect(canUsePasskeys({ ...fullBrowser(), PublicKeyCredential: undefined })).toBe(false)
+    expect(canUsePasskeys({ ...fullBrowser(), navigator: {} })).toBe(false)
   })
 
   it('finds nothing in an environment without browser APIs', () => {

@@ -9,6 +9,8 @@ import { useLocale } from './strings.ts'
 const RoomPage = lazy(() => import('./pages/RoomPage.tsx'))
 // The owner's dashboard (e11-t03): its own chunk, in neither the home nor the room page's JS
 const AdminPage = lazy(() => import('./pages/AdminPage.tsx'))
+// The account page (I2): its own chunk, with the WebAuthn code; accounts are optional
+const MePage = lazy(() => import('./pages/MePage.tsx'))
 
 export function App() {
   // Switching language (G1, e4-t15) re-renders everything from here down with the other
@@ -23,6 +25,7 @@ export function App() {
             <Route path="/" element={<HomePage />} />
             <Route path="/r/:roomId" element={<RoomPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/me" element={<MePage />} />
             <Route path="*" element={<HomePage />} />
           </Routes>
         </Suspense>

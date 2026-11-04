@@ -22,6 +22,10 @@ import {
 //   latter would otherwise be missing from the next meeting with no sign why).
 // - 更多's switches (G3): 音效 and 隱藏表情反應, in localStorage.
 // - the settings panel's media choices (H3): the microphone's processing and HD, in localStorage.
+// - whether this browser is signed in to an account (I2), and the account's name, in
+//   localStorage: only a hint for the home page's 「登入／我的帳號」 link, so it need not ask the
+//   Worker on every visit. The session itself is an HttpOnly cookie no script reads; /me and the
+//   pre-join screen hear the truth from the Worker.
 // Storage can be missing or throw (private mode, blocked cookies): then nothing is remembered.
 
 const NAME_KEY = 'longtalk.name'
@@ -31,6 +35,7 @@ const CLIENT_KEY = 'longtalk.client'
 const VIEW_KEY = 'longtalk.view'
 const PREFS_KEY = 'longtalk.prefs'
 const MEDIA_KEY = 'longtalk.media'
+const ACCOUNT_KEY = 'longtalk.account'
 const tokenKey = (roomId: string) => `longtalk.session.${roomId}`
 
 function storage(kind: 'localStorage' | 'sessionStorage'): Storage | null {
@@ -65,6 +70,19 @@ export function loadName(): string {
 
 export function saveName(name: string): void {
   write('localStorage', NAME_KEY, name)
+}
+
+/** The signed-in account's name as this browser last heard it (I2), or null: only a hint */
+export function loadAccountHint(): string | null {
+  return normalizeName(read('localStorage', ACCOUNT_KEY))
+}
+
+export function rememberAccountHint(name: string): void {
+  write('localStorage', ACCOUNT_KEY, name)
+}
+
+export function forgetAccountHint(): void {
+  write('localStorage', ACCOUNT_KEY, null)
 }
 
 /** The token this tab was given in the room, if it joined and did not leave */

@@ -40,7 +40,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await expect(page.getByRole('heading', { name: strings.tagline })).toBeVisible()
       await expectNoViolations(page, 'home')
       // An invalid link shows the field's error
-      await page.getByRole('textbox', { name: strings.home.joinLabel }).fill('nope')
+      await page.getByRole('textbox', { name: strings.home.joinLabel }).fill('no pe')
       await page.getByRole('button', { name: strings.home.join, exact: true }).click()
       await expect(page.getByText(strings.home.joinInvalid)).toBeVisible()
       await expectNoViolations(page, 'home with an error')
@@ -60,6 +60,39 @@ for (const scheme of ['light', 'dark'] as const) {
     })
   })
 }
+
+test('/me signed out and signed in (I2) has no axe violations', async ({ page }) => {
+  // A passkey for localhost from Chromium's virtual authenticator
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('WebAuthn.enable')
+  await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: {
+      protocol: 'ctap2',
+      transport: 'internal',
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      automaticPresenceSimulation: true,
+    },
+  })
+  await page.goto('/me')
+  await expect(page.getByRole('button', { name: strings.account.signIn })).toBeVisible()
+  await expectNoViolations(page, '/me signed out')
+  await page.getByRole('textbox', { name: strings.account.nameLabel }).fill('Ally')
+  await page.getByRole('button', { name: strings.account.signUp }).click()
+  await expect(page.getByText(strings.account.signedInAs('Ally'))).toBeVisible()
+  await page.getByRole('textbox', { name: strings.account.slugLabel }).fill(`ally-${Date.now()}`)
+  await page.getByRole('button', { name: strings.account.createRoom }).click()
+  await page.getByRole('button', { name: /^.+ 的設定$/ }).click()
+  await expectNoViolations(page, '/me signed in, with a room and its settings')
+  await page.getByRole('button', { name: strings.account.deleteAccount }).click()
+  await expectNoViolations(page, '/me delete confirmation')
+  await page
+    .getByRole('alertdialog')
+    .getByRole('button', { name: strings.account.deleteAccount })
+    .click()
+  await expect(page.getByRole('button', { name: strings.account.signIn })).toBeVisible()
+})
 
 test('the room, its panels, menus and dialogs have no axe violations', async ({
   page,

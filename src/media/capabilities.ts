@@ -78,6 +78,12 @@ export interface Capabilities {
    * Without it 更多 › 開始錄影 is grey and says why
    */
   localRecording: boolean
+  /**
+   * Passkeys (I2, e1-t12): PublicKeyCredential and navigator.credentials (only in secure
+   * contexts). Without them /me says this browser cannot sign in and accounts stay out of reach;
+   * everything else works without an account
+   */
+  passkeys: boolean
 }
 
 export type Capability = keyof Capabilities
@@ -103,6 +109,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'homeScreenHint',
   'battery',
   'localRecording',
+  'passkeys',
 ]
 
 /** Where detection looks: the browser's globals, or a stand-in in tests */
@@ -116,6 +123,7 @@ export interface CapabilityEnv {
   MediaRecorder?: unknown
   HTMLCanvasElement?: { prototype: object }
   indexedDB?: unknown
+  PublicKeyCredential?: unknown
   onbeforeinstallprompt?: unknown
   navigator?: {
     serviceWorker?: object | null
@@ -125,6 +133,7 @@ export interface CapabilityEnv {
     share?: unknown
     permissions?: object | null
     getBattery?: unknown
+    credentials?: object | null
   }
 }
 
@@ -273,6 +282,15 @@ export function canRecordLocally(env: CapabilityEnv = browser()): boolean {
   return pickMimeType((type) => isTypeSupported.call(recorder, type) === true, false) !== null
 }
 
+/** Whether this browser can make and use passkeys (I2): WebAuthn in a secure context */
+export function canUsePasskeys(env: CapabilityEnv = browser()): boolean {
+  return (
+    typeof env.PublicKeyCredential === 'function' &&
+    has(env.navigator?.credentials, 'create') &&
+    has(env.navigator?.credentials, 'get')
+  )
+}
+
 /** Everything at once (the doc's table, for this browser) */
 export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities {
   const devices = env.navigator?.mediaDevices
@@ -297,5 +315,6 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     homeScreenHint: hasHomeScreenHint(env),
     battery: canReadBattery(env),
     localRecording: canRecordLocally(env),
+    passkeys: canUsePasskeys(env),
   }
 }

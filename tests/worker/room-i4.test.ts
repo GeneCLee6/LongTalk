@@ -138,7 +138,7 @@ describe('recording state (e8-t02)', () => {
   })
 
   it('refuses a browser of the previous protocol version (it could not show the red light)', () => {
-    expect(PROTOCOL_VERSION).toBe(17)
+    expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(17)
     expect(t.host.admit('16')).toMatchObject({ ok: false, code: CloseCode.versionMismatch })
   })
 

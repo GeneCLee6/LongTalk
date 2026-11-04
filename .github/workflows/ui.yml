@@ -64,6 +64,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The local D1 database vite preview runs on gets the tables (I2: /me signs up and in)
+      - name: D1 tables
+        run: npx wrangler d1 migrations apply longtalk --local
+
       - name: axe and keyboard checks, advanced noise suppression, security headers and CSP, local recording in Chromium
         run: npx playwright test -c playwright.local.config.ts a11y.spec.ts noise.spec.ts security.spec.ts recording.spec.ts
 

@@ -46,6 +46,7 @@ const INFO = {
   waitingRoom: false,
   passwordSetAt: null,
   spotlight: null,
+  persistent: false,
   recordings: {},
 }
 

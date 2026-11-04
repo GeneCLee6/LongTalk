@@ -1,0 +1,31 @@
+{
+  "note": "Recorded from Playwright Chromium virtual authenticator (ctap2, internal), origin http://localhost:5179, RP ID localhost",
+  "origin": "http://localhost:5179",
+  "rpId": "localhost",
+  "registration": {
+    "id": "tkjzRUIsJJo4vQRhjghifB0TuveFEd4WLSI6uXnB4r0",
+    "rawId": "tkjzRUIsJJo4vQRhjghifB0TuveFEd4WLSI6uXnB4r0",
+    "type": "public-key",
+    "response": {
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiY21WbmFYTjBjbUYwYVc5dUxXTm9ZV3hzWlc1blpTMXlaV052Y21SbFpDRWgiLCJvcmlnaW4iOiJodHRwOi8vbG9jYWxob3N0OjUxNzkiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViBSZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2NFAAAAAQECAwQFBgcIAQIDBAUGBwgAILZI80VCLCSaOL0EYY4IYnwdE7r3hRHeFi0iOrl5weK9pAEBAycgBiFYIPw7DNVraSYSvyGeKLDxbRkYjIRL1UvQEcxpfhGKlkm_",
+      "transports": [
+        "internal"
+      ]
+    }
+  },
+  "authentication": {
+    "id": "tkjzRUIsJJo4vQRhjghifB0TuveFEd4WLSI6uXnB4r0",
+    "rawId": "tkjzRUIsJJo4vQRhjghifB0TuveFEd4WLSI6uXnB4r0",
+    "type": "public-key",
+    "response": {
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiWVhWMGFHVnVkR2xqWVhScGIyNHRZMmhoYkd4bGJtZGxMWEpsWTI5eVpHVmsiLCJvcmlnaW4iOiJodHRwOi8vbG9jYWxob3N0OjUxNzkiLCJjcm9zc09yaWdpbiI6ZmFsc2UsIm90aGVyX2tleXNfY2FuX2JlX2FkZGVkX2hlcmUiOiJkbyBub3QgY29tcGFyZSBjbGllbnREYXRhSlNPTiBhZ2FpbnN0IGEgdGVtcGxhdGUuIFNlZSBodHRwczovL2dvby5nbC95YWJQZXgifQ",
+      "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAg",
+      "signature": "C2ItOR62j8qaaY9B_EAldfJmyt7ovZXao8it2V0iZu8se2vp8olbJY0JRbvZhOD71OF8S0Znbhsq7aaqvR8JBA",
+      "userHandle": "cmVjb3JkZWQtdXNlci0wMQ"
+    }
+  },
+  "registrationChallenge": "cmVnaXN0cmF0aW9uLWNoYWxsZW5nZS1yZWNvcmRlZCEh",
+  "authenticationChallenge": "YXV0aGVudGljYXRpb24tY2hhbGxlbmdlLXJlY29yZGVk",
+  "userHandle": "cmVjb3JkZWQtdXNlci0wMQ"
+}

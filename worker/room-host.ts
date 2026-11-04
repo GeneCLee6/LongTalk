@@ -257,6 +257,7 @@ function restoredInfo(info: StoredRoomInfo): RoomInfo {
     locked: false,
     waitingRoom: false,
     passwordSetAt: null,
+    persistent: false,
     spotlight: null,
     // Rooms stored before v17 record nothing (I4)
     recordings: {},
@@ -555,6 +556,7 @@ export class RoomHost {
       locked: false,
       waitingRoom: false,
       passwordSetAt: null,
+      persistent: false,
       spotlight: null,
       recordings: {},
     }
@@ -575,11 +577,9 @@ export class RoomHost {
     this.persistent = record
     this.deps.storage.savePersistent?.(record)
     this.create({ id: record.slug, createdAt: record.createdAt })
-    if (name !== null) {
-      this.info = { ...this.info!, name }
-      this.deps.storage.saveRoom(this.info)
-      this.sent = this.view()
-    }
+    this.info = { ...this.info!, name, persistent: true }
+    this.deps.storage.saveRoom(this.info)
+    this.sent = this.view()
     return true
   }
 

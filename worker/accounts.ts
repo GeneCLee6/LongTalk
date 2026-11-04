@@ -160,7 +160,7 @@ function toResponse(reply: Reply): Response {
 async function route(c: Context): Promise<Reply> {
   const path = c.url.pathname.slice(ACCOUNT_API.length)
   const method = c.request.method
-  const sub = /^\/(passkeys|sessions|rooms)\/([^/]+)$/.exec(path)
+  const sub = path === '/passkeys/options' ? null : /^\/(passkeys|sessions|rooms)\/([^/]+)$/.exec(path)
   switch (`${method} ${sub ? `/${sub[1]}/:id` : path}`) {
     case 'GET ':
       return withAccount(c, () => me(c))

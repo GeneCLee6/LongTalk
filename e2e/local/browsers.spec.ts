@@ -118,7 +118,7 @@ test('home page, and a room made from it', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: strings.tagline })).toBeVisible()
   // An invalid link is caught before anything is asked of the server
-  await page.getByRole('textbox', { name: strings.home.joinLabel }).fill('nope')
+  await page.getByRole('textbox', { name: strings.home.joinLabel }).fill('no pe')
   await page.getByRole('button', { name: strings.home.join, exact: true }).click()
   await expect(page.getByText(strings.home.joinInvalid)).toBeVisible()
   await page.getByRole('button', { name: strings.home.createRoom }).click()
