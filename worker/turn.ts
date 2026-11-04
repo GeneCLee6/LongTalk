@@ -1,5 +1,5 @@
 import { isSessionToken } from '../shared/protocol.ts'
-import { isRoomId } from '../shared/room-id.ts'
+import { isRoomKey } from '../shared/slug.ts'
 import {
   STUN_SERVER,
   TURN_TTL_SECONDS,
@@ -90,7 +90,7 @@ export async function handleTurn(
   deps: TurnDeps,
 ): Promise<Response> {
   const match = PATH.exec(new URL(request.url).pathname)
-  if (!match || !isRoomId(match[1])) {
+  if (!match || !isRoomKey(match[1])) {
     return Response.json({ error: 'not_found' }, { status: 404, headers })
   }
   if (request.method !== 'POST') {

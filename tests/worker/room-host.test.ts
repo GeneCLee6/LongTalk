@@ -191,7 +191,7 @@ describe('RoomHost', () => {
     expect(t.host.create({ ...ROOM, createdAt: 2 })).toBe(false)
     expect(t.saved.room).toEqual(INFO)
     expect(t.host.view()).toEqual({ room: INFO, members: {}, waiting: {}, usage: 'normal' })
-    expect(t.host.summary()).toEqual({ ...INFO, memberCount: 0 })
+    expect(t.host.summary()).toEqual({ ...INFO, memberCount: 0, owner: false })
   })
 
   it('refuses sockets to a room that was never created, of another version, or when full', () => {

@@ -1,3 +1,4 @@
+import { ACCOUNT_API } from '../shared/account.ts'
 import type { HealthResponse } from '../shared/health.ts'
 import { ADMIN_BLOCKS_PATH } from '../shared/abuse.ts'
 import { EVENTS_PATH } from '../shared/telemetry.ts'
@@ -17,6 +18,7 @@ import type { GuardDO } from './guard-do.ts'
 import { GUARD_OBJECT } from './guard.ts'
 import { CSP_REPORT_PATH, withApiHeaders } from './headers.ts'
 import type { RoomDO } from './room.ts'
+import { handleAccount } from './accounts.ts'
 import { handleRooms } from './rooms.ts'
 import { handleSfu, type SfuEnv } from './sfu.ts'
 import { handleTurn, type TurnEnv } from './turn.ts'
@@ -35,6 +37,11 @@ export interface Env
   TELEMETRY: DurableObjectNamespace<TelemetryDO>
   /** One object for the whole deployment: room-creation limits, IP blocklist (e11-t05) */
   GUARD: DurableObjectNamespace<GuardDO>
+  /**
+   * Accounts, passkeys, sessions and persistent rooms (I2, migrations/). Optional so a
+   * deployment without it still serves rooms; /api/account then answers 503
+   */
+  DB?: D1Database
   // Set at deploy time (wrangler deploy --var APP_VERSION:<commit>)
   APP_VERSION?: string
 }
@@ -74,6 +81,7 @@ export function guardDeps(env: Pick<Env, 'GUARD'>): GuardDeps {
   const stub = () => env.GUARD.get(env.GUARD.idFromName(GUARD_OBJECT))
   return {
     create: (key) => stub().create(key),
+    limit: (kind, key) => stub().limit(kind, key),
     note: (key, kind) => stub().note(key, kind),
     blocked: () => stub().blocked(),
     block: (key, hours, note) => stub().block(key, hours, note),
@@ -112,6 +120,12 @@ async function handleApi(
     return handleRooms(request, env, url, {
       guard: guardDeps(env),
       waitUntil: (promise) => ctx?.waitUntil(promise),
+    })
+  }
+  if (url.pathname === ACCOUNT_API || url.pathname.startsWith(`${ACCOUNT_API}/`)) {
+    return handleAccount(request, env, url, {
+      guard: guardDeps(env),
+      room: (slug) => env.ROOM.get(env.ROOM.idFromName(slug)),
     })
   }
   if (url.pathname.startsWith('/api/sfu/')) {

@@ -668,6 +668,7 @@ export const en: Strings = {
         turnstile: 'failed check',
         connectLimit: 'too many connections',
         flood: 'too many messages',
+        accountLimit: 'too many accounts or sign-ins',
       },
       blockDay: 'Block for a day',
       blockKeyLabel: (key: string) => `Block ${key} for a day`,

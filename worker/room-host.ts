@@ -58,6 +58,7 @@ import {
 } from './password.ts'
 import { authorize, type Action } from './roles.ts'
 import { Scheduler, type Schedule } from './scheduler.ts'
+import type { PersistentRoomInfo } from '../shared/account.ts'
 
 /**
  * The server estimate counts at most this long between two flushes: the sweep flushes every
@@ -161,7 +162,30 @@ const SCREEN_KINDS: ReadonlySet<TrackKind> = new Set(['screen', 'screenAudio'])
  * A live socket the adapter found when it woke up. `ip`: its network address as
  * worker/password.ts addressKey keeps it (never the address itself), for the guess limit (F3)
  */
-export type OpenSocket = { conn: string; openedAt: number; ip?: string | null }
+export type OpenSocket = {
+  conn: string
+  openedAt: number
+  ip?: string | null
+  /** The account signed in on the upgrade (I2), as the Worker checked it; null for none */
+  account?: string | null
+}
+
+/**
+ * A personal persistent room (I2, e1-t13): its slug (also its id) and the account that owns it.
+ * Kept in the room's storage next to its settings; never sent to anyone.
+ */
+export type PersistentRecord = { slug: string; owner: string; createdAt: number }
+
+/** What the owner may change from /me (I2): `password` null clears it, a string sets it */
+export type SettingsChange = {
+  name?: string | null
+  waitingRoom?: boolean
+  locked?: boolean
+  password?: string | null
+}
+
+/** A persistent room's settings as /me lists them (shared/account.ts, without the slug's row) */
+export type RoomSettings = Omit<PersistentRoomInfo, 'slug' | 'createdAt'>
 
 /** What else survives the object being evicted (F3) */
 export type RestoreExtras = {
@@ -171,6 +195,8 @@ export type RestoreExtras = {
   guesses?: readonly GuessRecord[]
   /** Until when a meeting that was ended answers CloseCode.ended */
   endedUntil?: number | null
+  /** A personal persistent room's slug and owner (I2) */
+  persistent?: PersistentRecord | null
 }
 
 /** What survives the object being evicted */
@@ -192,8 +218,13 @@ export interface RoomStorage {
   savePassword(record: PasswordRecord | null): void
   /** Wrong password guesses still counting (F3), saved whenever they change */
   saveGuesses(guesses: GuessRecord[]): void
-  /** Until when an ended meeting answers CloseCode.ended (F3); saved after `clear` */
-  saveEnded(until: number): void
+  /** Until when an ended meeting answers CloseCode.ended (F3); saved after `clear`; null drops it */
+  saveEnded(until: number | null): void
+  /**
+   * A persistent room's slug and owner (I2), saved after `clear` too; null drops it. Optional:
+   * a room that is never persistent (tests) needs none
+   */
+  savePersistent?(record: PersistentRecord | null): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -261,6 +292,8 @@ type Connection = {
   ip: string | null
   /** Its `join` waits for the password check (F3): another `join` is refused meanwhile */
   joining: boolean
+  /** The account signed in when it opened (I2), null for none */
+  account: string | null
 }
 
 type Session = {
@@ -333,6 +366,8 @@ export class RoomHost {
   private guard = new PasswordGuard()
   /** Until when this ended meeting answers CloseCode.ended (F3); null otherwise */
   private endedUntil: number | null = null
+  /** A personal persistent room's slug and owner (I2, e1-t13); null for a random room */
+  private persistent: PersistentRecord | null = null
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -363,7 +398,9 @@ export class RoomHost {
       this.info = { ...this.info, passwordSetAt: null }
     }
     this.guard = new PasswordGuard(extras.guesses ?? [])
-    this.endedUntil = info ? null : (extras.endedUntil ?? null)
+    this.persistent = info ? (extras.persistent ?? null) : null
+    // A persistent room keeps its settings after a meeting ends, and the tombstone with them (I2)
+    this.endedUntil = info && !this.persistent ? null : (extras.endedUntil ?? null)
     this.rev = rev
     this.schedule = new Scheduler(schedule)
     this.storedSchedule = JSON.stringify(this.schedule)
@@ -386,13 +423,14 @@ export class RoomHost {
     this.reported = 0
     this.usage = usage?.state ?? 'normal'
     this.usageAt = usage?.at ?? this.deps.now()
-    for (const { conn, openedAt, ip } of sockets) {
+    for (const { conn, openedAt, ip, account } of sockets) {
       this.conns.set(conn, {
         member: null,
         openedAt,
         lastSeen: openedAt,
         ip: ip ?? null,
         joining: false,
+        account: account ?? null,
       })
     }
     for (const record of sessions) {
@@ -491,6 +529,84 @@ export class RoomHost {
     return true
   }
 
+  /**
+   * Called once by POST /api/account/rooms (I2, e1-t13): the room `slug` becomes `owner`'s, with
+   * its name. False when the slug's room already exists. A persistent room never closes: between
+   * meetings it keeps its settings (name, password, waiting room, lock) and nothing else.
+   */
+  createPersistent(record: PersistentRecord, name: string | null): boolean {
+    if (this.info || this.ended) return false
+    this.persistent = record
+    this.deps.storage.savePersistent?.(record)
+    this.create({ id: record.slug, createdAt: record.createdAt })
+    if (name !== null) {
+      this.info = { ...this.info!, name }
+      this.deps.storage.saveRoom(this.info)
+      this.sent = this.view()
+    }
+    return true
+  }
+
+  /** Whether this is a personal persistent room (I2) */
+  get isPersistent(): boolean {
+    return this.persistent !== null
+  }
+
+  /** Whether `account` owns this room (I2): always false for a random room */
+  ownedBy(account: string | null): boolean {
+    return account !== null && this.persistent?.owner === account
+  }
+
+  /** A persistent room's settings for /me (I2); null for a random room */
+  settings(): RoomSettings | null {
+    if (!this.persistent || !this.info) return null
+    return {
+      name: this.info.name,
+      waitingRoom: this.info.waitingRoom,
+      locked: this.info.locked,
+      password: this.info.passwordSetAt !== null,
+      memberCount: this.memberCount,
+    }
+  }
+
+  /**
+   * The owner changed the room's settings on /me (I2): like the host's own switches in the room,
+   * and everyone in it sees the change. The Worker checked the owner and the values. Turning the
+   * waiting room off admits everyone waiting, as it does in the room.
+   */
+  async updateSettings(change: SettingsChange): Promise<RoomSettings | null> {
+    if (!this.persistent || !this.info) return null
+    if (change.name !== undefined) {
+      this.info = { ...this.info, name: change.name }
+      this.deps.storage.saveRoom(this.info)
+      this.publish()
+    }
+    if (change.locked !== undefined && change.locked !== this.info.locked) {
+      this.setRoom({ locked: change.locked })
+    }
+    if (change.waitingRoom !== undefined && change.waitingRoom !== this.info.waitingRoom) {
+      this.setRoom({ waitingRoom: change.waitingRoom })
+      if (!change.waitingRoom) this.admitWaiting(this.waitingIds())
+    }
+    if (change.password !== undefined) await this.setPassword(change.password)
+    return this.settings()
+  }
+
+  /**
+   * The owner deleted the room, or their account (I2): everyone in it is sent away as when a
+   * meeting ends, and everything stored goes; the slug's room is simply not found from now on
+   */
+  destroy(): void {
+    if (!this.persistent) return
+    for (const id of [...this.conns.keys()]) {
+      this.deps.sockets.close(id, CloseCode.ended, 'ended')
+    }
+    this.conns.clear()
+    this.persistent = null
+    this.endedUntil = null
+    this.close()
+  }
+
   /** When the alarm should fire next (the earliest job), or null for no alarm */
   nextAlarm(): number | null {
     return this.schedule.next()
@@ -521,6 +637,10 @@ export class RoomHost {
         this.endedUntil = null
         this.deps.storage.clear()
         return result
+      } else if (job === 'ended') {
+        // A persistent room's tombstone ran out (I2): its settings stay
+        this.endedUntil = null
+        this.deps.storage.saveEnded(null)
       } else if (job === 'close' && this.info && !this.active) {
         this.close()
         result.closed = true
@@ -531,9 +651,15 @@ export class RoomHost {
     return result
   }
 
-  /** For GET /api/rooms/<id>; null when the room does not exist */
-  summary(): RoomSummary | null {
-    return this.info ? { ...this.info, memberCount: this.memberCount } : null
+  /**
+   * For GET /api/rooms/<id>; null when the room does not exist. `owner` (I2): whether the
+   * signed-in account asking owns this persistent room (its pre-join skips the lock, the
+   * password and the waiting room, which never apply to it)
+   */
+  summary(account: string | null = null): (RoomSummary & { owner: boolean }) | null {
+    return this.info
+      ? { ...this.info, memberCount: this.memberCount, owner: this.ownedBy(account) }
+      : null
   }
 
   /**
@@ -566,9 +692,16 @@ export class RoomHost {
    * An admitted socket is live; it has JOIN_TIMEOUT_MS to send `join`. `ip` is its network
    * address as worker/password.ts addressKey keeps it (null when unknown)
    */
-  opened(connId: string, ip: string | null = null): void {
+  opened(connId: string, ip: string | null = null, account: string | null = null): void {
     const now = this.deps.now()
-    this.conns.set(connId, { member: null, openedAt: now, lastSeen: now, ip, joining: false })
+    this.conns.set(connId, {
+      member: null,
+      openedAt: now,
+      lastSeen: now,
+      ip,
+      joining: false,
+      account,
+    })
     this.reschedule()
   }
 
@@ -1089,7 +1222,8 @@ export class RoomHost {
     this.conns.clear()
     this.close()
     // The tombstone (F3, e1-t17): a member whose connection had dropped comes back to 「主持人已
-    // 結束會議」, not to 「這間會議室已經關閉」. Persistent rooms keeping their settings is e1-t13.
+    // 結束會議」, not to 「這間會議室已經關閉」. A persistent room (I2, e1-t13) kept its
+    // settings in `close`: only a join with a token of this meeting is turned away (`join`).
     this.endedUntil = this.deps.now() + ENDED_TOMBSTONE_MS
     this.deps.storage.saveEnded(this.endedUntil)
     this.schedule.set('ended', this.endedUntil)
@@ -1423,9 +1557,17 @@ export class RoomHost {
   private join(connId: string, message: JoinMessage): void | Promise<void> {
     const { token, client } = message
     const known = token === null ? undefined : this.byToken.get(token)
-    if (!this.mayJoin(connId, client, known)) return
+    // A persistent room's owner (I2) is never kept out: no ban, lock, password or waiting room
+    const owner = this.ownerConn(connId)
+    // A persistent room outlives its meetings (I2): someone coming back with a token of the one
+    // the host just ended learns it ended, like in a random room's tombstone (F3)
+    if (!owner && this.persistent && this.ended && token !== null && known === undefined) {
+      this.refuse(connId, CloseCode.ended, 'ended')
+      return
+    }
+    if (!owner && !this.mayJoin(connId, client, known)) return
     const record = this.password
-    if (known !== undefined || record === null) {
+    if (owner || known !== undefined || record === null) {
       this.enter(connId, message, known)
       return
     }
@@ -1496,9 +1638,32 @@ export class RoomHost {
     return true
   }
 
+  /** Whether the account on this connection owns this persistent room (I2) */
+  private ownerConn(connId: string): boolean {
+    return this.ownedBy(this.conns.get(connId)?.account ?? null)
+  }
+
+  /**
+   * A persistent room's owner joined (I2, e1-t13): they are the host. Whoever was host becomes a
+   * co-host (as when a host hands over, F3) and is told; the owner may hand the role on again.
+   */
+  private ownerTakesHost(memberId: string): string[] {
+    const member = this.members.get(memberId)
+    if (!member || member.role === 'host') return []
+    const demoted: string[] = []
+    for (const other of [...this.members.values()]) {
+      if (other.role !== 'host') continue
+      this.setMember(other.id, { role: 'cohost' })
+      demoted.push(other.id)
+    }
+    this.setMember(memberId, { role: 'host' })
+    return demoted
+  }
+
   /** The `join` passed every check: the member it brings back (`known`), or a new one */
   private enter(connId: string, message: JoinMessage, known: string | undefined): void {
     const { name, client } = message
+    const owner = this.ownerConn(connId)
     let memberId: string
     if (known !== undefined) {
       memberId = known
@@ -1529,7 +1694,7 @@ export class RoomHost {
       const member: Member = {
         id: memberId,
         name,
-        role: this.info!.waitingRoom ? 'waiting' : 'participant',
+        role: this.info!.waitingRoom && !owner ? 'waiting' : 'participant',
         joinedAt: now,
         reconnecting: false,
         tracks: [],
@@ -1547,9 +1712,12 @@ export class RoomHost {
       this.byToken.set(newToken, memberId)
     }
     this.conns.get(connId)!.member = memberId
+    const demoted = owner ? this.ownerTakesHost(memberId) : []
     // Someone waiting gets its lobby from publish (updateLobbies), nothing else (F2)
     this.lobbies.delete(memberId)
     this.publish(new Set([connId]))
+    // After the patch, so the notice can name the owner
+    for (const id of demoted) this.notify(id, { t: 'notice', notice: 'madeCohost', by: memberId })
     if (!this.isWaiting(memberId)) this.welcome(connId, memberId)
   }
 
@@ -1671,6 +1839,9 @@ export class RoomHost {
     if (this.active) {
       this.schedule.ensure('sweep', now + SWEEP_INTERVAL_MS)
       this.schedule.clear('close')
+    } else if (this.persistent && this.idle) {
+      // A persistent room between meetings (I2): nothing to clear, so nothing to close
+      this.schedule.clear('close')
     } else {
       this.schedule.ensure('close', now + EMPTY_ROOM_TTL_MS)
     }
@@ -1709,10 +1880,28 @@ export class RoomHost {
   }
 
   /**
+   * A persistent room with nothing of a meeting left (I2): nobody has joined since its last
+   * meeting closed, and no chat or ban is left over
+   */
+  private get idle(): boolean {
+    return (
+      this.info?.startedAt === null &&
+      this.chat.length === 0 &&
+      this.bans.size === 0 &&
+      this.members.size === 0
+    )
+  }
+
+  /**
    * The room is gone with everything stored: nobody came back for EMPTY_ROOM_TTL_MS, or the host
-   * ended the meeting
+   * ended the meeting. A persistent room (I2, e1-t13) only loses the meeting: members, chat,
+   * bans, guesses, shares, the spotlight; it keeps its name, password, waiting room and lock.
    */
   private close(): void {
+    const kept =
+      this.persistent && this.info
+        ? { persistent: this.persistent, info: this.info, password: this.password }
+        : null
     this.info = null
     this.rev = 0
     this.sent = null
@@ -1735,6 +1924,23 @@ export class RoomHost {
     this.schedule.clearAll()
     this.storedSchedule = '{}'
     this.deps.storage.clear()
+    if (kept) {
+      this.persistent = kept.persistent
+      this.info = {
+        ...kept.info,
+        createdBy: null,
+        startedAt: null,
+        shares: {},
+        spotlight: null,
+      }
+      this.password = kept.password
+      this.deps.storage.savePersistent?.(this.persistent)
+      this.deps.storage.saveRoom(this.info)
+      if (this.password) this.deps.storage.savePassword(this.password)
+      this.sent = this.view()
+    } else {
+      this.persistent = null
+    }
   }
 
   /**

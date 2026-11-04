@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
-import type { AbuseSummary, BlockEntry, OffenceKind } from '../shared/abuse.ts'
+import type { AbuseSummary, BlockEntry, LimitKind, OffenceKind } from '../shared/abuse.ts'
 import type { Env } from './app.ts'
 import { GuardStore, type CreateDecision } from './guard.ts'
 
@@ -21,6 +21,11 @@ export class GuardDO extends DurableObject<Env> {
 
   async create(key: string): Promise<CreateDecision> {
     return this.store!.create(key, Date.now())
+  }
+
+  /** Accounts and sign-ins per network (I2), like `create` */
+  async limit(kind: LimitKind, key: string): Promise<CreateDecision> {
+    return this.store!.limit(kind, key, Date.now())
   }
 
   async note(key: string, kind: OffenceKind): Promise<void> {

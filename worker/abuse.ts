@@ -3,6 +3,7 @@ import {
   takeFromWindows,
   type AbuseSummary,
   type BlockEntry,
+  type LimitKind,
   type OffenceKind,
 } from '../shared/abuse.ts'
 import type { CreateDecision } from './guard.ts'
@@ -13,6 +14,8 @@ import type { CreateDecision } from './guard.ts'
 /** What the Worker asks of GuardDO (RPC; a fake in tests) */
 export interface GuardDeps {
   create(key: string): Promise<CreateDecision>
+  /** Accounts made and sign-ins started per network (I2) */
+  limit(kind: LimitKind, key: string): Promise<CreateDecision>
   note(key: string, kind: OffenceKind): Promise<void>
   blocked(): Promise<string[]>
   block(key: string, hours: number, note: string): Promise<BlockEntry>

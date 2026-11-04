@@ -658,6 +658,7 @@ export const zhTW = {
         turnstile: '驗證沒過',
         connectLimit: '連線太多',
         flood: '訊息太多',
+        accountLimit: '帳號或登入太多',
       },
       blockDay: '封鎖 1 天',
       blockKeyLabel: (key: string) => `封鎖 ${key} 1 天`,

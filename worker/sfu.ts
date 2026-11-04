@@ -1,5 +1,5 @@
 import { isSessionToken, isSfuId } from '../shared/protocol.ts'
-import { isRoomId } from '../shared/room-id.ts'
+import { isRoomKey } from '../shared/slug.ts'
 import type { SfuProxyError, TracksRequest } from '../shared/sfu.ts'
 import { isVideoKind, type UsageState } from '../shared/usage.ts'
 import type { SfuAccess, SfuTrackRef } from './room-host.ts'
@@ -172,7 +172,7 @@ function bearer(request: Request): string | null {
  */
 export async function handleSfu(request: Request, env: SfuEnv, deps: SfuDeps): Promise<Response> {
   const match = PATH.exec(new URL(request.url).pathname)
-  if (!match || !isRoomId(match[1])) return fail('not_found')
+  if (!match || !isRoomKey(match[1])) return fail('not_found')
   const roomId = match[1]
   const sessionId = match[2] ?? null
   let route: Route | undefined

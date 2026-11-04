@@ -15,6 +15,32 @@ export const ROOM_CREATE_LIMITS: readonly RateWindow[] = [
 ]
 
 /**
+ * Accounts one network may make (I2, POST /api/account/register/options): a family or an office
+ * signing up together is fine, a script is not. Counted in GuardDO like rooms.
+ */
+export const ACCOUNT_CREATE_LIMITS: readonly RateWindow[] = [
+  { count: 5, windowMs: 60 * 60_000 },
+  { count: 20, windowMs: 24 * 60 * 60_000 },
+]
+
+/** Sign-in attempts one network may start (I2, POST /api/account/login/options) */
+export const SIGNIN_LIMITS: readonly RateWindow[] = [
+  { count: 30, windowMs: 10 * 60_000 },
+  { count: 300, windowMs: 24 * 60 * 60_000 },
+]
+
+/**
+ * What GuardDO counts per network (GuardStore.limit): rooms made (`create`, random rooms and
+ * persistent ones alike), accounts made, sign-ins started
+ */
+export type LimitKind = 'create' | 'register' | 'signin'
+export const LIMITS: Readonly<Record<LimitKind, readonly RateWindow[]>> = {
+  create: ROOM_CREATE_LIMITS,
+  register: ACCOUNT_CREATE_LIMITS,
+  signin: SIGNIN_LIMITS,
+}
+
+/**
  * WebSocket upgrades one network may make into one room (RoomDO): a whole office joining at
  * once and reconnecting stays under it; a reconnect loop or a socket flood does not
  */
@@ -45,12 +71,13 @@ export const MAX_OFFENDERS = 50
 export const MAX_BLOCK_NOTE_CHARS = 80
 
 /** What a client did that counted against it */
-export type OffenceKind = 'createLimit' | 'turnstile' | 'connectLimit' | 'flood'
+export type OffenceKind = 'createLimit' | 'turnstile' | 'connectLimit' | 'flood' | 'accountLimit'
 export const OFFENCE_KINDS: readonly OffenceKind[] = [
   'createLimit',
   'turnstile',
   'connectLimit',
   'flood',
+  'accountLimit',
 ]
 
 /** One blocked network: its key (a hash), until when, and the owner's note */
