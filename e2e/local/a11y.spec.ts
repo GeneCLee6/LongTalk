@@ -107,6 +107,15 @@ test('the room, its panels, menus and dialogs have no axe violations', async ({
   await page.keyboard.press('Escape')
   await expect(settings).toHaveCount(0)
 
+  // 更多 › 開始錄影… (I4): 錄影設定, then cancelled (recording itself: recording.spec.ts)
+  await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
+  await page.getByRole('menuitem', { name: strings.record.start }).click()
+  const record = page.getByRole('dialog', { name: strings.record.dialogTitle })
+  await expect(record).toBeVisible()
+  await expectNoViolations(page, 'recording settings')
+  await page.keyboard.press('Escape')
+  await expect(record).toHaveCount(0)
+
   // 更多 › 連線統計 (H2): no Realtime SFU here, so it says it is collecting
   await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
   await page.getByRole('menuitem', { name: strings.stats.menu }).click()

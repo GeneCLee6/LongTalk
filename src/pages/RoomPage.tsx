@@ -19,10 +19,12 @@ import {
   type HostMemberAction,
   type Member,
   type NoticeMessage,
+  type RecordingInfo,
   type RoomInfo,
   type Role,
   type WaitingEntry,
   MAX_SHARES,
+  recordingOrder,
   shareOrder,
 } from '../../shared/protocol.ts'
 import { normalizePassword } from '../../shared/password.ts'
@@ -59,7 +61,13 @@ import { MemberAudio } from '../components/MemberAudio.tsx'
 import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
 import { OfflineScreen } from '../components/OfflineScreen.tsx'
-import { ParticipantsPanel, type RoleChange } from '../components/ParticipantsPanel.tsx'
+import {
+  ParticipantsPanel,
+  type RecordAction,
+  type RoleChange,
+} from '../components/ParticipantsPanel.tsx'
+import { RecordingConsentDialog } from '../components/RecordingConsentDialog.tsx'
+import { RecordingRecovery } from '../components/RecordingRecovery.tsx'
 import { PreJoin, type PasswordFieldProps } from '../components/PreJoin.tsx'
 import type { PermissionGuideProps } from '../components/PermissionGuide.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
@@ -84,6 +92,7 @@ import { VideoDemandContext } from '../components/useVideoDemand.ts'
 import {
   audioProcessingSupport,
   canChooseSpeaker,
+  canRecordLocally,
   canShareScreen,
   canSuppressNoise,
   canWebShare,
@@ -148,6 +157,14 @@ import {
 } from '../room/roomPassword.ts'
 import { useKnownPassword } from '../room/useKnownPassword.ts'
 import { useSpeaking } from '../room/useSpeaking.ts'
+import {
+  loadRecordingSettings,
+  saveRecordingSettings,
+  useLocalRecording,
+  type RecordingEvent,
+} from '../room/useLocalRecording.ts'
+import { pickMimeType, type RecordingSettings } from '../record/format.ts'
+import { EMPTY_SCENE, type Scene } from '../record/scene.ts'
 import { useTransportFactory } from '../room/transportContext.ts'
 import { telemetry } from '../telemetry.ts'
 import { useAnnouncer } from '../components/LiveAnnouncer.tsx'
@@ -165,6 +182,11 @@ export interface JoinChoices {
   password: string | null
   /** 純音訊模式 from the start (H3, e6-t04): chosen in the pre-join screen's 設定 */
   audioOnly?: boolean
+  /**
+   * The recordings (by recorder id) the pre-join screen asked about and we agreed to (I4,
+   * CLAUDE.md rule 4): the room sends our `consent` for them at once instead of asking again
+   */
+  recordingAgreed?: string[]
 }
 
 /**
@@ -207,14 +229,15 @@ type Stage =
  * `left`: pressed 「離開」; `closed`: the room was gone when we came back to it; `ended`, `removed`:
  * the host ended the meeting or removed us (F1)
  */
-export type LeftReason = 'left' | 'closed' | 'ended' | 'endedSelf' | 'removed'
+export type LeftReason = 'left' | 'closed' | 'ended' | 'endedSelf' | 'removed' | 'declined'
 
 const isLeftReason = (reason: LeftReason | TurnedAwayReason): reason is LeftReason =>
   reason === 'left' ||
   reason === 'closed' ||
   reason === 'ended' ||
   reason === 'endedSelf' ||
-  reason === 'removed'
+  reason === 'removed' ||
+  reason === 'declined'
 
 function RoomEntry({ roomId }: { roomId: string }) {
   const navigate = useNavigate()
@@ -296,10 +319,18 @@ type Summary =
       memberCount: null
       waitingRoom: false
       password: false
+      recorders: readonly string[]
     }
-  | { status: 'ok'; memberCount: number; waitingRoom: boolean; password: boolean }
+  | {
+      status: 'ok'
+      memberCount: number
+      waitingRoom: boolean
+      password: boolean
+      /** Who records the meeting (I4): the pre-join screen says so and asks */
+      recorders: readonly string[]
+    }
 
-const NONE = { memberCount: null, waitingRoom: false, password: false } as const
+const NONE = { memberCount: null, waitingRoom: false, password: false, recorders: [] } as const
 const LOADING: Summary = { status: 'loading', ...NONE }
 
 /**
@@ -349,6 +380,8 @@ function PreJoinGate({
                   waitingRoom: !!room.waitingRoom,
                   // A room from before v11 has no password time: none
                   password: room.passwordSetAt != null,
+                  // ... before v17 no recordings
+                  recorders: Object.values(room.recordings ?? {}).map(recordingKey),
                 },
         )
       },
@@ -380,7 +413,15 @@ function PreJoinGate({
         />
       )
     default:
-      return <PreJoinScreen roomId={roomId} summary={summary} problem={problem} onJoin={onJoin} />
+      return (
+        <PreJoinScreen
+          roomId={roomId}
+          summary={summary}
+          problem={problem}
+          onJoin={onJoin}
+          onHome={onHome}
+        />
+      )
   }
 }
 
@@ -389,15 +430,20 @@ function PreJoinScreen({
   summary,
   problem,
   onJoin,
+  onHome,
 }: {
   roomId: string
   summary: Summary
   problem: PasswordProblem | null
   onJoin: (choices: JoinChoices) => void
+  onHome: () => void
 }) {
   const [name, setName] = useState(loadName)
   const [mic, setMic] = useState(true)
   const [cam, setCam] = useState(true)
+  // The recording question (I4): asked here when the room is being recorded
+  const recorders = summary.status === 'ok' ? summary.recorders : []
+  const [recordingAgreed, setRecordingAgreed] = useState(false)
   // What was picked (remembered in localStorage) and where those devices are now (G1): a
   // remembered device with a new id is found by its label; an unplugged one falls back to the
   // browser's default meanwhile, and stays remembered
@@ -409,8 +455,7 @@ function PreJoinScreen({
   const [audioOnly, setAudioOnly] = useState(false)
   const [processingSupported] = useState(audioProcessingSupport)
   const [noiseSupported] = useState(canSuppressNoise)
-  const advancedNoise =
-    noiseSupported && mediaSettings.advancedNoise && !mediaSettings.powerSaving
+  const advancedNoise = noiseSupported && mediaSettings.advancedNoise && !mediaSettings.powerSaving
   const previewProcessing = useMemo(
     () => micProcessing(mediaSettings.processing, advancedNoise),
     [mediaSettings.processing, advancedNoise],
@@ -482,6 +527,10 @@ function PreJoinScreen({
         memberCount={summary.memberCount}
         roomNotice={summary.status === 'error' ? strings.prejoin.loadFailed : null}
         waitingRoom={summary.waitingRoom}
+        recording={recorders.length > 0}
+        recordingAgreed={recordingAgreed}
+        onRecordingAgreed={setRecordingAgreed}
+        onHome={onHome}
         speakerTest={
           speakerSupported ? { playing: speakerTest.playing, onToggle: speakerTest.toggle } : null
         }
@@ -518,7 +567,15 @@ function PreJoinScreen({
             saveDevice(kind, now, labels[kind] ?? '')
             devices[kind] = now
           }
-          onJoin({ name: normalized, mic, cam, devices, password, audioOnly })
+          onJoin({
+            name: normalized,
+            mic,
+            cam,
+            devices,
+            password,
+            audioOnly,
+            recordingAgreed: recordingAgreed ? [...recorders] : [],
+          })
         }}
       />
     </>
@@ -645,7 +702,8 @@ function Room({
     state.status === 'ended' ||
     state.status === 'locked' ||
     state.status === 'denied' ||
-    state.status === 'waitExpired'
+    state.status === 'waitExpired' ||
+    state.status === 'recordingDeclined'
       ? state.status
       : null
   // Whether the room ever welcomed this tab: a room that is gone after that closed while we were
@@ -666,7 +724,14 @@ function Room({
   const endingSelf = useRef(false)
   const onOutcome = useEffectEvent((reason: NonNullable<typeof outcome>) => {
     clearSession(roomId)
-    onLeft(reason === 'ended' && endingSelf.current ? 'endedSelf' : reason, title)
+    onLeft(
+      reason === 'ended' && endingSelf.current
+        ? 'endedSelf'
+        : reason === 'recordingDeclined'
+          ? 'declined'
+          : reason,
+      title,
+    )
   })
   useEffect(() => {
     if (outcome) onOutcome(outcome)
@@ -846,6 +911,83 @@ function Room({
         ]
       : []),
   ]
+  // Local recording (I4: e8-t01 – e8-t03). RoomDO decides who records and everyone sees it
+  // (CLAUDE.md rules 1 and 4); the recorder itself is lazy (src/record/). It reads the scene the
+  // page keeps up to date below, on every frame.
+  const roomRecordings = state.view?.room.recordings
+  const recorders = recordingOrder(roomRecordings)
+  const recordingScene = useRef<Scene>(EMPTY_SCENE)
+  const onRecordingEvent = (event: RecordingEvent) => {
+    switch (event.type) {
+      case 'started':
+        show(strings.record.started)
+        return
+      case 'saved':
+        if (event.saved.bytes === 0) show(strings.record.empty, 'warn')
+        else if (event.problem === 'storage') show(strings.record.storageFull, 'warn')
+        else if (event.problem === 'failed') show(strings.record.failed, 'warn')
+        else show(strings.record.saved(event.saved.fileName))
+        return
+      case 'startFailed':
+        show(strings.record.startFailed, 'warn')
+        return
+      case 'forbidden':
+        // The room's refusal is already said (onError: strings.participants.forbidden)
+        return
+    }
+  }
+  const recording = useLocalRecording({
+    roomId,
+    roomName: title,
+    you: state.you,
+    recordings: state.view ? (roomRecordings ?? {}) : undefined,
+    send,
+    onError,
+    getScene: () => recordingScene.current,
+    powerSaving,
+    notify: onRecordingEvent,
+  })
+  const [recordSupported] = useState(canRecordLocally)
+  const [recordDialog, setRecordDialog] = useState(false)
+  const [recordSettings, setRecordSettings] = useState<RecordingSettings>(loadRecordingSettings)
+  const onStartRecording = (settings: RecordingSettings) => {
+    setRecordDialog(false)
+    setRecordSettings(settings)
+    saveRecordingSettings(settings)
+    recording.start(settings)
+    // A long recording needs room: say so when the device is nearly full (it still starts)
+    void navigator.storage
+      ?.estimate?.()
+      .then(({ quota, usage: used }) => {
+        if (quota !== undefined && used !== undefined && quota - used < LOW_STORAGE_BYTES) {
+          show(strings.record.lowStorage, 'warn')
+        }
+      })
+      .catch(() => {})
+  }
+  const weRecord =
+    recording.phase === 'starting' ||
+    recording.phase === 'recording' ||
+    recording.phase === 'saving'
+  // The recording question (CLAUDE.md rule 4 「明確同意」): RoomDO keeps who agreed to each
+  // recording; until we have, the room is blocked by the question. What the pre-join screen
+  // asked about and we agreed to is sent at once (recordingAgreed)
+  const unanswered =
+    state.view !== null && !waiting
+      ? recorders.filter(
+          (entry) =>
+            entry.memberId !== state.you && !(entry.consented ?? []).includes(state.you ?? ''),
+        )
+      : []
+  const agreedBefore = choices.recordingAgreed ?? []
+  const coveredByPrejoin =
+    unanswered.length > 0 && unanswered.every((entry) => agreedBefore.includes(recordingKey(entry)))
+  const consentAsked = unanswered.length > 0 && !coveredByPrejoin
+  const unansweredKey = unanswered.map(recordingKey).join(',')
+  useEffect(() => {
+    if (coveredByPrejoin) send({ t: 'consent' })
+  }, [coveredByPrejoin, unansweredKey, send])
+  const consentNames = unanswered.map((entry) => state.view?.members[entry.memberId]?.name ?? '')
   const [webShare] = useState(canWebShare)
   const [screenShareSupported] = useState(canShareScreen)
   const link = roomUrl(roomId)
@@ -887,6 +1029,30 @@ function Room({
     ...(can(role, 'renameRoom')
       ? [{ id: 'rename-room', label: strings.rename.room, onSelect: () => setRenaming('room') }]
       : []),
+    // 開始錄影 for who may record (the host, or someone the host allowed; RoomDO checks again);
+    // grey where the browser cannot (e8-t03). 停止錄影 while we record.
+    ...(weRecord || recording.phase === 'claiming'
+      ? [
+          {
+            id: 'record-stop',
+            label: strings.record.stop,
+            section: strings.record.section,
+            disabled: recording.phase === 'saving',
+            onSelect: recording.stop,
+          },
+        ]
+      : can(role, 'record') || self?.mayRecord === true
+        ? [
+            {
+              id: 'record',
+              label: strings.record.start,
+              section: strings.record.section,
+              disabled: !recordSupported,
+              hint: recordSupported ? undefined : strings.record.unavailable,
+              onSelect: () => setRecordDialog(true),
+            },
+          ]
+        : []),
     ...viewItems,
     {
       id: 'sounds',
@@ -1068,6 +1234,7 @@ function Room({
   })
   const usage = state.view?.usage ?? 'normal'
   useUsageNotices(usage, media.videoRefused, show)
+  useRecordingStoppedNotice(recorders, state.you, memberName, show)
   // 純音訊模式 (e6-t04), whoever turns it on (the settings, H2's adaptation): the camera device
   // goes off with it (its light too) and comes back when it ends, if it was on
   const audioOnly = media.audioOnly
@@ -1137,6 +1304,16 @@ function Room({
       case 'handLowered':
         show(strings.hostNotice.handLowered(who))
         return
+      // I4 (e8-t02): the recorder's browser stops and saves on its own (useLocalRecording)
+      case 'recordingStopped':
+        show(strings.hostNotice.recordingStopped(who), 'warn')
+        return
+      case 'recordAllowed':
+        show(strings.hostNotice.recordAllowed(who))
+        return
+      case 'recordRevoked':
+        show(strings.hostNotice.recordRevoked(who))
+        return
     }
   })
   useEffect(() => onHostControl((notice) => onHostNotice(notice)), [onHostControl])
@@ -1149,6 +1326,17 @@ function Room({
     if (action === 'lowerHand') {
       show(strings.reactions.lowered(viewMembers?.[memberId]?.name ?? ''))
     }
+  }
+  // Recording (I4): the host stops someone's, or allows them to record; RoomDO decides
+  const onRecordAction = (action: RecordAction, memberId: string) => {
+    const name = viewMembers?.[memberId]?.name ?? ''
+    if (action === 'stop') {
+      send({ t: 'host', action: 'stopRecording', memberId })
+      show(strings.record.stoppedTheirs(name))
+      return
+    }
+    send({ t: 'host', action: 'allowRecord', memberId, on: action === 'allow' })
+    show(action === 'allow' ? strings.record.allowedNow(name) : strings.record.revokedNow(name))
   }
   const onMuteAll = () => {
     send({ t: 'host', action: 'muteAll' })
@@ -1319,7 +1507,8 @@ function Room({
   const announcer = useAnnouncer()
   const { announce } = announcer
   const talking = useRoomShortcuts({
-    enabled: inRoom,
+    // Not while the recording question blocks the room (I4)
+    enabled: inRoom && !consentAsked,
     micOn: local.mic.on,
     micBusy,
     setMic: (on) => void devices?.setOn('mic', on),
@@ -1401,6 +1590,70 @@ function Room({
       onSelect: () => setSettingsOpen(true),
     },
   ]
+
+  // What a recording made here shows (I4, e8-t01): our stage's people and layout, the share in
+  // our main area (ours too: the others see it), and every sound we hear plus our microphone.
+  // The recorder reads it on each frame; it is only built while we record.
+  const buildScene = (): Scene => {
+    const received = (track: { sessionId: string; trackName: string } | undefined) =>
+      (track && media.received[trackKey(track)]?.track) || null
+    const byId = new Map(members.map((member) => [member.id, member]))
+    const mainShare = shareSlots(sharerIds, null, chosenShare).main
+    const sharer = mainShare === null ? undefined : byId.get(mainShare)
+    const ids = sharer ? focusFirst(shown.ids, focus) : shown.ids
+    // Who has not agreed to our recording yet (CLAUDE.md rule 4): their tile shows only their
+    // initial, their screen and sound are left out, until RoomDO lists their consent
+    const agreed = new Set(state.you ? (roomRecordings?.[state.you]?.consented ?? []) : [])
+    const excluded = (id: string) => id !== state.you && !agreed.has(id)
+    return {
+      tiles: ids.flatMap((id) => {
+        const member = byId.get(id)
+        if (!member) return []
+        const you = member.id === state.you
+        const mic = member.tracks.find((t) => t.kind === 'mic')
+        return [
+          {
+            id: member.id,
+            name: member.name,
+            video: excluded(member.id) ? null : videoOf(member),
+            micMuted: you ? micSending === null : excluded(member.id) || (mic?.muted ?? true),
+            you,
+          },
+        ]
+      }),
+      share: sharer
+        ? {
+            id: sharer.id,
+            name: sharer.name,
+            video:
+              sharer.id === state.you
+                ? sharingScreen
+                : excluded(sharer.id)
+                  ? null
+                  : received(sharer.tracks.find((t) => t.kind === 'screen')),
+          }
+        : null,
+      layout: stageLayout(view.layout, null, focus) === 'speaker' ? 'speaker' : 'grid',
+      focus: focus?.id ?? null,
+      audio: [
+        ...members.flatMap((member) => {
+          if (member.id === state.you || excluded(member.id)) return []
+          const mic = member.tracks.find((t) => t.kind === 'mic' && !t.muted)
+          const screenAudio = sharerIds.includes(member.id)
+            ? member.tracks.find((t) => t.kind === 'screenAudio')
+            : undefined
+          return [received(mic), received(screenAudio)].filter(
+            (track): track is MediaStreamTrack => track !== null,
+          )
+        }),
+        ...(micSending ? [micSending] : []),
+        ...(sharingAudio ? [sharingAudio] : []),
+      ],
+    }
+  }
+  useEffect(() => {
+    if (weRecord) recordingScene.current = buildScene()
+  })
 
   if (gone || outcome) {
     return (
@@ -1501,6 +1754,8 @@ function Room({
       passwordSet={roomHasPassword}
       onPassword={() => setPasswordDialog(true)}
       onRole={onRole}
+      recorderIds={recorders.map((entry) => entry.memberId)}
+      onRecordAction={onRecordAction}
     />
   )
   // Whose a received track is, for the stats panel (e2-t14)
@@ -1555,388 +1810,429 @@ function Room({
   const stageMembers = (shareTile ? focusFirst(shown.ids, focus) : shown.ids).flatMap(
     (id) => byId.get(id) ?? [],
   )
+  // The red light (CLAUDE.md rule 4): who records, in words; while we record it is 停止錄影
+  const otherRecorders = recorders.filter((entry) => entry.memberId !== state.you)
+  const recordingLabel =
+    otherRecorders.length === 0
+      ? strings.record.byYou
+      : recorders.length > 1
+        ? strings.record.byMany(recorders.length)
+        : strings.record.byOne(viewMembers?.[otherRecorders[0].memberId]?.name ?? '')
+  const recordingLight =
+    recorders.length > 0 || weRecord
+      ? {
+          label: recordingLabel,
+          onStop: weRecord ? recording.stop : undefined,
+          saving: recording.phase === 'saving',
+        }
+      : null
   return (
     <RoomContexts phone={phone} demand={media.demand} motionOff={powerSaving}>
-      <TopBar
-        title={title}
-        startedAt={roomInfo?.startedAt ?? null}
-        status={statusText(state)}
-        warn={state.status !== 'open'}
-        locked={roomInfo?.locked ?? false}
-        onCopyLink={() => void copyRoomLink(link, title, strings.share.text).then(onLinkOutcome)}
-        onLeave={onLeave}
-      />
-      <Middle>
-        <StageArea>
-          {sharePhase === 'sharing' && (
-            <SharingBar
-              onStop={screenShare.stop}
-              audio={
-                screenShare.audio
-                  ? { on: screenShare.audioOn, onToggle: screenShare.toggleAudio }
-                  : null
-              }
-              mode={{ value: screenShare.mode, onChange: screenShare.setMode }}
-              motionHint={
-                screenShare.motionHint
-                  ? {
-                      onSwitch: () => screenShare.setMode('motion'),
-                      onDismiss: screenShare.dismissMotionHint,
-                    }
-                  : null
-              }
-              preview={{
-                sample: sharePreview,
-                // A whole screen (or the meeting itself) would show the preview inside itself
-                off: screenShare.surface?.surface === 'monitor' || selfCaptureKind !== null,
-              }}
-              selfCapture={
-                selfCaptureShown
-                  ? {
-                      kind: selfCaptureShown,
-                      onRepick: screenShare.repick,
-                      onDismiss: () => setSelfCaptureDismissed(sharingScreen),
-                    }
-                  : null
-              }
-            />
-          )}
-          <StageBox>
-            {inRoom && (
-              <Stage
-                share={shareTile}
-                mode={stageLayout(view.layout, phone, focus)}
-                // A desktop's strip is a row under the speaker (PRD e4); phones keep C3's
-                stripSide={phone === null ? 'bottom' : 'auto'}
-                speaker={Math.max(
-                  0,
-                  stageMembers.findIndex((member) => member.id === focus?.id),
-                )}
-              >
-                {stripShares}
-                {stageMembers.map((member) => {
-                  const you = member.id === state.you
-                  const mic = member.tracks.find((t) => t.kind === 'mic')
-                  const audio = you ? null : remoteAudio(member)
-                  return (
-                    <MemberTile
-                      key={member.id}
-                      name={member.name}
-                      you={you}
-                      role={member.role}
-                      reconnecting={you ? selfReconnecting : member.reconnecting}
-                      relayed={you && media.usingRelay}
-                      // Ours from our own stats while connected; theirs as they report it (e2-t13)
-                      signal={
-                        you ? (media.status === 'connected' ? media.signal : null) : member.signal
+      {/* The recording question makes everything else inert (CLAUDE.md rule 4) */}
+      <Blockable inert={consentAsked}>
+        <TopBar
+          title={title}
+          startedAt={roomInfo?.startedAt ?? null}
+          status={statusText(state)}
+          warn={state.status !== 'open'}
+          locked={roomInfo?.locked ?? false}
+          recording={recordingLight}
+          onCopyLink={() => void copyRoomLink(link, title, strings.share.text).then(onLinkOutcome)}
+          onLeave={onLeave}
+        />
+        <Middle>
+          <StageArea>
+            {sharePhase === 'sharing' && (
+              <SharingBar
+                onStop={screenShare.stop}
+                audio={
+                  screenShare.audio
+                    ? { on: screenShare.audioOn, onToggle: screenShare.toggleAudio }
+                    : null
+                }
+                mode={{ value: screenShare.mode, onChange: screenShare.setMode }}
+                motionHint={
+                  screenShare.motionHint
+                    ? {
+                        onSwitch: () => screenShare.setMode('motion'),
+                        onDismiss: screenShare.dismissMotionHint,
                       }
-                      videoPaused={videoPaused(member)}
-                      video={videoOf(member)}
-                      pinned={member.id === pinnedId}
-                      spotlighted={member.id === spotlight}
-                      // Pinning is for others (we know what we look like). The room decides who
-                      // may spotlight (worker/roles.ts); the button only shows for them.
-                      onTogglePin={you ? undefined : () => togglePin(member.id)}
-                      onToggleSpotlight={
-                        maySpotlight
-                          ? () => setSpotlight(spotlight === member.id ? null : member.id)
-                          : undefined
+                    : null
+                }
+                preview={{
+                  sample: sharePreview,
+                  // A whole screen (or the meeting itself) would show the preview inside itself
+                  off: screenShare.surface?.surface === 'monitor' || selfCaptureKind !== null,
+                }}
+                selfCapture={
+                  selfCaptureShown
+                    ? {
+                        kind: selfCaptureShown,
+                        onRepick: screenShare.repick,
+                        onDismiss: () => setSelfCaptureDismissed(sharingScreen),
                       }
-                      // The speaking outline follows our own microphone while it sends, theirs
-                      // while it is on
-                      hand={handPlace.get(member.id) ?? null}
-                      reactions={reactions[member.id]}
-                      level={you ? micSending : mic && !mic.muted ? audio : null}
-                      micMuted={you ? micSending === null : (mic?.muted ?? true)}
-                      onHeard={you ? undefined : () => setLastHeard(member.id)}
-                    />
-                  )
-                })}
-              </Stage>
-            )}
-            {inRoom && (
-              // Reactions from someone whose tile is not on the stage (hidden): beside it
-              <OffStageReactions
-                entries={members.flatMap((member) =>
-                  stageMembers.some((shown) => shown.id === member.id)
-                    ? []
-                    : (reactions[member.id] ?? []).map((bubble) => ({
-                        name: member.id === state.you ? strings.common.you : member.name,
-                        bubble,
-                      })),
-                )}
+                    : null
+                }
               />
             )}
-            <Notices>
-              {state.status === 'lost' && (
-                <Button variant="secondary" onClick={retryRoom}>
-                  {strings.common.retry}
-                </Button>
+            <StageBox>
+              {inRoom && (
+                <Stage
+                  share={shareTile}
+                  mode={stageLayout(view.layout, phone, focus)}
+                  // A desktop's strip is a row under the speaker (PRD e4); phones keep C3's
+                  stripSide={phone === null ? 'bottom' : 'auto'}
+                  speaker={Math.max(
+                    0,
+                    stageMembers.findIndex((member) => member.id === focus?.id),
+                  )}
+                >
+                  {stripShares}
+                  {stageMembers.map((member) => {
+                    const you = member.id === state.you
+                    const mic = member.tracks.find((t) => t.kind === 'mic')
+                    const audio = you ? null : remoteAudio(member)
+                    return (
+                      <MemberTile
+                        key={member.id}
+                        name={member.name}
+                        you={you}
+                        role={member.role}
+                        reconnecting={you ? selfReconnecting : member.reconnecting}
+                        relayed={you && media.usingRelay}
+                        // Ours from our own stats while connected; theirs as they report it (e2-t13)
+                        signal={
+                          you ? (media.status === 'connected' ? media.signal : null) : member.signal
+                        }
+                        videoPaused={videoPaused(member)}
+                        video={videoOf(member)}
+                        pinned={member.id === pinnedId}
+                        spotlighted={member.id === spotlight}
+                        // Pinning is for others (we know what we look like). The room decides who
+                        // may spotlight (worker/roles.ts); the button only shows for them.
+                        onTogglePin={you ? undefined : () => togglePin(member.id)}
+                        onToggleSpotlight={
+                          maySpotlight
+                            ? () => setSpotlight(spotlight === member.id ? null : member.id)
+                            : undefined
+                        }
+                        // The speaking outline follows our own microphone while it sends, theirs
+                        // while it is on
+                        hand={handPlace.get(member.id) ?? null}
+                        reactions={reactions[member.id]}
+                        level={you ? micSending : mic && !mic.muted ? audio : null}
+                        micMuted={you ? micSending === null : (mic?.muted ?? true)}
+                        onHeard={you ? undefined : () => setLastHeard(member.id)}
+                      />
+                    )
+                  })}
+                </Stage>
               )}
-              {/* Said by the announcer: a region added with its text is often not read */}
-              {talking && <Note>{strings.shortcuts.talking}</Note>}
-              {inRoom && media.status === 'connecting' && (
-                <Note>{strings.room.mediaConnecting}</Note>
+              {inRoom && (
+                // Reactions from someone whose tile is not on the stage (hidden): beside it
+                <OffStageReactions
+                  entries={members.flatMap((member) =>
+                    stageMembers.some((shown) => shown.id === member.id)
+                      ? []
+                      : (reactions[member.id] ?? []).map((bubble) => ({
+                          name: member.id === state.you ? strings.common.you : member.name,
+                          bubble,
+                        })),
+                  )}
+                />
               )}
-              {mediaReconnecting && <Note>{strings.room.mediaReconnecting}</Note>}
-              {suggestAudioOnly && (
-                <Alert role="alert">
-                  <span>{strings.adapt.suggest}</span>
-                  <AlertActions>
-                    <Button variant="secondary" onClick={() => setSuggestionDismissed(true)}>
-                      {strings.adapt.dismiss}
-                    </Button>
-                    <Button onClick={switchAudioOnly}>{strings.adapt.switchAudioOnly}</Button>
-                  </AlertActions>
-                </Alert>
-              )}
-              {mediaLost && (
-                <Alert role="alert">
-                  <span>{strings.room.mediaLost}</span>
-                  <Button variant="secondary" onClick={media.retry}>
+              <Notices>
+                {state.status === 'lost' && (
+                  <Button variant="secondary" onClick={retryRoom}>
                     {strings.common.retry}
                   </Button>
-                </Alert>
+                )}
+                {/* Said by the announcer: a region added with its text is often not read */}
+                {talking && <Note>{strings.shortcuts.talking}</Note>}
+                {inRoom && media.status === 'connecting' && (
+                  <Note>{strings.room.mediaConnecting}</Note>
+                )}
+                {mediaReconnecting && <Note>{strings.room.mediaReconnecting}</Note>}
+                {suggestAudioOnly && (
+                  <Alert role="alert">
+                    <span>{strings.adapt.suggest}</span>
+                    <AlertActions>
+                      <Button variant="secondary" onClick={() => setSuggestionDismissed(true)}>
+                        {strings.adapt.dismiss}
+                      </Button>
+                      <Button onClick={switchAudioOnly}>{strings.adapt.switchAudioOnly}</Button>
+                    </AlertActions>
+                  </Alert>
+                )}
+                {inRoom && <RecordingRecovery onDone={(text) => show(text)} />}
+                {mediaLost && (
+                  <Alert role="alert">
+                    <span>{strings.room.mediaLost}</span>
+                    <Button variant="secondary" onClick={media.retry}>
+                      {strings.common.retry}
+                    </Button>
+                  </Alert>
+                )}
+                {mediaProblem && <Alert role="alert">{mediaProblem}</Alert>}
+                {/* Said by the announcer, like push-to-talk */}
+                {mutedSpeech.hint && (
+                  <Note>
+                    {strings.mutedSpeech.text}
+                    <InlineButton
+                      type="button"
+                      onClick={() => {
+                        mutedSpeech.dismiss()
+                        void devices?.setOn('mic', true)
+                      }}
+                    >
+                      {strings.mutedSpeech.unmute}
+                    </InlineButton>
+                    <InlineButton
+                      type="button"
+                      aria-label={strings.mutedSpeech.dismiss}
+                      onClick={mutedSpeech.dismiss}
+                    >
+                      ×
+                    </InlineButton>
+                  </Note>
+                )}
+                {inRoom && audioOnly && (
+                  <Note role="status">
+                    {strings.settings.audioOnlyNote}
+                    <InlineButton type="button" onClick={() => media.setAudioOnly(false)}>
+                      {strings.settings.audioOnlyExit}
+                    </InlineButton>
+                  </Note>
+                )}
+                {inRoom && shown.hiddenNoVideo > 0 && (
+                  <Note role="status">
+                    {strings.view.hiddenNoVideo(shown.hiddenNoVideo)}
+                    <InlineButton type="button" onClick={() => setHideNoVideo(false)}>
+                      {strings.view.showAll}
+                    </InlineButton>
+                  </Note>
+                )}
+                <DeviceProblems local={local} onRetry={(kind) => void devices?.retry(kind)} />
+              </Notices>
+            </StageBox>
+          </StageArea>
+          {panel === 'stats' && phone === null && (
+            <SidePanel
+              title={strings.stats.title}
+              closeLabel={strings.stats.close}
+              onClose={() => setPanel(null)}
+            >
+              {statsPanel}
+            </SidePanel>
+          )}
+          {panel !== null && panel !== 'stats' && phone === null && (
+            <SidePanel
+              title={panel === 'chat' ? strings.chat.title : strings.participants.title}
+              closeLabel={panel === 'chat' ? strings.chat.close : strings.participants.close}
+              onClose={() => setPanel(null)}
+            >
+              {panelTabs}
+              {panel === 'chat' ? (
+                <ChatPanel messages={state.chat} you={state.you} onSend={sendChat} autoFocus />
+              ) : (
+                participantsPanel
               )}
-              {mediaProblem && <Alert role="alert">{mediaProblem}</Alert>}
-              {/* Said by the announcer, like push-to-talk */}
-              {mutedSpeech.hint && (
-                <Note>
-                  {strings.mutedSpeech.text}
-                  <InlineButton
-                    type="button"
-                    onClick={() => {
-                      mutedSpeech.dismiss()
-                      void devices?.setOn('mic', true)
-                    }}
-                  >
-                    {strings.mutedSpeech.unmute}
-                  </InlineButton>
-                  <InlineButton
-                    type="button"
-                    aria-label={strings.mutedSpeech.dismiss}
-                    onClick={mutedSpeech.dismiss}
-                  >
-                    ×
-                  </InlineButton>
-                </Note>
-              )}
-              {inRoom && audioOnly && (
-                <Note role="status">
-                  {strings.settings.audioOnlyNote}
-                  <InlineButton type="button" onClick={() => media.setAudioOnly(false)}>
-                    {strings.settings.audioOnlyExit}
-                  </InlineButton>
-                </Note>
-              )}
-              {inRoom && shown.hiddenNoVideo > 0 && (
-                <Note role="status">
-                  {strings.view.hiddenNoVideo(shown.hiddenNoVideo)}
-                  <InlineButton type="button" onClick={() => setHideNoVideo(false)}>
-                    {strings.view.showAll}
-                  </InlineButton>
-                </Note>
-              )}
-              <DeviceProblems local={local} onRetry={(kind) => void devices?.retry(kind)} />
-            </Notices>
-          </StageBox>
-        </StageArea>
-        {panel === 'stats' && phone === null && (
-          <SidePanel
-            title={strings.stats.title}
-            closeLabel={strings.stats.close}
-            onClose={() => setPanel(null)}
-          >
+            </SidePanel>
+          )}
+        </Middle>
+        <ToolbarArea>
+          <Toolbar
+            memberCount={members.length}
+            waitingCount={canAdmit ? waitingList.length : 0}
+            canShareScreen={screenShareSupported}
+            sharing={sharePhase === 'sharing' || sharePhase === 'claiming'}
+            onToggleShare={onToggleShare}
+            chatOpen={chatOpen}
+            chatUnread={chat.unread}
+            onToggleChat={() => togglePanel('chat')}
+            participantsOpen={panel === 'participants'}
+            onToggleParticipants={() => togglePanel('participants')}
+            moreItems={[...moreItems, ...mediaItems]}
+            onLeave={onLeave}
+            micOn={local.mic.on}
+            camOn={local.cam.on}
+            micBusy={micBusy}
+            camBusy={!local.ready || local.cam.opening}
+            onToggleMic={() => void devices?.setOn('mic', !local.mic.on)}
+            onToggleCam={toggleCam}
+            shortcuts={phone === null}
+            devices={local.devices}
+            selected={{
+              mic: trackDevice(local.mic.track) ?? local.chosen.mic,
+              cam: trackDevice(local.cam.track) ?? local.chosen.cam,
+              speaker: local.chosen.speaker,
+            }}
+            onSelect={(choice, deviceId) => void devices?.select(choice, deviceId)}
+            speakerSupported={speakerSupported}
+            reactions={{ handUp, onReact, onToggleHand }}
+          />
+        </ToolbarArea>
+        {panel === 'stats' && phone !== null && (
+          <Drawer variant="full" title={strings.stats.title} onClose={() => setPanel(null)}>
             {statsPanel}
-          </SidePanel>
+          </Drawer>
         )}
-        {panel !== null && panel !== 'stats' && phone === null && (
-          <SidePanel
+        {panel !== null && panel !== 'stats' && phone !== null && (
+          <Drawer
+            variant="full"
             title={panel === 'chat' ? strings.chat.title : strings.participants.title}
-            closeLabel={panel === 'chat' ? strings.chat.close : strings.participants.close}
             onClose={() => setPanel(null)}
           >
             {panelTabs}
             {panel === 'chat' ? (
-              <ChatPanel messages={state.chat} you={state.you} onSend={sendChat} autoFocus />
+              <ChatPanel messages={state.chat} you={state.you} onSend={sendChat} />
             ) : (
               participantsPanel
             )}
-          </SidePanel>
+          </Drawer>
         )}
-      </Middle>
-      <ToolbarArea>
-        <Toolbar
-          memberCount={members.length}
-          waitingCount={canAdmit ? waitingList.length : 0}
-          canShareScreen={screenShareSupported}
-          sharing={sharePhase === 'sharing' || sharePhase === 'claiming'}
-          onToggleShare={onToggleShare}
-          chatOpen={chatOpen}
-          chatUnread={chat.unread}
-          onToggleChat={() => togglePanel('chat')}
-          participantsOpen={panel === 'participants'}
-          onToggleParticipants={() => togglePanel('participants')}
-          moreItems={[...moreItems, ...mediaItems]}
-          onLeave={onLeave}
-          micOn={local.mic.on}
-          camOn={local.cam.on}
-          micBusy={micBusy}
-          camBusy={!local.ready || local.cam.opening}
-          onToggleMic={() => void devices?.setOn('mic', !local.mic.on)}
-          onToggleCam={toggleCam}
-          shortcuts={phone === null}
-          devices={local.devices}
-          selected={{
-            mic: trackDevice(local.mic.track) ?? local.chosen.mic,
-            cam: trackDevice(local.cam.track) ?? local.chosen.cam,
-            speaker: local.chosen.speaker,
-          }}
-          onSelect={(choice, deviceId) => void devices?.select(choice, deviceId)}
-          speakerSupported={speakerSupported}
-          reactions={{ handUp, onReact, onToggleHand }}
-        />
-      </ToolbarArea>
-      {panel === 'stats' && phone !== null && (
-        <Drawer variant="full" title={strings.stats.title} onClose={() => setPanel(null)}>
-          {statsPanel}
-        </Drawer>
-      )}
-      {panel !== null && panel !== 'stats' && phone !== null && (
-        <Drawer
-          variant="full"
-          title={panel === 'chat' ? strings.chat.title : strings.participants.title}
-          onClose={() => setPanel(null)}
-        >
-          {panelTabs}
-          {panel === 'chat' ? (
-            <ChatPanel messages={state.chat} you={state.you} onSend={sendChat} />
-          ) : (
-            participantsPanel
-          )}
-        </Drawer>
-      )}
-      {!chatOpen && (
-        <ChatPreview
-          message={chat.preview}
-          onOpen={() => setPanel('chat')}
-          onDismiss={chat.dismissPreview}
-        />
-      )}
-      {passwordDialog && (
-        <PasswordDialog
-          hasPassword={roomHasPassword}
-          current={knownPassword.current}
-          onSave={onSavePassword}
-          onClear={() => onSavePassword(null)}
-          onCancel={() => setPasswordDialog(false)}
-        />
-      )}
-      {leaving && successors.length > 0 && (
-        <LeaveDialog
-          candidates={successors}
-          automatic={successors[0].id}
-          onLeave={(host) => leaveAs(host === successors[0].id ? undefined : host)}
-          onEnd={() => {
-            setLeaving(false)
-            onEndMeeting()
-          }}
-          onCancel={() => setLeaving(false)}
-        />
-      )}
-      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
-      {settingsOpen && (
-        <SettingsDialog
-          phone={phone !== null}
-          onClose={() => setSettingsOpen(false)}
-          devices={local.devices}
-          selected={{
-            mic: trackDevice(local.mic.track) ?? local.chosen.mic,
-            cam: trackDevice(local.cam.track) ?? local.chosen.cam,
-            speaker: local.chosen.speaker,
-          }}
-          onSelect={(choice, deviceId) => void devices?.select(choice, deviceId)}
-          speakerSupported={speakerSupported}
-          processing={mediaSettings.processing}
-          processingSupported={processingSupported}
-          onProcessing={onProcessing}
-          hd={mediaSettings.hd}
-          hdLimited={media.hdLimited}
-          onHd={mediaSettings.setHd}
-          audioOnly={audioOnly}
-          onAudioOnly={media.setAudioOnly}
-          advancedNoiseSupported={noiseSupported}
-          advancedNoise={mediaSettings.advancedNoise}
-          advancedNoiseNote={noiseNote(noise.status)}
-          onAdvancedNoise={mediaSettings.setAdvancedNoise}
-          powerSaving={powerSaving}
-          onPowerSaving={mediaSettings.setPowerSaving}
-        />
-      )}
-      {confirmLeave && (
-        <ConfirmDialog
-          title={strings.shortcuts.leaveTitle}
-          body={strings.shortcuts.leaveBody}
-          confirmLabel={strings.shortcuts.leave}
-          onConfirm={() => {
-            setConfirmLeave(false)
-            leave()
-            onLeft('left', title)
-          }}
-          onCancel={() => setConfirmLeave(false)}
-        />
-      )}
-      {renaming === 'room' && (
-        <NameDialog
-          title={strings.rename.room}
-          label={strings.rename.roomLabel}
-          initial={title}
-          maxChars={MAX_ROOM_NAME_CHARS}
-          onSave={(name) => {
-            send({ t: 'renameRoom', name })
-            setRenaming(null)
-          }}
-          onCancel={() => setRenaming(null)}
-        />
-      )}
-      {renaming === 'self' && (
-        <NameDialog
-          title={strings.rename.self}
-          label={strings.rename.selfLabel}
-          initial={self?.name ?? choices.name}
-          maxChars={MAX_NAME_CHARS}
-          onSave={(name) => {
-            rename(name)
-            // Remembered for the next room too, like the pre-join screen's name
-            saveName(name)
-            setRenaming(null)
-          }}
-          onCancel={() => setRenaming(null)}
-        />
-      )}
-      {/* Everyone's sound, apart from the tiles: layouts move tiles, never the sound (e4-t07) */}
-      <div hidden>
-        {members.map((member) =>
-          member.id === state.you ? null : (
-            <MemberAudio
-              key={member.id}
-              name={member.name}
-              track={remoteAudio(member)}
-              speaker={local.chosen.speaker}
-            />
-          ),
-        )}
-        {/* Every share's sound (e3-t04), whichever share is in the main area */}
-        {otherSharers.map((sharer) => (
-          <MemberAudio
-            key={`${sharer.id}-share`}
-            name={sharer.name}
-            track={receivedOf(sharer, 'screenAudio')}
-            speaker={local.chosen.speaker}
-            source="share"
+        {!chatOpen && (
+          <ChatPreview
+            message={chat.preview}
+            onOpen={() => setPanel('chat')}
+            onDismiss={chat.dismissPreview}
           />
-        ))}
-      </div>
+        )}
+        {passwordDialog && (
+          <PasswordDialog
+            hasPassword={roomHasPassword}
+            current={knownPassword.current}
+            onSave={onSavePassword}
+            onClear={() => onSavePassword(null)}
+            onCancel={() => setPasswordDialog(false)}
+          />
+        )}
+        {leaving && successors.length > 0 && (
+          <LeaveDialog
+            candidates={successors}
+            automatic={successors[0].id}
+            onLeave={(host) => leaveAs(host === successors[0].id ? undefined : host)}
+            onEnd={() => {
+              setLeaving(false)
+              onEndMeeting()
+            }}
+            onCancel={() => setLeaving(false)}
+          />
+        )}
+        {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+        {recordDialog && (
+          <Suspense fallback={null}>
+            <RecordDialog
+              initial={recordSettings}
+              formats={recordFormats()}
+              onStart={onStartRecording}
+              onCancel={() => setRecordDialog(false)}
+            />
+          </Suspense>
+        )}
+        {settingsOpen && (
+          <SettingsDialog
+            phone={phone !== null}
+            onClose={() => setSettingsOpen(false)}
+            devices={local.devices}
+            selected={{
+              mic: trackDevice(local.mic.track) ?? local.chosen.mic,
+              cam: trackDevice(local.cam.track) ?? local.chosen.cam,
+              speaker: local.chosen.speaker,
+            }}
+            onSelect={(choice, deviceId) => void devices?.select(choice, deviceId)}
+            speakerSupported={speakerSupported}
+            processing={mediaSettings.processing}
+            processingSupported={processingSupported}
+            onProcessing={onProcessing}
+            hd={mediaSettings.hd}
+            hdLimited={media.hdLimited}
+            onHd={mediaSettings.setHd}
+            audioOnly={audioOnly}
+            onAudioOnly={media.setAudioOnly}
+            advancedNoiseSupported={noiseSupported}
+            advancedNoise={mediaSettings.advancedNoise}
+            advancedNoiseNote={noiseNote(noise.status)}
+            onAdvancedNoise={mediaSettings.setAdvancedNoise}
+            powerSaving={powerSaving}
+            onPowerSaving={mediaSettings.setPowerSaving}
+          />
+        )}
+        {confirmLeave && (
+          <ConfirmDialog
+            title={strings.shortcuts.leaveTitle}
+            body={strings.shortcuts.leaveBody}
+            confirmLabel={strings.shortcuts.leave}
+            onConfirm={() => {
+              setConfirmLeave(false)
+              leave()
+              onLeft('left', title)
+            }}
+            onCancel={() => setConfirmLeave(false)}
+          />
+        )}
+        {renaming === 'room' && (
+          <NameDialog
+            title={strings.rename.room}
+            label={strings.rename.roomLabel}
+            initial={title}
+            maxChars={MAX_ROOM_NAME_CHARS}
+            onSave={(name) => {
+              send({ t: 'renameRoom', name })
+              setRenaming(null)
+            }}
+            onCancel={() => setRenaming(null)}
+          />
+        )}
+        {renaming === 'self' && (
+          <NameDialog
+            title={strings.rename.self}
+            label={strings.rename.selfLabel}
+            initial={self?.name ?? choices.name}
+            maxChars={MAX_NAME_CHARS}
+            onSave={(name) => {
+              rename(name)
+              // Remembered for the next room too, like the pre-join screen's name
+              saveName(name)
+              setRenaming(null)
+            }}
+            onCancel={() => setRenaming(null)}
+          />
+        )}
+        {/* Everyone's sound, apart from the tiles: layouts move tiles, never the sound (e4-t07) */}
+        <div hidden>
+          {members.map((member) =>
+            member.id === state.you ? null : (
+              <MemberAudio
+                key={member.id}
+                name={member.name}
+                track={remoteAudio(member)}
+                speaker={local.chosen.speaker}
+              />
+            ),
+          )}
+          {/* Every share's sound (e3-t04), whichever share is in the main area */}
+          {otherSharers.map((sharer) => (
+            <MemberAudio
+              key={`${sharer.id}-share`}
+              name={sharer.name}
+              track={receivedOf(sharer, 'screenAudio')}
+              speaker={local.chosen.speaker}
+              source="share"
+            />
+          ))}
+        </div>
+      </Blockable>
+      {consentAsked && (
+        <RecordingConsentDialog
+          who={strings.record.who(...consentNames)}
+          onAgree={() => send({ t: 'consent' })}
+          onLeave={() => {
+            leave()
+            onLeft('declined', title)
+          }}
+        />
+      )}
       <ToastViewport toasts={toasts.toasts} onDismiss={toasts.dismiss} />
       {announcer.region}
     </RoomContexts>
@@ -2235,6 +2531,45 @@ function mediaErrorText(error: MediaTransportErrorCode | null): string | null {
 /** 連線統計 (e2-t14): its own chunk, loaded when the panel first opens */
 const StatsPanel = lazy(() => import('../components/StatsPanel.tsx'))
 
+/** 錄影設定 (I4, e8-t03): its own chunk, like the recorder */
+const RecordDialog = lazy(() => import('../components/RecordDialog.tsx'))
+
+/** Below this much free storage a long recording may not fit: said when it starts (it still does) */
+const LOW_STORAGE_BYTES = 1024 ** 3
+
+/** The formats this browser would record in, for the hint in 錄影設定 */
+function recordFormats(): { video: string | null; audio: string | null } {
+  const isTypeSupported = (type: string) =>
+    typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)
+  return { video: pickMimeType(isTypeSupported, false), audio: pickMimeType(isTypeSupported, true) }
+}
+
+/** One recording, as the pre-join screen's agreement names it (I4): who, and since when */
+const recordingKey = (entry: { memberId: string; since: number }) =>
+  `${entry.memberId} ${entry.since}`
+
+/** 「<名字> 停止錄影了」 when someone else's recording ends */
+function useRecordingStoppedNotice(
+  recorders: readonly RecordingInfo[],
+  you: string | null,
+  name: { current: (id: string) => string },
+  show: (text: string) => void,
+) {
+  const ids = recorders.map((entry) => entry.memberId).join(' ')
+  const previous = useRef<string | null>(null)
+  useEffect(() => {
+    const before = previous.current
+    previous.current = ids
+    if (before === null) return
+    const now = ids.split(' ')
+    for (const id of before.split(' ')) {
+      if (id !== '' && id !== you && !now.includes(id)) {
+        show(strings.record.othersStopped(name.current(id)))
+      }
+    }
+  }, [ids, you, name, show])
+}
+
 /**
  * What the bandwidth adaptation did, as toasts (e2-t15, PRD 「網路不穩，已降低畫質」): a step
  * down on what we receive or send, and the way back. The audio-only suggestion is a banner, not
@@ -2290,6 +2625,7 @@ function statusText({ status, view }: RoomConnectionState): string {
     case 'locked':
     case 'denied':
     case 'waitExpired':
+    case 'recordingDeclined':
     case 'waiting':
     // Back to the pre-join screen at once (F3)
     case 'passwordRequired':
@@ -2469,6 +2805,11 @@ const InlineButton = styled.button`
   font-weight: 700;
   text-decoration: underline;
   cursor: pointer;
+`
+
+/** The whole room but the recording question, made inert while it is asked (I4) */
+const Blockable = styled.div`
+  display: contents;
 `
 
 const ToolbarArea = styled.footer`

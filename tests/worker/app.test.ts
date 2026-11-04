@@ -198,7 +198,7 @@ describe('GET /api/rooms/:id/ws', () => {
     const rooms = fakeRooms()
     for (const path of [
       '/api/rooms/Short/ws',
-      '/api/rooms/abcdefghi0/ws',
+      '/api/rooms/abcdefghI0/ws',
       '/api/rooms/abcdefghij/other',
     ]) {
       const res = await handleRequest(

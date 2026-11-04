@@ -301,7 +301,8 @@ export const en: Strings = {
     advancedNoise: 'Advanced noise suppression',
     advancedNoiseHint:
       'Filters out more typing, fans and other noise on your device with RNNoise; uses more battery',
-    advancedNoiseHandles: 'Advanced noise suppression handles noise while it’s on, so this is paused.',
+    advancedNoiseHandles:
+      'Advanced noise suppression handles noise while it’s on, so this is paused.',
     advancedNoiseLoading: 'Loading advanced noise suppression…',
     advancedNoisePaused: 'Click the page or press any key to start advanced noise suppression.',
     advancedNoisePowerSaving: 'Power saving is on, so advanced noise suppression is paused.',
@@ -493,6 +494,11 @@ export const en: Strings = {
     cohostRevoked: (actor: string) => `${actor} removed you as co-host.`,
     madeHost: (actor: string) => `${actor} handed the host role to you. You’re the host now.`,
     handLowered: (actor: string) => `${actor} lowered your hand.`,
+    recordingStopped: (actor: string) =>
+      `${actor} stopped your recording. The file has been downloaded.`,
+    recordAllowed: (actor: string) =>
+      `${actor} allowed you to record. Start from More › Start recording; everyone will see “Recording”.`,
+    recordRevoked: (actor: string) => `${actor} took back your permission to record.`,
   },
   screenShare: {
     stop: 'Stop sharing',
@@ -685,6 +691,9 @@ export const en: Strings = {
     endedSelfTitle: 'You ended the meeting',
     endedSelfBody: (room: string) =>
       `“${room}” has ended, everyone has left and the room is closed.`,
+    declinedTitle: 'You didn’t agree to the recording, so you left',
+    declinedBody: (room: string) =>
+      `“${room}” is being recorded. To join, rejoin and agree to the recording.`,
     removedTitle: 'You were removed from the room',
     removedBody: (room: string) =>
       `The host removed you from “${room}”. You can’t rejoin it from this browser for 10 minutes.`,
@@ -904,6 +913,70 @@ export const en: Strings = {
     region: 'Notifications',
     joined: (name: string) => `${name} joined`,
     left: (name: string) => `${name} left`,
+  },
+  record: {
+    section: 'Recording',
+    start: 'Start recording…',
+    stop: 'Stop recording',
+    unavailable: 'This browser can’t record. Use Chrome, Edge or Firefox on a computer',
+    dialogTitle: 'Start recording',
+    dialogBody:
+      'Records what you see in the meeting and everyone’s sound, saved on this device and downloaded when you stop. Once it starts, everyone sees “Recording” and may choose to leave.',
+    content: 'What to record',
+    videoAndAudio: 'Picture and sound',
+    audioOnly: 'Sound only',
+    resolution: 'Resolution',
+    resolution720: '720p (smaller file)',
+    resolution1080: '1080p (sharper, uses more power)',
+    includeSelf: 'Include my camera',
+    includeSelfHint: 'When off, your tile shows only your initial',
+    format: (type: string) => `File format: ${type}`,
+    confirm: 'Start recording',
+    starting: 'Starting the recording…',
+    started: 'Recording. Everyone can see “Recording”.',
+    saving: 'Saving…',
+    saved: (fileName: string) => `Recording stopped. Downloaded “${fileName}”`,
+    empty: 'Recording stopped. Nothing was recorded',
+    storageFull:
+      'This device ran out of storage, so the recording stopped. What was recorded has been downloaded',
+    failed: 'Something went wrong, so the recording stopped. What was recorded has been downloaded',
+    startFailed: 'Couldn’t start the recording',
+    lowStorage: 'This device is low on storage; a long recording may stop part way',
+    indicator: 'Recording',
+    byYou: 'You’re recording',
+    byOne: (name: string) => `${name} is recording`,
+    byMany: (count: number) => `${count} people are recording`,
+    stopLabel: (who: string) => `Stop recording (${who})`,
+    who: (...names: string[]) =>
+      names.length <= 2
+        ? names.join(' and ')
+        : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`,
+    consentTitle: 'This meeting is being recorded',
+    consentBody: (who: string) =>
+      `${who} is recording this meeting. To stay, agree to be recorded; otherwise leave. Without an answer within 60 seconds you’ll leave the meeting.`,
+    consentAgree: 'Agree and stay',
+    consentLeave: 'Leave meeting',
+    consentSent: 'Agreed, waiting for the room…',
+    othersStopped: (name: string) => `${name} stopped recording`,
+    prejoinTitle: 'This meeting is being recorded',
+    prejoinBody:
+      'To join, agree to be recorded first. If you don’t want to be recorded, don’t join.',
+    prejoinAgree: 'I agree to this meeting being recorded',
+    waiting: 'This meeting is being recorded. You’ll be asked to agree when you’re let in.',
+    prejoinLeave: 'Don’t join, go home',
+    leftover: (when: string) => `There’s a recording that wasn’t saved (started ${when}).`,
+    leftoverDownload: 'Download the unfinished recording',
+    leftoverDelete: 'Delete',
+    leftoverDownloaded: 'Downloaded the unfinished recording',
+    leftoverDeleted: 'Deleted the unfinished recording',
+    shareLabel: (name: string) => `${name}’s screen`,
+    allow: 'Allow to record',
+    revoke: 'Take back recording',
+    stopTheirs: 'Stop recording',
+    tag: 'Recording',
+    allowedNow: (name: string) => `${name} may record now`,
+    revokedNow: (name: string) => `${name} may no longer record`,
+    stoppedTheirs: (name: string) => `Stopped ${name}’s recording`,
   },
   errors: {
     sfuNotConfigured: 'The media server isn’t set up (Realtime App ID or App Secret is missing).',

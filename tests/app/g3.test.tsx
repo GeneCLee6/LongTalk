@@ -79,6 +79,7 @@ const member = (
   tracks: [],
   hand,
   signal: null,
+  mayRecord: false,
 })
 
 function welcome(members: Member[]): Frame {

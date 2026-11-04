@@ -84,7 +84,11 @@ export const PERMISSIONS = {
   /** Who may annotate (J, E7 AC-7.3) and clearing everyone's drawings */
   annotationPolicy: { who: STAFF, on: 'room', since: 'J' },
   clearAnnotations: { who: STAFF, on: 'room', since: 'J' },
-  /** Start or stop recording and transcripts (I4, K; everyone is told and asked, rule 4) */
+  /**
+   * Record the meeting, and stop anyone's recording (I4, e8-t02; K for transcripts; everyone is
+   * told, rule 4). The host only (F1's decision: not co-hosts); a member the host allowed
+   * (`allowRecord`, `Member.mayRecord`) may record too, and stop their own
+   */
   record: { who: ['host'], on: 'room', since: 'I4' },
 
   // ── What is done to one other member ──
@@ -101,6 +105,8 @@ export const PERMISSIONS = {
   /** Make them a co-host or a participant again; hand them the host role (F3, e1-t16) */
   setCohost: { who: ['host'], on: 'member', since: 'F3' },
   makeHost: { who: ['host'], on: 'member', since: 'F3' },
+  /** Let them record the meeting themselves, or take that back (I4, PRD E8 「主持人可允許特定成員」) */
+  allowRecord: { who: ['host'], on: 'member', since: 'I4' },
 } as const satisfies Record<string, Rule>
 
 export type Action = keyof typeof PERMISSIONS

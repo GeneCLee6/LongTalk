@@ -7,6 +7,7 @@
 // Detection says an API exists, not that it works well: how each browser really behaves is in the
 // doc, from tests on real devices.
 
+import { pickMimeType } from '../record/format.ts'
 import { PROCESSING_KEYS, type ProcessingKey } from './audioProcessing.ts'
 
 export interface Capabilities {
@@ -70,6 +71,13 @@ export interface Capabilities {
    * 省電模式 once; elsewhere there is no suggestion (the mode itself works everywhere)
    */
   battery: boolean
+  /**
+   * Local recording (I4, e8-t03): MediaRecorder writing one of the formats in
+   * src/record/format.ts (WebM, or MP4 on Safari), canvas.captureStream for the picture, an
+   * AudioContext with a MediaStream destination for the mix, and IndexedDB for the chunks.
+   * Without it 更多 › 開始錄影 is grey and says why
+   */
+  localRecording: boolean
 }
 
 export type Capability = keyof Capabilities
@@ -94,6 +102,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'installPrompt',
   'homeScreenHint',
   'battery',
+  'localRecording',
 ]
 
 /** Where detection looks: the browser's globals, or a stand-in in tests */
@@ -104,6 +113,9 @@ export interface CapabilityEnv {
   AudioContext?: unknown
   AudioWorkletNode?: unknown
   WebAssembly?: { instantiate?: unknown }
+  MediaRecorder?: unknown
+  HTMLCanvasElement?: { prototype: object }
+  indexedDB?: unknown
   onbeforeinstallprompt?: unknown
   navigator?: {
     serviceWorker?: object | null
@@ -241,6 +253,26 @@ export function batteryManager(env: CapabilityEnv = browser()): Promise<BatteryL
   }
 }
 
+/**
+ * Whether this browser can record the meeting itself (I4, e8-t03): MediaRecorder with a format
+ * it writes, a canvas it can capture, Web Audio to mix into, IndexedDB to keep the chunks
+ */
+export function canRecordLocally(env: CapabilityEnv = browser()): boolean {
+  const recorder: unknown = env.MediaRecorder
+  if (typeof recorder !== 'function') return false
+  const { isTypeSupported } = recorder as { isTypeSupported?: unknown }
+  if (typeof isTypeSupported !== 'function') return false
+  const context = (env.AudioContext as { prototype?: object } | undefined)?.prototype
+  if (
+    !has(env.HTMLCanvasElement?.prototype, 'captureStream') ||
+    !has(context, 'createMediaStreamDestination') ||
+    !env.indexedDB
+  ) {
+    return false
+  }
+  return pickMimeType((type) => isTypeSupported.call(recorder, type) === true, false) !== null
+}
+
 /** Everything at once (the doc's table, for this browser) */
 export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities {
   const devices = env.navigator?.mediaDevices
@@ -264,5 +296,6 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     installPrompt: canPromptInstall(env),
     homeScreenHint: hasHomeScreenHint(env),
     battery: canReadBattery(env),
+    localRecording: canRecordLocally(env),
   }
 }

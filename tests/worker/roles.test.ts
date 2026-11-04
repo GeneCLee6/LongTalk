@@ -40,6 +40,7 @@ const EXPECTED: Record<Action, string> = {
   lowerHand: 'HC',
   setCohost: 'H',
   makeHost: 'H',
+  allowRecord: 'H',
 }
 
 const LETTER: Record<Role, string> = { host: 'H', cohost: 'C', participant: 'P', waiting: 'W' }
@@ -71,6 +72,7 @@ describe('roles (e1-t06)', () => {
       [
         'camOff',
         'lowerHand',
+        'allowRecord',
         'makeHost',
         'muteMember',
         'remove',

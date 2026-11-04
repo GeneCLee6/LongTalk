@@ -28,6 +28,7 @@ const state = {
     waitingRoom: false,
     passwordSetAt: null,
     spotlight: null,
+    recordings: {},
   },
   members: {
     m1: {
@@ -39,6 +40,7 @@ const state = {
       tracks: [],
       hand: null,
       signal: null,
+      mayRecord: false,
     },
   },
   waiting: {},

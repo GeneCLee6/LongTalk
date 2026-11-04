@@ -44,6 +44,7 @@ import { Backoff } from './backoff.ts'
  *   wrong one (F3); final (the pre-join screen asks again)
  * - `passwordWait`: too many wrong passwords; `passwordWaitUntil` says until when (F3); final
  * - `rateLimited`: the room closed us for too many connections or messages (I1); final
+ * - `recordingDeclined`: we did not agree to a recording within CONSENT_TIMEOUT_MS (I4); final
  */
 export type RoomStatus =
   | 'connecting'
@@ -64,9 +65,13 @@ export type RoomStatus =
   | 'passwordWrong'
   | 'passwordWait'
   | 'rateLimited'
+  | 'recordingDeclined'
 
 /** Where we are in the waiting room (F2): the latest `lobby` */
-export type LobbyState = Pick<LobbyMessage, 'position' | 'count' | 'room' | 'hostPresent'>
+export type LobbyState = Pick<LobbyMessage, 'position' | 'count' | 'room' | 'hostPresent'> & {
+  /** The meeting is being recorded (I4): the waiting screen says so */
+  recording?: boolean
+}
 
 export interface RoomConnectionState {
   status: RoomStatus
@@ -170,6 +175,8 @@ function finalStatus(code: number): RoomStatus | null {
       return 'passwordWait'
     case CloseCode.rateLimited:
       return 'rateLimited'
+    case CloseCode.recordingDeclined:
+      return 'recordingDeclined'
     default:
       return null
   }
@@ -456,14 +463,14 @@ export class RoomConnection {
         this.token = message.token
         this.backoff.reset()
         this.onToken(message.token)
-        const { position, count, room, hostPresent } = message
+        const { position, count, room, hostPresent, recording = false } = message
         this.update({
           ...this.state,
           status: 'waiting',
           you: message.you,
           token: message.token,
           view: null,
-          lobby: { position, count, room, hostPresent },
+          lobby: { position, count, room, hostPresent, recording },
         })
         return
       }
