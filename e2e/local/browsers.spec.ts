@@ -38,6 +38,9 @@ const ENGINE_DIFFERENCES: Record<string, Partial<Record<Capability, string>>> = 
     // I4: Playwright's Linux WebKit (GTK) does not write any of src/record/format.ts' types;
     // Safari 14.1+ records MP4 (and WebM from 18.4). Real Safari: DEPLOY.md §5 step 25
     localRecording: "Playwright's Linux WebKit has no MediaRecorder format we record; Safari does",
+    // I2: Playwright's Linux WebKit (GTK) has no WebAuthn; Safari 13+ has passkeys (DEPLOY.md §5
+    // step 26)
+    passkeys: "Playwright's Linux WebKit has no WebAuthn; Safari does",
   },
 }
 
