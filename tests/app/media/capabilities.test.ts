@@ -52,6 +52,15 @@ function fullBrowser(): CapabilityEnv {
     },
     AudioWorkletNode: class {},
     WebAssembly: { instantiate() {} },
+    MediaRecorder: class {
+      static isTypeSupported(type: string) {
+        return type.startsWith('video/webm')
+      }
+    },
+    HTMLCanvasElement: class {
+      captureStream() {}
+    },
+    indexedDB: {},
     onbeforeinstallprompt: null,
     navigator: {
       serviceWorker: {},

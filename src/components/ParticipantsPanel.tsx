@@ -44,7 +44,14 @@ export interface ParticipantsPanelProps {
   onPassword?: () => void
   /** Co-hosts and handing over (F3, e1-t16); handing over asks first */
   onRole?: (change: RoleChange, memberId: string) => void
+  /** Who records the meeting now (I4): a 錄影中 tag for everyone */
+  recorderIds?: readonly string[]
+  /** The host allows someone to record, takes it back, or stops their recording (I4) */
+  onRecordAction?: (action: RecordAction, memberId: string) => void
 }
+
+/** What the host may do about someone's recording (I4, e8-t02) */
+export type RecordAction = 'allow' | 'revoke' | 'stop'
 
 /** What the host may change about someone's role (F3, e1-t16) */
 export type RoleChange = 'makeCohost' | 'revokeCohost' | 'makeHost'
@@ -56,7 +63,7 @@ const noop = () => {}
  * the labels follow the language chosen now, strings.ts)
  */
 const memberActions = (): readonly {
-  action: HostMemberAction
+  action: Exclude<HostMemberAction, 'stopRecording'>
   label: string
   danger?: true
 }[] => [
@@ -103,6 +110,8 @@ export function ParticipantsPanel({
   passwordSet = false,
   onPassword = noop,
   onRole = noop,
+  recorderIds = [],
+  onRecordAction = noop,
 }: ParticipantsPanelProps) {
   const [confirm, setConfirm] = useState<
     | { type: 'remove'; member: Member }
@@ -139,7 +148,7 @@ export function ParticipantsPanel({
     const mic = member.tracks.find((t) => t.kind === 'mic')
     const cam = member.tracks.find((t) => t.kind === 'cam')
     // Only what would change something: an unmuted microphone, a camera that is on, a share
-    const applies: Record<HostMemberAction, boolean> = {
+    const applies: Record<Exclude<HostMemberAction, 'stopRecording'>, boolean> = {
       muteMember: !!mic && !mic.muted,
       camOff: !!cam && !cam.muted,
       stopShare: sharerIds.includes(member.id),
@@ -172,6 +181,30 @@ export function ParticipantsPanel({
         onSelect: () => setConfirm({ type: 'makeHost', member }),
       })
     }
+    // Recording (I4): the host stops someone's, and allows or stops allowing someone to record
+    const recording: MenuItem[] = []
+    if (!self && recorderIds.includes(member.id) && can(role, 'record')) {
+      recording.push({
+        id: 'stopRecording',
+        label: strings.record.stopTheirs,
+        onSelect: () => onRecordAction('stop', member.id),
+      })
+    }
+    if (member.role !== 'host' && canActOn(role, 'allowRecord', member.role, self)) {
+      recording.push(
+        member.mayRecord
+          ? {
+              id: 'revokeRecord',
+              label: strings.record.revoke,
+              onSelect: () => onRecordAction('revoke', member.id),
+            }
+          : {
+              id: 'allowRecord',
+              label: strings.record.allow,
+              onSelect: () => onRecordAction('allow', member.id),
+            },
+      )
+    }
     const controls = memberActions()
       .filter(({ action }) => applies[action] && canActOn(role, action, member.role, self))
       .map(({ action, label, danger }): MenuItem => ({
@@ -185,7 +218,7 @@ export function ParticipantsPanel({
       }))
     // Removing stays last (the dangerous one)
     const remove = controls.filter((item) => item.id === 'remove')
-    return [...controls.filter((item) => item.id !== 'remove'), ...roles, ...remove]
+    return [...controls.filter((item) => item.id !== 'remove'), ...recording, ...roles, ...remove]
   }
 
   return (
@@ -306,6 +339,7 @@ export function ParticipantsPanel({
                   {member.id === you && <Tag>{strings.participants.you}</Tag>}
                   {roleLabel && <Tag $strong>{roleLabel}</Tag>}
                   {member.reconnecting && <Tag $warn>{strings.participants.reconnecting}</Tag>}
+                  {recorderIds.includes(member.id) && <Tag $danger>{strings.record.tag}</Tag>}
                 </Tags>
               </Who>
               <States>
@@ -510,11 +544,13 @@ const Tags = styled.span`
   }
 `
 
-const Tag = styled.span<{ $strong?: boolean; $warn?: boolean }>`
+const Tag = styled.span<{ $strong?: boolean; $warn?: boolean; $danger?: boolean }>`
   padding: 0 ${space(1.5)};
   border-radius: ${radius.pill};
   background: ${({ $strong }) => ($strong ? color.primarySoft : color.surface2)};
-  color: ${({ $strong, $warn }) => ($warn ? color.warn : $strong ? color.primary : color.muted)};
+  color: ${({ $strong, $warn, $danger }) =>
+    $danger ? color.danger : $warn ? color.warn : $strong ? color.primary : color.muted};
+  font-weight: ${({ $danger }) => ($danger ? 700 : 400)};
   font-size: ${fontSize.badge};
   line-height: 1.6;
 `

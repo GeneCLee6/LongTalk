@@ -46,6 +46,7 @@ const INFO = {
   waitingRoom: false,
   passwordSetAt: null,
   spotlight: null,
+  recordings: {},
 }
 
 /** A browser as the room sees it: keeps its own copy of the view from what it receives */
@@ -176,6 +177,7 @@ const member = (
   tracks: [],
   hand: null,
   signal: null,
+  mayRecord: false,
 })
 
 describe('RoomHost', () => {
@@ -1647,6 +1649,7 @@ describe('RoomHost lock and waiting room (F2, e1-t09, e1-t10)', () => {
         count: 1,
         room: { name: null, createdBy: 'Gene' },
         hostPresent: true,
+        recording: false,
       },
     ])
     // The room sees who waits, apart from its members

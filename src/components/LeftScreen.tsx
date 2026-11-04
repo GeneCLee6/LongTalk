@@ -13,7 +13,7 @@ export interface LeftScreenProps {
    * browser is still banned (F1); `endedSelf`: we ended it for everyone (F3). Nothing to rejoin
    * but after `left`.
    */
-  reason: 'left' | 'closed' | 'ended' | 'endedSelf' | 'removed'
+  reason: 'left' | 'closed' | 'ended' | 'endedSelf' | 'removed' | 'declined'
   /** The room's name as the top bar showed it */
   roomName: string
   /** The one question's answer, given at most once (the page sends it as telemetry) */
@@ -29,13 +29,15 @@ export interface LeftScreenProps {
  */
 export function LeftScreen({ reason, roomName, onRate, onRejoin, onHome }: LeftScreenProps) {
   const [rated, setRated] = useState<RatingScore | null>(null)
-  const closed = reason !== 'left'
+  // `declined` (I4): did not agree to the recording; joining again asks again
+  const closed = reason !== 'left' && reason !== 'declined'
   const heading = {
     left: strings.left.title,
     closed: strings.left.closedTitle,
     ended: strings.left.endedTitle,
     endedSelf: strings.left.endedSelfTitle,
     removed: strings.left.removedTitle,
+    declined: strings.left.declinedTitle,
   }[reason]
   const body = {
     left: strings.left.body(roomName),
@@ -43,6 +45,7 @@ export function LeftScreen({ reason, roomName, onRate, onRejoin, onHome }: LeftS
     ended: strings.left.endedBody(roomName),
     endedSelf: strings.left.endedSelfBody(roomName),
     removed: strings.left.removedBody(roomName),
+    declined: strings.left.declinedBody(roomName),
   }[reason]
   const rate = (score: RatingScore) => {
     if (rated !== null) return

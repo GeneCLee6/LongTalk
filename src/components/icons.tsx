@@ -360,3 +360,13 @@ export function ThemeIcon() {
     </svg>
   )
 }
+
+/** Recording (I4): a ring around a filled dot, the red light's shape */
+export function RecordIcon() {
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}

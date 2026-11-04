@@ -29,6 +29,7 @@ class FakeRoom {
       waitingRoom: false,
       passwordSetAt: null,
       spotlight: null,
+      recordings: {},
     },
     members: {},
     waiting: {},
@@ -49,6 +50,7 @@ class FakeRoom {
         tracks: [],
         hand: null,
         signal: null,
+        mayRecord: false,
       }
     })
   }

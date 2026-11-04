@@ -86,6 +86,7 @@ export function WaitingScreen({
           <>
             <Position>{strings.waiting.position(lobby.position, lobby.count)}</Position>
             <Body>{lobby.hostPresent ? strings.waiting.body : strings.waiting.hostAbsent}</Body>
+            {lobby.recording && <Body>{strings.record.waiting}</Body>}
           </>
         ) : (
           <Warn>
