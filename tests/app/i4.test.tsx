@@ -15,6 +15,7 @@ import { App } from '../../src/App.tsx'
 import { PreJoin, type PreJoinProps } from '../../src/components/PreJoin.tsx'
 import RecordDialog from '../../src/components/RecordDialog.tsx'
 import { TopBar } from '../../src/components/TopBar.tsx'
+import { WaitingScreen } from '../../src/components/WaitingScreen.tsx'
 import { canRecordLocally } from '../../src/media/capabilities.ts'
 import { DEFAULT_RECORDING_SETTINGS } from '../../src/record/format.ts'
 import type { RecordingHandle } from '../../src/record/recorder.ts'
@@ -67,7 +68,7 @@ describe('useLocalRecording: the room decides (e8-t02)', () => {
       useLocalRecording({ ...base, ...props }),
     )
     const listed = (on: boolean): Record<string, RecordingInfo> =>
-      on ? { a: { memberId: 'a', since: 1 } } : {}
+      on ? { a: { memberId: 'a', since: 1, consented: [] } } : {}
     return {
       ...hook,
       sent,
@@ -226,10 +227,37 @@ describe('the red light and the notices (e8-t02, AC-8.2)', () => {
     }
     const { rerender } = render(<PreJoin {...props} />)
     expect(screen.queryByText('這場會議正在錄影')).toBeNull()
-    rerender(<PreJoin {...props} recording onHome={onHome} />)
+    expect(screen.getByRole('button', { name: '加入' })).toBeEnabled()
+    const onRecordingAgreed = vi.fn()
+    rerender(<PreJoin {...props} recording onRecordingAgreed={onRecordingAgreed} onHome={onHome} />)
     expect(screen.getByText('這場會議正在錄影')).toBeInTheDocument()
+    // Joining needs the explicit agreement (CLAUDE.md rule 4)
+    expect(screen.getByRole('button', { name: '加入' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('checkbox', { name: '我同意這場會議被錄影' }))
+    expect(onRecordingAgreed).toHaveBeenCalledWith(true)
+    rerender(<PreJoin {...props} recording recordingAgreed onHome={onHome} />)
+    expect(screen.getByRole('button', { name: '加入' })).toBeEnabled()
     fireEvent.click(screen.getByRole('button', { name: '不加入，回首頁' }))
     expect(onHome).toHaveBeenCalled()
+  })
+
+  it('tells someone in the waiting room that the meeting is being recorded', () => {
+    const props = {
+      roomName: 'Room',
+      lobby: { position: 1, count: 1, room: { name: null, createdBy: 'Gene' }, hostPresent: true },
+      connection: 'ok' as const,
+      camera: null,
+      micOn: false,
+      camOn: false,
+      onToggleMic: () => {},
+      onToggleCam: () => {},
+      onLeave: () => {},
+      onRetry: () => {},
+    }
+    const { rerender } = render(<WaitingScreen {...props} />)
+    expect(screen.queryByText(/這場會議正在錄影/)).toBeNull()
+    rerender(<WaitingScreen {...props} lobby={{ ...props.lobby, recording: true }} />)
+    expect(screen.getByText('這場會議正在錄影。進入會議時會請你同意被錄影。')).toBeInTheDocument()
   })
 
   it('錄影設定: sound only, resolution, our own camera, and what everyone will see', () => {
@@ -343,37 +371,67 @@ describe('recording in the room (e8-t02, AC-8.2)', () => {
     return RoomSocket.instances.at(-1)!
   }
 
-  it('tells everyone else, with 離開會議, and shows who records in the top bar', async () => {
-    // Back after a reload: the pre-join screen did not say it, so the room does
+  it('blocks the room with the question until we agree; RoomDO keeps the answer', async () => {
+    // Back after a reload: nothing agreed yet, so the room asks
     const socket = await enter([member('a', 'Gene', 'participant'), member('b', 'Bob', 'host')], {
-      b: { memberId: 'b', since: 5 },
+      b: { memberId: 'b', since: 5, consented: [] },
     })
     expect(screen.getByRole('img', { name: 'Bob 正在錄影' })).toBeInTheDocument()
-    const consent = () => screen.getByText(/錄影這場會議/).closest('[role="alert"]') as HTMLElement
-    const notice = consent()
-    expect(notice).toHaveTextContent('Bob 正在錄影這場會議。留在會議中，表示你知道正在錄影。')
-    fireEvent.click(within(notice).getByRole('button', { name: '知道了' }))
-    expect(screen.queryByText(/正在錄影這場會議/)).toBeNull()
-    // Someone else starts: told again, that they started
+    const question = screen.getByRole('alertdialog', { name: '這場會議正在錄影' })
+    expect(question).toHaveAttribute('aria-modal', 'true')
+    expect(question).toHaveTextContent('Bob 正在錄影這場會議')
+    // Focus is in it and stays there; Escape does not dismiss it; the rest of the room is inert
+    const agree = within(question).getByRole('button', { name: '同意並留在會議' })
+    expect(agree).toHaveFocus()
+    fireEvent.keyDown(agree, { key: 'Tab' })
+    expect(within(question).getByRole('button', { name: '離開會議' })).toHaveFocus()
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true })
+    expect(agree).toHaveFocus()
+    fireEvent.keyDown(agree, { key: 'Escape' })
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '更多' }).closest('[inert]')).not.toBeNull()
+    fireEvent.click(agree)
+    expect(socket.sent.at(-1)).toBe('{"t":"consent"}')
+    // The room lists our agreement: the question goes, the room is usable
     await act(async () =>
       socket.receive({
         t: 'patch',
         rev: 2,
+        ops: [{ op: 'set', path: ['room', 'recordings', 'b', 'consented'], value: ['a'] }],
+      }),
+    )
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(screen.getByRole('button', { name: '更多' }).closest('[inert]')).toBeNull()
+    // Someone else starts: asked again
+    await act(async () =>
+      socket.receive({
+        t: 'patch',
+        rev: 3,
         ops: [
           { op: 'set', path: ['members', 'c'], value: member('c', 'Cleo', 'participant') },
-          { op: 'set', path: ['room', 'recordings', 'c'], value: { memberId: 'c', since: 9 } },
+          {
+            op: 'set',
+            path: ['room', 'recordings', 'c'],
+            value: { memberId: 'c', since: 9, consented: [] },
+          },
         ],
       }),
     )
     expect(screen.getByRole('img', { name: '2 人正在錄影' })).toBeInTheDocument()
-    expect(consent()).toHaveTextContent('Cleo 開始錄影這場會議')
-    // A participant may not record: no 開始錄影
-    fireEvent.click(screen.getByRole('button', { name: '更多' }))
-    expect(screen.queryByRole('menuitem', { name: /開始錄影/ })).toBeNull()
-    fireEvent.keyDown(screen.getAllByRole('menuitem')[0], { key: 'Escape' })
-    // 離開會議 leaves
-    fireEvent.click(within(consent()).getByRole('button', { name: '離開會議' }))
+    const again = screen.getByRole('alertdialog')
+    expect(again).toHaveTextContent('Cleo 正在錄影這場會議')
+    // 離開會議 leaves, and the after-leave screen says why
+    fireEvent.click(within(again).getByRole('button', { name: '離開會議' }))
     expect(socket.sent.at(-1)).toBe('{"t":"leave"}')
+    expect(await screen.findByRole('heading', { name: '你沒有同意錄影，已離開會議' })).toBeVisible()
+  })
+
+  it('shows the room closing us for not answering as declining', async () => {
+    const socket = await enter([member('a', 'Gene', 'participant'), member('b', 'Bob', 'host')], {
+      b: { memberId: 'b', since: 5, consented: [] },
+    })
+    await act(async () => socket.onclose?.({ code: 4413 }))
+    expect(await screen.findByRole('heading', { name: '你沒有同意錄影，已離開會議' })).toBeVisible()
   })
 
   it('lets the host start recording from 更多 (asking the room), or explains why the browser cannot', async () => {
@@ -398,7 +456,11 @@ describe('recording in the room (e8-t02, AC-8.2)', () => {
         rev: 2,
         ops: [
           { op: 'set', path: ['members', 'b', 'mayRecord'], value: true },
-          { op: 'set', path: ['room', 'recordings', 'b'], value: { memberId: 'b', since: 9 } },
+          {
+            op: 'set',
+            path: ['room', 'recordings', 'b'],
+            value: { memberId: 'b', since: 9, consented: [] },
+          },
         ],
       }),
     )

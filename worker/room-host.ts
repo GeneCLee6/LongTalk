@@ -2,6 +2,7 @@ import { CHAT_CHUNK, CHAT_HISTORY, ChatRateLimit, type ChatMessage } from '../sh
 import { diff } from '../shared/patch.ts'
 import {
   BAN_MS,
+  CONSENT_TIMEOUT_MS,
   CloseCode,
   DENY_COOLDOWN_MS,
   EMPTY_ROOM_TTL_MS,
@@ -31,6 +32,7 @@ import {
   type NoticeMessage,
   type RoomInfo,
   type RoomInit,
+  type RecordingInfo,
   type RoomSummary,
   type RoomView,
   type ShareInfo,
@@ -338,6 +340,12 @@ export class RoomHost {
   private guard = new PasswordGuard()
   /** Until when this ended meeting answers CloseCode.ended (F3); null otherwise */
   private endedUntil: number | null = null
+  /**
+   * When each connected member last came in (joined, was admitted, reconnected; I4): a recording's
+   * CONSENT_TIMEOUT_MS counts from this or the recording's start, whichever is later. Not stored:
+   * after an eviction everyone counts from the restore
+   */
+  private readonly cameIn = new Map<string, number>()
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -383,6 +391,7 @@ export class RoomHost {
     this.signalRate.clear()
     this.bans.clear()
     this.lobbies.clear()
+    this.cameIn.clear()
     for (const ban of bans) {
       this.bans.set(ban.client, { until: ban.until, kind: ban.denied ? 'denied' : 'removed' })
     }
@@ -442,14 +451,18 @@ export class RoomHost {
     if (spotlight !== null && !this.inRoomMember(spotlight)) {
       this.info = { ...this.info!, spotlight: null }
     }
-    // And for recorders (I4)
+    // And for recorders (I4); recordings stored before consent (I4's first cut) have no list
     const recordings = this.info?.recordings ?? {}
     const recording = Object.fromEntries(
-      Object.entries(recordings).filter(([memberId]) => this.inRoomMember(memberId)),
+      Object.entries(recordings)
+        .filter(([memberId]) => this.inRoomMember(memberId))
+        .map(([memberId, entry]) => [memberId, { ...entry, consented: entry.consented ?? [] }]),
     )
-    if (Object.keys(recording).length !== Object.keys(recordings).length) {
+    if (JSON.stringify(recording) !== JSON.stringify(recordings)) {
       this.info = { ...this.info!, recordings: recording }
     }
+    const restoredAt = this.deps.now()
+    for (const id of this.members.keys()) this.cameIn.set(id, restoredAt)
     this.sent = info ? this.view() : null
     if (!info) {
       // An ended meeting's tombstone (F3) keeps its job; a stale one goes at the next alarm
@@ -537,6 +550,8 @@ export class RoomHost {
         this.pruneBans()
       } else if (job === 'waiting') {
         this.expireWaiting()
+      } else if (job === 'consent') {
+        this.expireConsent()
       } else if (job === 'guesses') {
         if (this.guard.prune(this.deps.now())) this.saveGuesses()
       } else if (job === 'ended' && !this.info) {
@@ -702,7 +717,73 @@ export class RoomHost {
       case 'record':
         this.record(connId, conn.member!, message.on)
         return
+      case 'consent':
+        this.consent(conn.member!)
+        return
     }
+  }
+
+  /**
+   * `consent` (I4, CLAUDE.md rule 4): the member agrees to every recording on now (not their
+   * own); everyone sees it in `RecordingInfo.consented`. Someone waiting is not in the meeting yet:
+   * nothing to agree to.
+   */
+  private consent(memberId: string): void {
+    if (!this.inRoomMember(memberId)) return
+    const recordings = this.info!.recordings
+    let changed = false
+    const next: Record<string, RecordingInfo> = {}
+    for (const [id, entry] of Object.entries(recordings)) {
+      if (id !== memberId && !entry.consented.includes(memberId)) {
+        next[id] = { ...entry, consented: [...entry.consented, memberId] }
+        changed = true
+      } else next[id] = entry
+    }
+    if (!changed) return
+    this.info = { ...this.info!, recordings: next }
+    this.deps.storage.saveRoom(this.info)
+    this.publish()
+  }
+
+  /**
+   * When each connected member in the meeting must have agreed to the recordings on now (I4):
+   * CONSENT_TIMEOUT_MS after the latest of the recording's start and their coming in. Someone
+   * reconnecting is not counted (their clock starts again when they are back).
+   */
+  private consentDeadlines(): Map<string, number> {
+    const due = new Map<string, number>()
+    const recordings = Object.values(this.info?.recordings ?? {})
+    if (recordings.length === 0) return due
+    for (const member of this.members.values()) {
+      if (member.role === 'waiting' || member.reconnecting) continue
+      const cameIn = this.cameIn.get(member.id) ?? this.deps.now()
+      for (const recording of recordings) {
+        if (recording.memberId === member.id || recording.consented.includes(member.id)) continue
+        const at = Math.max(recording.since, cameIn) + CONSENT_TIMEOUT_MS
+        due.set(member.id, Math.min(due.get(member.id) ?? at, at))
+      }
+    }
+    return due
+  }
+
+  /**
+   * The `consent` job (I4): whoever has not agreed in time is treated as declining: closed with
+   * CloseCode.recordingDeclined and removed at once (no ban; joining again asks again)
+   */
+  private expireConsent(): void {
+    const now = this.deps.now()
+    let changed = false
+    for (const [id, at] of this.consentDeadlines()) {
+      if (at > now) continue
+      const conn = this.sessions.get(id)?.conn ?? null
+      if (conn !== null) {
+        this.conns.delete(conn)
+        this.deps.sockets.close(conn, CloseCode.recordingDeclined, 'recording not agreed')
+      }
+      this.remove(id)
+      changed = true
+    }
+    if (changed) this.publish()
   }
 
   /**
@@ -725,7 +806,10 @@ export class RoomHost {
     if (recordings[memberId]) return
     this.info = {
       ...this.info!,
-      recordings: { ...recordings, [memberId]: { memberId, since: this.deps.now() } },
+      recordings: {
+        ...recordings,
+        [memberId]: { memberId, since: this.deps.now(), consented: [] },
+      },
     }
     this.deps.storage.saveRoom(this.info)
     this.publish()
@@ -1090,6 +1174,7 @@ export class RoomHost {
         count: queue.length,
         room: { name: this.info!.name, createdBy: this.info!.createdBy },
         hostPresent,
+        recording: Object.keys(this.info!.recordings).length > 0,
       }
       const key = `${session.conn} ${JSON.stringify(lobby)}`
       if (this.lobbies.get(id) === key) continue
@@ -1660,6 +1745,9 @@ export class RoomHost {
 
   /** The member is in the room on this connection: its welcome, then the chat history */
   private welcome(connId: string, memberId: string): void {
+    // A recording's time to agree counts from now for someone who just came in (I4)
+    this.cameIn.set(memberId, this.deps.now())
+    this.reschedule()
     this.deps.sockets.send(connId, {
       t: 'welcome',
       v: PROTOCOL_VERSION,
@@ -1712,6 +1800,7 @@ export class RoomHost {
     this.reactionRate.forget(memberId)
     this.signalRate.forget(memberId)
     this.lobbies.delete(memberId)
+    this.cameIn.delete(memberId)
   }
 
   /** Members are replaced, never mutated: `sent` shares their objects */
@@ -1802,6 +1891,13 @@ export class RoomHost {
     if (waitEnds === null) this.schedule.clear('waiting')
     else this.schedule.set('waiting', waitEnds)
     // The next wrong password guess to stop counting (F3); none, no job
+    // The next member to run out of time to agree to a recording (I4); none, no job
+    let consentEnds: number | null = null
+    for (const at of this.consentDeadlines().values()) {
+      if (consentEnds === null || at < consentEnds) consentEnds = at
+    }
+    if (consentEnds === null) this.schedule.clear('consent')
+    else this.schedule.set('consent', consentEnds)
     const guessEnds = this.guard.nextExpiry()
     if (guessEnds === null) this.schedule.clear('guesses')
     else this.schedule.set('guesses', guessEnds)

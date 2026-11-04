@@ -690,6 +690,9 @@ export const en: Strings = {
     endedSelfTitle: 'You ended the meeting',
     endedSelfBody: (room: string) =>
       `“${room}” has ended, everyone has left and the room is closed.`,
+    declinedTitle: 'You didn’t agree to the recording, so you left',
+    declinedBody: (room: string) =>
+      `“${room}” is being recorded. To join, rejoin and agree to the recording.`,
     removedTitle: 'You were removed from the room',
     removedBody: (room: string) =>
       `The host removed you from “${room}”. You can’t rejoin it from this browser for 10 minutes.`,
@@ -947,16 +950,18 @@ export const en: Strings = {
       names.length <= 2
         ? names.join(' and ')
         : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`,
-    consent: (who: string) =>
-      `${who} started recording this meeting. By staying, you know it’s being recorded.`,
-    consentJoined: (who: string) =>
-      `${who} is recording this meeting. By staying, you know it’s being recorded.`,
-    consentOk: 'Got it',
+    consentTitle: 'This meeting is being recorded',
+    consentBody: (who: string) =>
+      `${who} is recording this meeting. To stay, agree to be recorded; otherwise leave. Without an answer within 60 seconds you’ll leave the meeting.`,
+    consentAgree: 'Agree and stay',
     consentLeave: 'Leave meeting',
+    consentSent: 'Agreed, waiting for the room…',
     othersStopped: (name: string) => `${name} stopped recording`,
     prejoinTitle: 'This meeting is being recorded',
     prejoinBody:
-      'By joining, you know it’s being recorded. If you don’t want to be recorded, don’t join.',
+      'To join, agree to be recorded first. If you don’t want to be recorded, don’t join.',
+    prejoinAgree: 'I agree to this meeting being recorded',
+    waiting: 'This meeting is being recorded. You’ll be asked to agree when you’re let in.',
     prejoinLeave: 'Don’t join, go home',
     leftover: (when: string) => `There’s a recording that wasn’t saved (started ${when}).`,
     leftoverDownload: 'Download the unfinished recording',

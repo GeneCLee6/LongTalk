@@ -130,6 +130,16 @@
 //    recorder gets `notice` `recordingStopped` and its browser stops and saves the file. Taking
 //    the permission away (`allowRecord` off) stops a recording it allowed the same way. Several
 //    members may record at once (each their own file).
+// 22. Recording consent (I4, CLAUDE.md rule 4 「明確同意」): everyone in the meeting but the
+//    recorder must agree to each recording. `consent` agrees to every recording on now; the room
+//    adds the member to each one's `RecordingInfo.consented`. Until a member agrees, their browser
+//    blocks the room with the question, and the recorder leaves their camera, screen and sound out
+//    of the file. A member who has not agreed CONSENT_TIMEOUT_MS after the recording started, or
+//    after they came in (joined, were admitted from the waiting room, reconnected), whichever is
+//    later, is treated as declining: the room closes their socket with
+//    CloseCode.recordingDeclined and removes them at once (no ban: they may come back and agree).
+//    Declining in the browser is leaving. Someone waiting is told the meeting is being recorded in
+//    `lobby.recording`; the pre-join screen asks for the agreement before 加入.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -158,6 +168,7 @@
 // v16 → v17 (I4): `RoomInfo.recordings`, `Member.mayRecord`, `record`, `host` actions
 //   `stopRecording`, `allowRecord`, notices `recordingStopped`, `recordAllowed`, `recordRevoked`.
 //   A v16 browser could not show that the room records, so it is refused like any older one.
+//   Also `RecordingInfo.consented`, `consent`, `lobby.recording`, close code `recordingDeclined`.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -212,6 +223,8 @@ export const DENY_COOLDOWN_MS = 60_000
 export const WAIT_TIMEOUT_MS = 15 * 60_000
 /** An ended meeting's room answers CloseCode.ended, not roomNotFound, for this long (F3) */
 export const ENDED_TOMBSTONE_MS = 10 * 60_000
+/** A member who has not agreed to a recording this long is treated as declining (I4) */
+export const CONSENT_TIMEOUT_MS = 60_000
 
 /**
  * WebSocket close codes the server uses. The browser does not reconnect after the 44xx ones but
@@ -250,6 +263,11 @@ export const CloseCode = {
    * (ROOM_CONNECT_RATE), or too many frames on one socket (SOCKET_MESSAGE_RATE)
    */
   rateLimited: 4420,
+  /**
+   * The member did not agree to a recording within CONSENT_TIMEOUT_MS (I4): removed, not banned;
+   * the browser does not reconnect (joining again asks again)
+   */
+  recordingDeclined: 4413,
 } as const
 
 /** What POST /api/rooms decides about a room */
@@ -291,6 +309,26 @@ export type RecordingInfo = {
   memberId: string
   /** When the room granted it (the server's clock) */
   since: number
+  /**
+   * Who agreed to this recording (I4, `consent`), by member id; the recorder is never listed (it
+   * is their own). The recorder leaves everyone else out of the file until they are here
+   */
+  consented: string[]
+}
+
+/**
+ * Whether `memberId` still has to agree to a recording on now (I4): someone else records and the
+ * member is not in its `consented`
+ */
+export function consentPending(
+  recordings: Readonly<Record<string, RecordingInfo>> | undefined,
+  memberId: string | null,
+): boolean {
+  if (memberId === null) return false
+  return Object.values(recordings ?? {}).some(
+    (recording) =>
+      recording.memberId !== memberId && !(recording.consented ?? []).includes(memberId),
+  )
 }
 
 /** The recordings in the order they started, oldest first (ties by member id) */
@@ -484,6 +522,8 @@ export type LobbyMessage = {
   count: number
   room: Pick<RoomInfo, 'name' | 'createdBy'>
   hostPresent: boolean
+  /** The meeting is being recorded (I4): the waiting screen says so */
+  recording: boolean
 }
 
 /**
@@ -577,6 +617,9 @@ export type SignalMessage = { t: 'signal'; level: SignalLevel }
 /** Start (`on`) or stop the member's own local recording (I4, e8-t02) */
 export type RecordMessage = { t: 'record'; on: boolean }
 
+/** Agree to every recording on now (I4, rule 4 「明確同意」) */
+export type ConsentMessage = { t: 'consent' }
+
 /**
  * The host controls that act on one member (F1; `lowerHand` G3; `stopRecording` I4); `memberId`
  * says who
@@ -655,6 +698,7 @@ export type ClientMessage =
   | HandMessage
   | SignalMessage
   | RecordMessage
+  | ConsentMessage
 
 // ── POST /api/rooms ──────────────────────────────────────────────────────────────────────────
 
@@ -773,6 +817,8 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return isSignalLevel(value.level) ? { t: 'signal', level: value.level } : null
     case 'record':
       return typeof value.on === 'boolean' ? { t: 'record', on: value.on } : null
+    case 'consent':
+      return { t: 'consent' }
     case 'host': {
       const action = value.action
       if (typeof action !== 'string') return null

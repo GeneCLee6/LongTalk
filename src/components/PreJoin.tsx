@@ -84,6 +84,9 @@ export interface PreJoinProps {
    * join (CLAUDE.md rule 4)
    */
   recording?: boolean
+  /** 我同意這場會議被錄影: required before 加入 while `recording` (CLAUDE.md rule 4 「明確同意」) */
+  recordingAgreed?: boolean
+  onRecordingAgreed?: (agreed: boolean) => void
   /** 不加入，回首頁 in the recording notice */
   onHome?: () => void
 }
@@ -111,7 +114,8 @@ export function PreJoin(props: PreJoinProps) {
   const showVideo = cam && stream !== null && stream.getVideoTracks().length > 0
   const pwd = props.password ?? null
   const passwordReady = pwd === null || (normalizePassword(pwd.value) !== null && !pwd.waiting)
-  const canJoin = normalizeName(name) !== null && !props.joining && passwordReady
+  const recordingReady = !props.recording || props.recordingAgreed === true
+  const canJoin = normalizeName(name) !== null && !props.joining && passwordReady && recordingReady
 
   function onSubmit(event: FormEvent) {
     event.preventDefault()
@@ -218,6 +222,14 @@ export function PreJoin(props: PreJoinProps) {
             <div>
               <strong>{strings.record.prejoinTitle}</strong>
               <span>{strings.record.prejoinBody}</span>
+              <Agree>
+                <input
+                  type="checkbox"
+                  checked={props.recordingAgreed === true}
+                  onChange={(event) => props.onRecordingAgreed?.(event.target.checked)}
+                />
+                {strings.record.prejoinAgree}
+              </Agree>
               {props.onHome && (
                 <LinkButton type="button" onClick={props.onHome}>
                   {strings.record.prejoinLeave}
@@ -417,6 +429,22 @@ const Recorded = styled(Status)`
 
   svg {
     color: ${color.danger};
+  }
+`
+
+const Agree = styled.label`
+  display: flex;
+  align-items: center;
+  gap: ${space(2)};
+  min-height: 32px;
+  font-weight: 700;
+  cursor: pointer;
+
+  input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: ${color.primary};
   }
 `
 

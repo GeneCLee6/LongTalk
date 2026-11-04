@@ -69,28 +69,56 @@ test('the host records; everyone is told; stopping downloads the file', async ({
   const path = await newRoom(page)
   await joinRoom(page, path, 'Gene')
   const bob = await secondMember(browser, path, 'Bob')
+  const dave = await secondMember(browser, path, 'Dave')
   await expect(bob.page.getByRole('figure', { name: /Gene/ })).toBeVisible()
 
   await startRecording(page)
-  // Bob: the red light with who records, and the notice with 離開會議
+  // Bob: the red light with who records, and the question that blocks the room until answered
   await expect(bob.page.getByRole('img', { name: strings.record.byOne('Gene') })).toBeVisible()
-  const notice = bob.page.getByRole('alert').filter({ hasText: strings.record.consent('Gene') })
-  await expect(notice).toBeVisible()
-  await expect(notice.getByRole('button', { name: strings.record.consentLeave })).toBeVisible()
-  // The light and the notice pass axe (WCAG 2.2 AA), like every other screen (a11y.spec.ts)
+  const question = bob.page.getByRole('alertdialog', { name: strings.record.consentTitle })
+  await expect(question).toBeVisible()
+  await expect(question).toContainText(strings.record.consentBody('Gene'))
+  const agree = question.getByRole('button', { name: strings.record.consentAgree })
+  await expect(agree).toBeFocused()
+  // Nothing else in the room is usable meanwhile (inert)
+  expect(
+    await bob.page
+      .getByRole('toolbar', { name: strings.devices.controls })
+      .evaluate((toolbar) => toolbar.closest('[inert]') !== null),
+  ).toBe(true)
+  // The light and the question pass axe (WCAG 2.2 AA), like every other screen (a11y.spec.ts)
   const axe = await new AxeBuilder({ page: bob.page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
     .analyze()
   expect(axe.violations.map((violation) => violation.id)).toEqual([])
-  await notice.getByRole('button', { name: strings.record.consentOk }).click()
-  await expect(notice).toHaveCount(0)
+  await agree.click()
+  await expect(question).toHaveCount(0)
+  await expect(more(bob.page)).toBeVisible()
 
-  // Someone about to join is told before joining
+  // Dave declines: he leaves, and is told why
+  await dave.page
+    .getByRole('alertdialog', { name: strings.record.consentTitle })
+    .getByRole('button', { name: strings.record.consentLeave })
+    .click()
+  await expect(dave.page.getByRole('heading', { name: strings.left.declinedTitle })).toBeVisible()
+  await expect(page.getByRole('figure', { name: /Dave/ })).toHaveCount(0)
+  await dave.context.close()
+
+  // Someone about to join must agree before joining; then the room does not ask again
   const cleo = await browser.newContext()
   const cleoPage = await cleo.newPage()
   await openPreJoin(cleoPage, path)
   await expect(cleoPage.getByText(strings.record.prejoinTitle)).toBeVisible()
   await expect(cleoPage.getByRole('button', { name: strings.record.prejoinLeave })).toBeVisible()
+  await cleoPage.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill('Cleo')
+  const join = cleoPage.getByRole('button', { name: strings.prejoin.join, exact: true })
+  await expect(join).toBeDisabled()
+  await cleoPage.getByRole('checkbox', { name: strings.record.prejoinAgree }).check()
+  await join.click()
+  await expect(cleoPage.getByRole('region', { name: strings.room.grid })).toBeVisible()
+  await expect(more(cleoPage)).toBeVisible()
+  await cleoPage.waitForTimeout(1_000)
+  await expect(cleoPage.getByRole('alertdialog')).toHaveCount(0)
   await cleo.close()
 
   // A few chunks (RECORDER_TIMESLICE_MS is 4 s), then stop: the file downloads
@@ -124,6 +152,11 @@ test('a member the host allowed records, and the host stops it: their file downl
 
   await startRecording(bob.page)
   await expect(page.getByRole('img', { name: strings.record.byOne('Bob') })).toBeVisible()
+  // The host is asked too
+  await page
+    .getByRole('alertdialog', { name: strings.record.consentTitle })
+    .getByRole('button', { name: strings.record.consentAgree })
+    .click()
   await bob.page.waitForTimeout(5_000)
   const download = bob.page.waitForEvent('download')
   await page.getByRole('button', { name: strings.participants.actions('Bob') }).click()

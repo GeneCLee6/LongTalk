@@ -163,6 +163,7 @@ describe('RoomConnection', () => {
       count: 2,
       room: { name: null, createdBy: 'Wei' },
       hostPresent: true,
+      recording: false,
     } as const
     socket.receive(lobby)
     expect(connection.getState()).toMatchObject({
@@ -171,7 +172,13 @@ describe('RoomConnection', () => {
       token: TOKEN,
       view: null,
       welcomes: 0,
-      lobby: { position: 2, count: 2, room: { name: null, createdBy: 'Wei' }, hostPresent: true },
+      lobby: {
+        position: 2,
+        count: 2,
+        room: { name: null, createdBy: 'Wei' },
+        hostPresent: true,
+        recording: false,
+      },
     })
     expect(onToken).toHaveBeenCalledWith(TOKEN)
     // The socket drops: the lobby stays while it reconnects with the token

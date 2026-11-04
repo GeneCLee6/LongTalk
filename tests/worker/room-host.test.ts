@@ -1649,6 +1649,7 @@ describe('RoomHost lock and waiting room (F2, e1-t09, e1-t10)', () => {
         count: 1,
         room: { name: null, createdBy: 'Gene' },
         hostPresent: true,
+        recording: false,
       },
     ])
     // The room sees who waits, apart from its members

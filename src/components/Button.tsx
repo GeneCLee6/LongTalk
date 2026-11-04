@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes } from 'react'
+import type { ButtonHTMLAttributes, Ref } from 'react'
 import styled, { css } from 'styled-components'
 import { color, fontSize, motion, radius, space } from '../styles/tokens.ts'
 
@@ -8,6 +8,8 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant
   /** Stretch to the container's width (forms, phone layouts) */
   block?: boolean
+  /** React 19 passes it like any prop (the recording question focuses its button, I4) */
+  ref?: Ref<HTMLButtonElement>
 }
 
 /** Text button. `type` defaults to "button" so it never submits a form by accident. */

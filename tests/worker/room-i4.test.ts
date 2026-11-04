@@ -5,10 +5,12 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { applyPatch } from '../../shared/patch.ts'
 import {
+  CONSENT_TIMEOUT_MS,
   CloseCode,
   PROTOCOL_VERSION,
   RECONNECT_GRACE_MS,
   parseClientMessage,
+  consentPending,
   recordingOrder,
   viewAsJson,
   type RoomInfo,
@@ -24,6 +26,7 @@ class FakeClient {
   received: ServerMessage[] = []
   view: RoomView | null = null
   rev = -1
+  closed: { code: number; reason: string } | null = null
 
   receive(message: ServerMessage) {
     this.received.push(message)
@@ -52,7 +55,10 @@ function setup() {
   const host = new RoomHost({
     sockets: {
       send: (conn, message) => clients.get(conn)?.receive(message),
-      close: noop,
+      close: (conn, code, reason) => {
+        const client = clients.get(conn)
+        if (client) client.closed = { code, reason }
+      },
     },
     storage: {
       saveRoom: (info) => {
@@ -94,7 +100,18 @@ function setup() {
   }
   const send = (who: { conn: string }, message: object) =>
     void host.message(who.conn, JSON.stringify(message))
-  return { host, saved, join, send, tick: (ms: number) => (clock += ms), now: () => clock }
+  /** Lets `ms` pass with every socket alive (heartbeats), running the alarm as it comes due */
+  const wait = (ms: number) => {
+    const end = clock + ms
+    while (clock < end) {
+      const step = Math.min(5_000, end - clock)
+      clock += step
+      for (const conn of clients.keys()) host.heartbeat(conn, clock)
+      const next = host.nextAlarm()
+      if (next !== null && next <= clock) host.alarm()
+    }
+  }
+  return { host, saved, join, send, wait, tick: (ms: number) => (clock += ms), now: () => clock }
 }
 
 const recorders = (view: RoomView | null) =>
@@ -130,7 +147,7 @@ describe('recording state (e8-t02)', () => {
     const bob = t.join('Bob')
     t.tick(50)
     t.send(host, { t: 'record', on: true })
-    const info = { memberId: host.id, since: t.now() }
+    const info = { memberId: host.id, since: t.now(), consented: [] }
     expect(bob.client.view!.room.recordings).toEqual({ [host.id]: info })
     expect(host.client.view!.room.recordings).toEqual({ [host.id]: info })
     expect(t.host.summary()?.recordings).toEqual({ [host.id]: info })
@@ -271,7 +288,7 @@ describe('recording state (e8-t02)', () => {
     // A stored recorder who is no longer a member is dropped
     const stale = setup()
     stale.host.restore(
-      { ...t.saved.room!, recordings: { nobody: { memberId: 'nobody', since: 1 } } },
+      { ...t.saved.room!, recordings: { nobody: { memberId: 'nobody', since: 1, consented: [] } } },
       3,
       [],
       [],
@@ -291,5 +308,105 @@ describe('recording state (e8-t02)', () => {
     )
     expect(old.host.view().room.recordings).toEqual({})
     expect(old.host.view().members[bob.id].mayRecord).toBe(false)
+  })
+})
+
+describe('recording consent (I4, CLAUDE.md rule 4)', () => {
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    t = setup()
+  })
+  const consented = (view: RoomView | null, recorder: string) =>
+    view?.room.recordings[recorder]?.consented ?? null
+
+  it('records who agreed to each recording, the recorder never asked; consentPending follows', () => {
+    const host = t.join('Gene')
+    const bob = t.join('Bob')
+    t.send(host, { t: 'record', on: true })
+    expect(consented(bob.client.view, host.id)).toEqual([])
+    expect(consentPending(bob.client.view!.room.recordings, bob.id)).toBe(true)
+    expect(consentPending(bob.client.view!.room.recordings, host.id)).toBe(false)
+    t.send(bob, { t: 'consent' })
+    expect(consented(host.client.view, host.id)).toEqual([bob.id])
+    expect(consentPending(bob.client.view!.room.recordings, bob.id)).toBe(false)
+    // Stored with the room; agreeing again changes nothing; the recorder's own does nothing
+    expect(t.saved.room?.recordings[host.id].consented).toEqual([bob.id])
+    const patches = bob.client.of('patch').length
+    t.send(bob, { t: 'consent' })
+    t.send(host, { t: 'consent' })
+    expect(bob.client.of('patch')).toHaveLength(patches)
+    // A new recording asks again
+    t.send(host, { t: 'host', action: 'allowRecord', memberId: bob.id, on: true })
+    t.send(bob, { t: 'record', on: true })
+    expect(consentPending(host.client.view!.room.recordings, host.id)).toBe(true)
+    expect(consentPending(bob.client.view!.room.recordings, bob.id)).toBe(false)
+  })
+
+  it('removes whoever has not agreed within CONSENT_TIMEOUT_MS, without a ban', () => {
+    const host = t.join('Gene')
+    const bob = t.join('Bob')
+    const cleo = t.join('Cleo')
+    t.send(host, { t: 'record', on: true })
+    t.send(cleo, { t: 'consent' })
+    t.wait(CONSENT_TIMEOUT_MS - 1)
+    expect(bob.client.view!.members[bob.id]).toBeDefined()
+    t.wait(1)
+    expect(bob.client.closed).toEqual({
+      code: CloseCode.recordingDeclined,
+      reason: expect.any(String),
+    })
+    expect(host.client.view!.members[bob.id]).toBeUndefined()
+    expect(host.client.view!.members[cleo.id]).toBeDefined()
+    // Not banned: joining again is someone new, with a fresh minute to agree
+    const again = t.join('Bob')
+    expect(again.id).not.toBe('')
+    t.wait(CONSENT_TIMEOUT_MS - 1)
+    expect(host.client.view!.members[again.id]).toBeDefined()
+    t.send(again, { t: 'consent' })
+    t.wait(10 * CONSENT_TIMEOUT_MS)
+    expect(host.client.view!.members[again.id]).toBeDefined()
+  })
+
+  it('gives someone admitted from the waiting room their own minute, and tells who waits', () => {
+    const host = t.join('Gene')
+    t.send(host, { t: 'host', action: 'waitingRoom', on: true })
+    const wei = t.join('Wei')
+    const lobbyBefore = wei.client.of('lobby').at(-1)!
+    expect(lobbyBefore.recording).toBe(false)
+    t.send(host, { t: 'record', on: true })
+    expect(wei.client.of('lobby').at(-1)!.recording).toBe(true)
+    // Waiting is not in the meeting: no clock runs, and consent means nothing yet
+    t.send(wei, { t: 'consent' })
+    t.wait(5 * CONSENT_TIMEOUT_MS)
+    t.send(host, { t: 'host', action: 'admit', memberId: lobbyBefore.you })
+    expect(consented(host.client.view, host.id)).toEqual([])
+    expect(host.client.view!.members[lobbyBefore.you]).toBeDefined()
+    t.wait(CONSENT_TIMEOUT_MS)
+    expect(host.client.view!.members[lobbyBefore.you]).toBeUndefined()
+    expect(wei.client.closed?.code).toBe(CloseCode.recordingDeclined)
+  })
+
+  it('does not count time spent reconnecting; the minute starts again when they are back', () => {
+    const host = t.join('Gene')
+    const bob = t.join('Bob')
+    t.send(host, { t: 'record', on: true })
+    t.host.closed(bob.conn)
+    t.wait(RECONNECT_GRACE_MS - 1000)
+    const back = t.join('Bob', bob.token)
+    expect(back.id).toBe(bob.id)
+    t.wait(CONSENT_TIMEOUT_MS - 1)
+    expect(host.client.view!.members[bob.id]).toBeDefined()
+    t.wait(1)
+    expect(host.client.view!.members[bob.id]).toBeUndefined()
+  })
+
+  it('forgets the question when the recording ends', () => {
+    const host = t.join('Gene')
+    const bob = t.join('Bob')
+    t.send(host, { t: 'record', on: true })
+    t.wait(CONSENT_TIMEOUT_MS / 2)
+    t.send(host, { t: 'record', on: false })
+    t.wait(CONSENT_TIMEOUT_MS)
+    expect(host.client.view!.members[bob.id]).toBeDefined()
   })
 })

@@ -685,6 +685,9 @@ export const zhTW = {
     endedSelfTitle: '你已結束會議',
     endedSelfBody: (room: string) => `「${room}」已經結束，所有人都離開了，會議室也關閉了。`,
     // The host removed us, or this browser is still banned (F1)
+    // Did not agree to the recording (I4): left, or did not answer within a minute
+    declinedTitle: '你沒有同意錄影，已離開會議',
+    declinedBody: (room: string) => `「${room}」正在錄影。想加入的話，可以重新加入並同意錄影。`,
     removedTitle: '你已被移出會議室',
     removedBody: (room: string) =>
       `主持人把你移出了「${room}」。10 分鐘內不能用這個瀏覽器再加入這間會議室。`,
@@ -947,15 +950,21 @@ export const zhTW = {
     stopLabel: (who: string) => `停止錄影（${who}）`,
     // Several names in one sentence
     who: (...names: string[]) => names.join('、'),
-    // The notice for everyone else when someone starts (AC-8.2: told, and may leave)
-    consent: (who: string) => `${who} 開始錄影這場會議。留在會議中，表示你知道正在錄影。`,
-    consentJoined: (who: string) => `${who} 正在錄影這場會議。留在會議中，表示你知道正在錄影。`,
-    consentOk: '知道了',
+    // The question for everyone else (CLAUDE.md rule 4 「明確同意」): nothing else in the room
+    // works until it is answered; no answer in a minute is no
+    consentTitle: '這場會議正在錄影',
+    consentBody: (who: string) =>
+      `${who} 正在錄影這場會議。要留在會議中，請同意被錄影；不同意就離開。60 秒內沒有回答，會自動離開會議。`,
+    consentAgree: '同意並留在會議',
     consentLeave: '離開會議',
+    consentSent: '已同意，等會議室確認…',
     othersStopped: (name: string) => `${name} 停止錄影了`,
     // The pre-join screen (DESIGN.md §4.2)
     prejoinTitle: '這場會議正在錄影',
-    prejoinBody: '加入表示你知道正在錄影；不想被錄，可以不要加入。',
+    prejoinBody: '要加入，請先同意被錄影；不想被錄，可以不要加入。',
+    prejoinAgree: '我同意這場會議被錄影',
+    // The waiting screen (I4): the room asks once they are let in
+    waiting: '這場會議正在錄影。進入會議時會請你同意被錄影。',
     prejoinLeave: '不加入，回首頁',
     // A recording left behind (the tab closed or crashed): offered on the next visit
     leftover: (when: string) => `有一段沒有存好的錄影（${when} 開始）。`,
