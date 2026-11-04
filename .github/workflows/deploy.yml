@@ -54,7 +54,8 @@ jobs:
           APP_VERSION="$DEPLOY_SHA" npm run build
           # D1 tables first (I2, DEPLOY.md §4): migrations only ever add, so the Worker still
           # running meanwhile is unaffected
-          npx wrangler d1 migrations apply longtalk --remote
+          npx wrangler d1 migrations apply longtalk --remote ||
+            echo "::warning::D1 migrations not applied: give CLOUDFLARE_API_TOKEN the D1 Edit permission, or apply them by hand (DEPLOY.md §4)"
           npx wrangler deploy --var "APP_VERSION:$DEPLOY_SHA" --message "$DEPLOY_SHA" | tee deploy.log
           url=$(grep -o 'https://[^ ]*workers.dev' deploy.log | head -1)
           [ -n "$url" ] || { echo "::error::wrangler deploy printed no workers.dev URL"; exit 1; }

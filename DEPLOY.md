@@ -68,13 +68,22 @@ npm run dev        # Vite ＋ Cloudflare 外掛：前端、Worker、Durable Obje
 npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 ```
 
-本機 secret 放 `.dev.vars`（不進 git）。
+本機 secret 放 `.dev.vars`（不進 git）。帳號（I2）要本機的 D1 表：第一次先跑 `npx wrangler d1 migrations apply longtalk --local`（`.wrangler/state`，`npm run dev` 與 `vite preview` 共用）。本機是 `http://localhost`，瀏覽器照樣允許通行密鑰與 `Secure` cookie。
 
 ## 4. 新增綁定或 Durable Object 時
 
 - `wrangler.jsonc` 的 `migrations` **只能往後加**；已部署的 migration 不要改、不要刪。新增 DO class 就加一個新 tag。現有：`v1` `RoomDO`（A1）、`v2` `UsageDO`（B1，§6）、`v3` `TelemetryDO`（D3，§8）、`v4` `GuardDO`（I1，§11）；下一個是 `v5`。
 - `vars` 也**不會繼承**：頂層與 `env.preview` 各寫一次（現有 `USAGE_LOW_QUALITY_GB`、`USAGE_AUDIO_ONLY_GB`，§6；預覽另有 Turnstile 的公開測試 key，§11）。
 - `env.preview` **不會繼承**頂層的綁定：每個 DO、KV、R2、D1、Analytics Engine 綁定都要在 `env.preview` 重寫一次；R2／D1／Analytics Engine 要給預覽自己的資源，不要指到正式站的（Analytics Engine：正式站 `longtalk_events`、預覽 `longtalk_events_preview`，§8）。
+- **D1（I2）**：綁定 `DB`。正式站 `longtalk`（`603098a9-…`）、所有 PR 預覽共用 `longtalk-preview`（`f50ae59d-…`），id 寫在 `wrangler.jsonc`（不是機密）。表在 `migrations/`，**和 DO 的 migration 一樣只往後加**：要改表就加 `0002_….sql`，不要改已套用的檔。套用：
+
+  ```sh
+  npx wrangler d1 migrations apply longtalk --remote                      # 正式站
+  npx wrangler d1 migrations apply longtalk-preview --env preview --remote  # 預覽
+  npx wrangler d1 migrations apply longtalk --local                       # 本機（npm run dev、vite preview、UI checks）
+  ```
+
+  `deploy.yml` 與 `preview.yml` 部署前會自己跑一次；GitHub 的 `CLOUDFLARE_API_TOKEN` 沒有 **D1 Edit** 權限時只留警告、照常部署（Cloudflare 儀表板 → My Profile → API Tokens → 那把 token → Edit → 加 `Account` › `D1` › `Edit`）。0001 已由 I2 手動套用到兩個資料庫。預覽共用一個資料庫：e2e 建的帳號與固定會議室在測試最後自己刪掉；PR 關閉時不清 D1（裡面只剩測試沒刪乾淨的帳號，可以用 `wrangler d1 execute longtalk-preview --remote --command "DELETE FROM accounts"` 清）。
 - secret（SFU App token、TURN key、Turnstile secret key、AI 金鑰）只用 `wrangler secret put` 放在 Worker，**不進前端、不進 repo**（CLAUDE.md 規則 3；`npm run lint` 與 `npm run budget` 的 `scripts/secrets.ts` 會擋，§11）。要設定的 secret 見 §5。
 
 ## 5. Secrets 與 Realtime 互通測試（A2，B1 起改用會議室頁）
@@ -91,6 +100,8 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 | `TURNSTILE_SECRET_KEY` | Worker secret（選用） | 儀表板 → Turnstile → 建立 widget → **Secret Key**（§11） | `worker/turnstile.ts`（I1 起；和 `TURNSTILE_SITE_KEY` 都設了才開） |
 | `TURNSTILE_SITE_KEY` | `wrangler.jsonc` 頂層 `vars`（公開，不是 secret） | 同一個 widget 的 **Site Key**（§11） | `worker/rooms.ts` 回給瀏覽器（I1 起） |
 | `IP_HASH_PEPPER` | Worker secret（選用、建議） | 自己產生的長亂數（`openssl rand -base64 32`）；**設了就不要改**（改了既有的封鎖與計數全部對不上） | `worker/client-key.ts`（I1 起，§11） |
+
+帳號（I2）**不需要任何 secret**：session 是 D1 裡存雜湊的亂數 token（不是簽章 cookie），通行密鑰只存公鑰；只要 D1 綁定（§4）。
 
 App ID 不算機密，但和 App Secret 放在一起管理比較不會漏。**沒設定時 `/api/sfu/<roomId>/*` 對房間成員回 503 `sfu_not_configured`**，其餘功能照常（進得了房、看得到成員，只是沒有聲音與畫面）。
 
@@ -183,7 +194,7 @@ PR 預覽的 Worker 每個 PR 都是新的：在 GitHub 也設定同名的 `REAL
 
 **什麼時候勾**：AC-2.8 要六欄（Chrome、Edge、Firefox、Safari macOS、iOS Safari、Android Chrome）都至少跑過短版 1–3 並記成 ●；其餘 AC 照各步驟寫的條件（多半是「兩台不同裝置都對上」）。
 
-### 兩台裝置互通測試（會議室頁；第 1–24 步是每一批的細節）
+### 兩台裝置互通測試（會議室頁；第 1–26 步是每一批的細節）
 
 A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）；改用會議室本身：
 
@@ -360,6 +371,14 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
     - **一小時記憶體**：A 錄 60 分鐘，每 10 分鐘看 Chrome 工作管理員（Shift+Esc）那個分頁的記憶體與 JavaScript 記憶體，記成一張表；最後的值和第 10 分鐘差不多（不一直長大）、錄完能播，才勾 AC-8.1 的這一句。背景分頁時（A 切到別的分頁 5 分鐘）錄影的畫面照樣在動（時鐘在 Worker 裡）。
     - **Safari 與手機**：iPhone Safari、Mac Safari、Android Chrome 各試一次「開始錄影」：記下格式與能不能下載、播放；不支援的瀏覽器「更多 › 開始錄影…」是灰的並寫原因。結果寫進 `BROWSER-SUPPORT.md` 的 `localRecording` 列。
     - **AC**：AC-8.1 要上面「內容」「一小時記憶體」「Safari 與手機」都通過；AC-8.2 這一步全部通過，但這條 AC 也涵蓋逐字稿與雲端錄影（`e8-t04` 起），等那些也有同樣的告知才勾。
+
+26. **帳號與固定會議室（I2，AC-1.6）**：兩台不同的裝置，A 電腦（Windows Chrome 或 Edge，用 Windows Hello；或 Mac Safari，用 Touch ID）、B 手機（iPhone Safari 用 Face ID，或 Android Chrome 用螢幕鎖）。
+    - **建立與登入**：A 首頁右上「登入」→「建立帳號」，輸入名字、按「用通行密鑰建立帳號」：出現系統的通行密鑰對話框（Windows Hello／Touch ID），通過後顯示「已登入：名字」。「登出」→「用通行密鑰登入」：不用輸入任何東西就選到剛才那把、登入。
+    - **第二台裝置**：B 打開 `/me`，按「用通行密鑰登入」→ 選「使用其他裝置」掃 A 顯示的 QR code（跨裝置登入，需要藍牙），或在 A 的 `/me` 已登入時在 B 上登入後按「新增通行密鑰」；B 的 `/me`「通行密鑰」多一把（寫 iCloud 鑰匙圈／Google 密碼管理工具）、「登入中的瀏覽器」有兩個；A「登出其他所有瀏覽器」後 B 重新整理是登出狀態。
+    - **固定會議室**：A 建 `/r/<自己的名字>-test`、在「設定」設密碼並開等候室；A 進房：名字已帶入、沒有密碼欄、直接是主持人；B 用私密視窗（沒登入）進：要密碼、進等候室，A 放行，B 是參與者。A 結束會議後 B「重新加入」：還是要密碼與等候室（設定保留）。A 在 `/me` 改名稱與鎖定，房裡的人立刻看到。
+    - **刪除**：A 刪除固定會議室（連結變成「找不到這間會議室」）、再刪除帳號（`/me` 回到登入畫面）；到系統的密碼管理（Windows 設定 › 帳戶 › 通行金鑰、iPhone 設定 › 密碼）把 LongTalk 的通行密鑰刪掉。Chrome 132+ 登入一把網站已刪掉的通行密鑰時，會提示並自己移除。
+    - **不支援的瀏覽器**：沒有通行密鑰的瀏覽器（例如很舊的 Android WebView）打開 `/me` 說「這個瀏覽器不能使用通行密鑰」，首頁與會議照常。結果寫進 `BROWSER-SUPPORT.md` 的 `passkeys` 列。
+    - **AC**：AC-1.6 要上面全部通過（至少一種電腦平台驗證器與一種手機）才勾。
 
 常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「媒體伺服器不認得這個分頁」＝ session token 過期（房間把成員移除了），重新整理；一直沒有對方的畫面 ＝ 網路擋 UDP，檢查 TURN secret 有沒有設（`/api/turn` 的 `turn` 要是 `true`）。
 
@@ -554,6 +573,10 @@ curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engin
 | 每個連線的訊息（全部種類合計） | 10 秒 120 個（心跳 `ping` 由 runtime 自動回，不算） | 4420 關閉，那位成員變成「重新連線中」，寬限期滿被移除 | RoomDO |
 | 單一訊息大小 | 16 384 字元（`MAX_CLIENT_MESSAGE_CHARS`） | 1009（Message Too Big）關閉 | RoomDO |
 | 原有的：聊天、反應、訊號、密碼 | 每人 10 秒 10 則、5 秒 8 個、10 秒 3 個；密碼錯 3 次等 30 秒 | 不變 | RoomDO |
+| 建帳號（每個網路，I2） | 1 小時 5 個、一天 20 個；Turnstile 開著時也要過 | 429 `rate_limited`；`/me` 說「嘗試太多次了，請 N 分鐘後再試」 | `GuardDO`（全站） |
+| 開始登入（每個網路，I2） | 10 分鐘 30 次、一天 300 次 | 429 | `GuardDO`（全站） |
+| 固定會議室（每個帳號，I2） | 5 間；建立也算一次建房 | 409 `too_many_rooms`／429 | Worker＋D1、`GuardDO` |
+| `/api/account/*`（I2） | 每個 isolate 10 秒 60 次；非 GET 要本站 `Origin` 與 JSON | 429；403 `forbidden_origin`；415 | Worker |
 | 封鎖名單 | 擁有者在 `/admin` 設定，1 小時／1 天／7 天／30 天 | `/api/rooms/*` 一律 403 `blocked`（首頁與預先加入頁說「這個網路目前不能開房／加入會議室」）；已經在會議裡的連線不受影響 | `GuardDO`，Worker 每 30 秒讀一次 |
 
 - **網路**＝IPv4 的一個位址、IPv6 的一個 /64（一個家庭或一支手機通常拿到整個 /64）。只存雜湊（96 bits），從不存位址；有 `IP_HASH_PEPPER` 時是以它為 key 的 HMAC，沒有時是一般 SHA-256（IPv4 只有 2³² 個，拿到 storage 的人可以窮舉回推，所以建議設 pepper）。
@@ -587,6 +610,8 @@ curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engin
 **PR 預覽**用 Cloudflare 文件裡的公開測試 key（`wrangler.jsonc` 的 `env.preview.vars`）：site key `1x00000000000000000000BB`（隱形、永遠通過），secret key `1x0000000000000000000000000000000AA`（永遠通過；公開的測試值，不是 secret）。所以每個預覽都走完整的「403 → Turnstile → 201」流程，`e2e` 的瀏覽器測試也是。**真的 key 永遠不要放進 `env.preview`**。驗證失敗的情境由單元測試（假的 siteverify）負責。
 
 ### 安全標頭與 CSP
+
+通行密鑰（I2）不需要改 CSP（WebAuthn 是瀏覽器 API，`/api/account` 是同網域的 `connect-src 'self'`）；Permissions-Policy 也不加 `publickey-credentials-get`／`-create`：兩者的預設本來就是 `self`，列出來 Firefox 與 Safari 只會在主控台報不認得的名字。
 
 頁面與所有靜態檔（`public/_headers` 的 `/*`，內容＝`shared/security-headers.ts` 的 `PAGE_HEADERS`，`tests/app/security.test.ts` 比對）：
 

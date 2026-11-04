@@ -10,6 +10,7 @@
 | `worker/app.ts` | HTTP 路由：`/api/*`，其餘交給靜態資產 | 房間狀態（屬於 RoomDO） |
 | `worker/room.ts` | `RoomDO`：每房一個，房間狀態與權限的唯一真相 | 前端邏輯 |
 | `worker/roles.ts`（F1） | 誰能做什麼：伺服器的判斷（`authorize`）；表本身在 `shared/roles.ts`，前端只拿來決定顯示哪些按鈕 | 在其他地方判斷權限 |
+| `worker/accounts.ts`（I2） | `/api/account/*`：通行密鑰（`webauthn.ts`）、session（`session.ts`）、D1 的查詢（`account-db.ts`，表在 `migrations/`）、固定會議室 | 房間狀態（固定會議室的設定在 RoomDO，經 RPC）；寄信、密碼 |
 | `worker/index.ts` | Worker 入口：匯出 handler 與 DO class | 其他邏輯 |
 | `src/media/` | `MediaTransport` 介面與實作（A2 起） | 元件直接碰 `RTCPeerConnection` 或 SFU API |
 | `src/pages/` | 組合：取狀態、接路由 | 樣式細節以外的規則判斷 |
