@@ -81,11 +81,30 @@ async function join(
   engine: string,
   url: string,
   name: string,
-  { arm, ...rest }: BrowserContextOptions & { arm?: string } = {},
+  { arm, sharerArm, ...rest }: BrowserContextOptions & { arm?: string; sharerArm?: string } = {},
 ): Promise<Member> {
   const options = { arm }
   const context = await browser.newContext({ locale: 'zh-TW', ...rest })
   await context.addInitScript(stubScreen)
+  if (engine === 'webkit') {
+    await context.addInitScript((arm: string) => {
+      if (arm === 'gum') {
+        MediaDevices.prototype.getDisplayMedia = function () {
+          return navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
+        }
+      }
+      if (arm === 'screenSingle' || arm === 'noSim') {
+        const native = RTCPeerConnection.prototype.addTransceiver
+        RTCPeerConnection.prototype.addTransceiver = function (track, init) {
+          const e = init?.sendEncodings
+          if (e && e.length > 1 && (arm === 'noSim' || e.length === 2)) {
+            init = { ...init, sendEncodings: [{ maxBitrate: e[0].maxBitrate, maxFramerate: e[0].maxFramerate }] }
+          }
+          return native.call(this, track, init)
+        }
+      }
+    }, sharerArm ?? '')
+  }
   await context.addInitScript(keepPeerConnections)
   const page = await context.newPage()
   page.on('console', (message) => {
@@ -121,7 +140,7 @@ async function join(
       // not JSON
     }
   })
-  if (options.arm === 'noQ') {
+  if (options.arm === 'never') {
     await page.route('**/tracks/update', async (route) => {
       const body = route.request().postData() ?? ''
       await route.continue({ postData: body.replace('"preferredRid":"q"', '"preferredRid":"h"') })
@@ -272,7 +291,20 @@ const diagViewer = (m: Member) =>
     const videos = [...document.querySelectorAll('video')].map((v) => {
       const st = (v as HTMLVideoElement).srcObject as MediaStream | null
       const tr = st?.getVideoTracks()[0]
-      return { label: v.getAttribute('aria-label'), track: tr?.id.slice(0, 6), muted: tr?.muted, w: (v as HTMLVideoElement).videoWidth, ready: (v as HTMLVideoElement).readyState }
+      let rgb = ''
+      try {
+        const c = document.createElement('canvas')
+        c.width = 16
+        c.height = 9
+        const g = c.getContext('2d')!
+        g.drawImage(v as HTMLVideoElement, 0, 0, 16, 9)
+        const d = g.getImageData(0, 0, 16, 9).data
+        let r = 0, gr = 0, b = 0
+        for (let i = 0; i < d.length; i += 4) { r += d[i]; gr += d[i + 1]; b += d[i + 2] }
+        const n = d.length / 4
+        rgb = [r / n, gr / n, b / n].map((x) => Math.round(x)).join('/')
+      } catch (e) { rgb = String(e) }
+      return { label: v.getAttribute('aria-label'), track: tr?.id.slice(0, 6), muted: tr?.muted, w: (v as HTMLVideoElement).videoWidth, ready: (v as HTMLVideoElement).readyState, rgb }
     })
     return { tracks, inbound, videos }
   })
@@ -309,8 +341,8 @@ async function expectSeesShare(viewer: Member, sharer: Member) {
   }
   const tag = `DIAG ${(viewer as Member & { arm?: string }).arm}`
   const sample = async (what: string) => {
-    const [v, s, frames] = await Promise.all([diagViewer(viewer), diagSender(sharer), framesOf(video)])
-    console.log(`${tag} ${what} shareFps=${frames} viewer=${JSON.stringify(v)} sender=${JSON.stringify(s)}`)
+    const [v, s, frames, own] = await Promise.all([diagViewer(viewer), diagSender(sharer), framesOf(video), diagViewer(sharer)])
+    console.log(`${tag} ${what} shareFps=${frames} viewer=${JSON.stringify(v)} sender=${JSON.stringify({ ...s, own: own.videos })}`)
     return frames
   }
   let ok = false
@@ -320,35 +352,61 @@ async function expectSeesShare(viewer: Member, sharer: Member) {
   }
   console.log(`${tag} outcome ${ok ? 'OK' : 'STUCK'}`)
   if (ok) {
-    await sample('ok-final')
-    return
-  }
-  // Recovery experiments on the stuck subscription, from the viewer's own session
-  const sfu = (viewer as Member & { sfu?: { url: string; auth: string } }).sfu!
-  const recv = (viewer as Member & { subs?: Map<string, { mid: string; sessionId: string; trackName: string }> }).subs!
-  const update = async (what: string, trackName: string, rid: string) => {
-    const sub = [...recv.values()].find((x) => x.trackName.startsWith(trackName))!
-    const res = await viewer.page.evaluate(
-      async ({ url, auth, body }) => {
-        const r = await fetch(url, { method: 'PUT', headers: { authorization: auth, 'content-type': 'application/json' }, body })
-        return `${r.status} ${await r.text()}`
-      },
-      {
-        url: sfu.url,
-        auth: sfu.auth,
-        body: JSON.stringify({ tracks: [{ location: 'remote', mid: sub.mid, sessionId: sub.sessionId, trackName: sub.trackName, simulcast: { preferredRid: rid, priorityOrdering: 'none', ridNotAvailable: 'asciibetical' } }] }),
-      },
-    )
-    console.log(`${tag} ${what}: ${res}`)
     for (let i = 0; i < 3; i++) {
       await viewer.page.waitForTimeout(1500)
-      await sample(`after ${what} +${i}`)
+      await sample(`ok-${i}`)
     }
+    return
   }
-  await update('cam->f', 'cam-', 'f')
-  await update('screen->h', 'screen-', 'h')
-  await update('screen->f', 'screen-', 'f')
-  await update('cam->q', 'cam-', 'q')
+  const onSender = async (what: string, action: string) => {
+    const res = await sharer.page.evaluate(async (action) => {
+      const pcs = (window as unknown as { __pcs: RTCPeerConnection[] }).__pcs.filter((pc) => pc.connectionState !== 'closed')
+      const t = pcs.flatMap((pc) => pc.getTransceivers()).filter((x) => x.sender.track?.kind === 'video' && x.currentDirection === 'sendonly').at(-1)!
+      const sender = t.sender
+      const track = sender.track!
+      if (action === 'same') await sender.setParameters(sender.getParameters())
+      if (action === 'toggle') {
+        const q = sender.getParameters()
+        q.encodings.forEach((e) => (e.active = false))
+        await sender.setParameters(q)
+        await new Promise((r) => setTimeout(r, 500))
+        const w = sender.getParameters()
+        w.encodings.forEach((e) => (e.active = true))
+        await sender.setParameters(w)
+      }
+      if (action === 'replace') {
+        await sender.replaceTrack(null)
+        await new Promise((r) => setTimeout(r, 300))
+        await sender.replaceTrack(track)
+      }
+      if (action === 'scale') {
+        const q = sender.getParameters()
+        q.encodings[0].scaleResolutionDownBy = 1.5
+        await sender.setParameters(q)
+        await new Promise((r) => setTimeout(r, 1500))
+        const w = sender.getParameters()
+        w.encodings[0].scaleResolutionDownBy = 1
+        await sender.setParameters(w)
+      }
+      return `mid ${t.mid}`
+    }, action)
+    console.log(`${tag} recover ${what} ${res}`)
+    let f = 0
+    for (let i = 0; i < 3; i++) {
+      await viewer.page.waitForTimeout(1500)
+      f = Math.max(f, await sample(`after ${what} +${i}`))
+    }
+    console.log(`${tag} recover ${what} result fps ${f}`)
+    return f >= SHARE_FRAMES_PER_SECOND
+  }
+  for (const [what, action] of [
+    ['setParameters-same', 'same'],
+    ['scale', 'scale'],
+    ['replaceTrack', 'replace'],
+    ['toggle-active', 'toggle'],
+  ]) {
+    if (await onSender(what, action)) break
+  }
 }
 
 /** What a member sends, per outbound video stream: simulcast layer, size, frames a second */
@@ -490,13 +548,15 @@ test('WebKit and Chromium in one room, where this WebKit build has WebRTC and de
     test.skip(!usable, 'this WebKit build has no WebRTC or no capture devices')
     const url = await openRoom(browser)
     testInfo.annotations.push({ type: 'room', description: url })
-    const arm = testInfo.repeatEachIndex % 2 === 0 ? 'asis' : 'noQ'
+    const arm = ['canvas', 'gum', 'screenSingle', 'noSim'][testInfo.repeatEachIndex % 4]
+    // At most 10 rooms in 10 minutes from one address (shared/abuse.ts)
+    await new Promise((resolve) => setTimeout(resolve, 15_000))
     console.log(`DIAG start repeat ${testInfo.repeatEachIndex} arm ${arm}`)
     members.push(
       await join(other, 'chromium', url, 'Chris', { permissions: ['camera', 'microphone'], arm }),
     )
     members.push(
-      await join(safari, 'webkit', url, 'Wes', { permissions: ['camera', 'microphone'] }),
+      await join(safari, 'webkit', url, 'Wes', { permissions: ['camera', 'microphone'], sharerArm: arm }),
     )
     await meet(members[0], members[1], testInfo)
   } finally {
