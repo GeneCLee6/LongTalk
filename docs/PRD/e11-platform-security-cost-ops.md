@@ -69,7 +69,7 @@ depends_on: []
 - [x] AC-11.5 — 建房速率限制與 Turnstile、訊息速率、上傳配額、IP 黑名單；濫用測試。（I1 #36 做了上傳配額以外的全部；I5 補上上傳配額：每位成員、每間房、每個網路、全站 2 GB，`scripts/abuse.ts` 加了上傳的檢查。正式站的 Turnstile 程式已經在，只等擁有者設定 key，`DEPLOY.md` §11）
 - [x] AC-11.6 — `BROWSER-SUPPORT.md` 完整且與 `capabilities.ts` 一致。（H6 #35：18 項能力 × 6 個瀏覽器全部有記號與退路；一致性兩道檢查：`tests/app/media/capabilities.test.ts` 比對列、順序、欄位與記號，`e2e/local/browsers.spec.ts` 在 Chromium、Firefox、WebKit 裡跑 app 自己的偵測和 Chrome、Firefox、Safari 欄比對。實機的 ● 是 AC-2.8 的事）
 - [x] AC-11.7 — CSP、HSTS、Permissions-Policy、COOP；`npm audit` 無高風險；secrets 不進前端（lint 擋）。（I1 #36：`public/_headers`＝`shared/security-headers.ts`；CI 的 `npm audit --omit=dev --audit-level=high`；`scripts/secrets.ts` 在 lint 與 budget）
-- [ ] AC-11.8 — 隱私權政策頁、資料保留表、錄影同意清單、刪除請求流程；R2 到期刪除與 D1 備份有排程測試。（I5 #<PR> 做完後半句：R2 到期刪除、D1 備份、還原演練都有假時鐘的排程測試，資料保留表補上檔案與備份。前半句是 `e11-t07`，I6，所以還不勾）
+- [ ] AC-11.8 — 隱私權政策頁、資料保留表、錄影同意清單、刪除請求流程；R2 到期刪除與 D1 備份有排程測試。（I5 #40 做完後半句：R2 到期刪除、D1 備份、還原演練都有假時鐘的排程測試，資料保留表補上檔案與備份。前半句是 `e11-t07`，I6，所以還不勾）
 - [ ] AC-11.9 — E2EE 可行性 ADR。
 - [ ] AC-11.10 — 多租戶：帳號配額、方案、擁有者後台。
 - [x] AC-11.11 — **只用免費額度**：Realtime（SFU＋TURN）每月流出有計數；達 800 GB 新連線預設低畫質、達 950 GB 不再建立新的視訊 session（只留音訊）、每月 1 日歸零；門檻可設定、有測試、`/api/usage` 可查。
