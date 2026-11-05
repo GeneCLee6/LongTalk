@@ -290,6 +290,8 @@ jobs:
           node-version: '22'
 
       - name: Abuse test against the preview
+        # `shell: bash` is what turns on pipefail: without it, tee's exit code hid every failed check
+        shell: bash
         run: node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/abuse.ts | tee -a "$GITHUB_STEP_SUMMARY"
 
   cleanup:

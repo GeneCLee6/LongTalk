@@ -56,5 +56,7 @@ jobs:
         run: npm run build
 
       - name: JS budget (home ≤ 150 kB, room ≤ 350 kB gzip) and no secrets in the built client
-        # GitHub's bash runs with -o pipefail, so a failed budget fails the step through the pipe
+        # `shell: bash` is what turns on pipefail (a step without it runs `bash -e`), so a failed
+        # budget fails the step through the pipe
+        shell: bash
         run: npm run --silent budget | tee -a "$GITHUB_STEP_SUMMARY"
