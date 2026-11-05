@@ -41,7 +41,10 @@ export function fakeD1(migrations = MIGRATIONS): { db: D1Database; sqlite: Datab
       sqlite.exec('BEGIN')
       try {
         const results = []
-        for (const s of statements) results.push(await s.run())
+        // Like D1, a batch's reads answer with their rows
+        for (const s of statements) {
+          results.push(/^\s*SELECT/i.test(s.sql) ? await s.all() : await s.run())
+        }
         sqlite.exec('COMMIT')
         return results
       } catch (error) {

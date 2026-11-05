@@ -7,6 +7,7 @@ import {
   type TelemetrySummary,
 } from '../shared/telemetry.ts'
 import type { AbuseSummary } from '../shared/abuse.ts'
+import type { FilesStatus } from '../shared/files.ts'
 import type { UsageStatus } from '../shared/usage.ts'
 
 // POST /api/events and GET /api/admin/summary (e11-t03). What may be reported and the privacy
@@ -29,6 +30,8 @@ export interface TelemetryDeps {
   usage: () => Promise<UsageStatus>
   /** The blocklist and recent offenders (I1), for the dashboard */
   abuse?: () => Promise<AbuseSummary>
+  /** What the upload bucket holds, the last sweep and backup (I5) */
+  files?: () => Promise<FilesStatus>
 }
 
 const noStore = { 'cache-control': 'no-store' }
@@ -153,16 +156,18 @@ export async function handleAdmin(
   if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405, { allow: 'GET' })
   const refused = await authorizeAdmin(request, env)
   if (refused) return refused
-  const [telemetry, usage, abuse] = await Promise.all([
+  const [telemetry, usage, abuse, files] = await Promise.all([
     deps.summary(),
     deps.usage().catch(() => null),
     deps.abuse ? deps.abuse().catch(() => null) : null,
+    deps.files ? deps.files().catch(() => null) : null,
   ])
   const body: AdminSummary = {
     telemetry,
     usage,
     analyticsEngine: env.EVENTS !== undefined,
     abuse,
+    files,
   }
   return json(body)
 }

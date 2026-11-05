@@ -1,6 +1,6 @@
 # DEPLOY — 部署
 
-LongTalk 是**一個 Cloudflare Worker**：同一個 Worker 回答 `/api/*`、承載 Durable Object（每房一個 `RoomDO`，加上全站各一個的 `UsageDO`、`TelemetryDO`），其餘路徑交給靜態資產（React app，`dist/client`）。
+LongTalk 是**一個 Cloudflare Worker**：同一個 Worker 回答 `/api/*`、承載 Durable Object（每房一個 `RoomDO`，加上全站各一個的 `UsageDO`、`TelemetryDO`、`GuardDO`、`FileLedgerDO`），每小時跑一次 Cron（§12），其餘路徑交給靜態資產（React app，`dist/client`）。
 
 ## 為什麼是 Workers Static Assets，而不是 Pages ＋ 另一個 Worker
 
@@ -72,9 +72,9 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 
 ## 4. 新增綁定或 Durable Object 時
 
-- `wrangler.jsonc` 的 `migrations` **只能往後加**；已部署的 migration 不要改、不要刪。新增 DO class 就加一個新 tag。現有：`v1` `RoomDO`（A1）、`v2` `UsageDO`（B1，§6）、`v3` `TelemetryDO`（D3，§8）、`v4` `GuardDO`（I1，§11）；下一個是 `v5`。
+- `wrangler.jsonc` 的 `migrations` **只能往後加**；已部署的 migration 不要改、不要刪。新增 DO class 就加一個新 tag。現有：`v1` `RoomDO`（A1）、`v2` `UsageDO`（B1，§6）、`v3` `TelemetryDO`（D3，§8）、`v4` `GuardDO`（I1，§11）、`v5` `FileLedgerDO`（I5，§12）；下一個是 `v6`。
 - `vars` 也**不會繼承**：頂層與 `env.preview` 各寫一次（現有 `USAGE_LOW_QUALITY_GB`、`USAGE_AUDIO_ONLY_GB`，§6；預覽另有 Turnstile 的公開測試 key，§11）。
-- `env.preview` **不會繼承**頂層的綁定：每個 DO、KV、R2、D1、Analytics Engine 綁定都要在 `env.preview` 重寫一次；R2／D1／Analytics Engine 要給預覽自己的資源，不要指到正式站的（Analytics Engine：正式站 `longtalk_events`、預覽 `longtalk_events_preview`，§8）。
+- `env.preview` **不會繼承**頂層的綁定：每個 DO、KV、R2、D1、Analytics Engine 綁定都要在 `env.preview` 重寫一次；R2／D1／Analytics Engine 要給預覽自己的資源，不要指到正式站的（Analytics Engine：正式站 `longtalk_events`、預覽 `longtalk_events_preview`，§8；R2：正式站 `longtalk-files`、`longtalk-backups`，預覽 `longtalk-files-preview`，§12）。`triggers` 反過來**會**繼承，所以 `env.preview` 明寫 `"crons": []`。
 - **D1（I2）**：綁定 `DB`。正式站 `longtalk`（`603098a9-…`）、所有 PR 預覽共用 `longtalk-preview`（`f50ae59d-…`），id 寫在 `wrangler.jsonc`（不是機密）。表在 `migrations/`，**和 DO 的 migration 一樣只往後加**：要改表就加 `0002_….sql`，不要改已套用的檔。套用：
 
   ```sh
@@ -108,6 +108,8 @@ npm run lint && npm run typecheck && npm test && npm run build && npm run budget
 | `TURNSTILE_SECRET_KEY` | Worker secret（選用） | 儀表板 → Turnstile → 建立 widget → **Secret Key**（§11） | `worker/turnstile.ts`（I1 起；和 `TURNSTILE_SITE_KEY` 都設了才開） |
 | `TURNSTILE_SITE_KEY` | `wrangler.jsonc` 頂層 `vars`（公開，不是 secret） | 同一個 widget 的 **Site Key**（§11） | `worker/rooms.ts` 回給瀏覽器（I1 起） |
 | `IP_HASH_PEPPER` | Worker secret（選用、建議） | 自己產生的長亂數（`openssl rand -base64 32`）；**設了就不要改**（改了既有的封鎖與計數全部對不上） | `worker/client-key.ts`（I1 起，§11） |
+
+聊天檔案與備份（I5）**不需要任何 secret**：只用 R2 綁定，沒有 S3 憑證（§12）。
 
 帳號（I2）**不需要任何 secret**：session 是 D1 裡存雜湊的亂數 token（不是簽章 cookie），通行密鑰只存公鑰；只要 D1 綁定（§4）。
 
@@ -193,6 +195,10 @@ PR 預覽的 Worker 每個 PR 都是新的：在 GitHub 也設定同名的 `REAL
 - 電量 ≤ 20 % 拔掉電源進會議室：一次「電量不多了」提示（AC-6.4 一部分，第 23 步）。
 - 權限被封鎖時的 Android 步驟與自動再試（AC-4.2，第 17 步）。
 - 4G／5G 網路加入一次（`?ice=relay` 也試）。
+
+**聊天檔案（I5，AC-5.4）**：A 電腦、B 手機（iPhone Safari 與 Android Chrome 各一次），細節在第 28 步。
+- B 從手機的選擇器（相簿、拍照、檔案）傳一張照片：A 看到縮圖、點開看大圖；A 傳一個 PDF：B 看到名稱、大小、類型，下載得到同一個檔。傳 `.exe` 被擋、有說明。
+- B 用 4G／5G 傳一個 20 MB 的檔：進度條在動；途中切飛航模式，幾秒內寫「網路中斷」或一分鐘內「上傳停住了」，「再試一次」成功。
 
 **本機錄影（I4，AC-8.1、AC-8.2）**：主持人 A 用電腦 Chrome，B 是另一台裝置（手機或電腦），細節在第 25 步。
 - A「更多 › 開始錄影…」錄 3–5 分鐘：B 分享一個有聲音的分頁一陣子、兩邊輪流說話、B 開關鏡頭、A 釘選與聚光燈 B；停止後下載的檔案在 VLC 與瀏覽器都能播、能拖進度、**聽得到 B 的聲音、B 分享的聲音和 A 自己的聲音**，畫面跟著 A 看到的版面（AC-8.1 的「版面與全員混音」）。
@@ -396,6 +402,15 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
     - **刪除**：A 刪掉一場：公開頁變成「找不到這場會議」；刪固定會議室：它的預定會議一起不見。
     - 結果寫進 issue；不需要兩台以上的媒體互通，所以 AC-1.7 已經在 I3 勾了，這一步不通就開 issue 修、必要時取消勾選。
 
+28. **聊天檔案（I5，AC-5.4；自動化已經做掉上傳、權限、標頭、鍵盤與 axe，這一步只看手機與真的網路）**：A 電腦（Chrome），B 手機（**iPhone Safari 與 Android Chrome 各跑一次**），用 PR 預覽或正式站：
+    - **選擇器**：B 打開聊天抽屜按迴紋針：iPhone 有「照片圖庫」「拍照或錄影」「選擇檔案」，Android 有相機與檔案；三種都選一次。iPhone 的 HEIC 照片：Safari 通常自動轉成 JPEG（有縮圖）；沒轉的話是一般檔案卡片（下載得到，不能預覽），都算通過，把結果記下來。
+    - **看與下載**：A 看到 B 照片的縮圖，點開滿版、← → 換張、＋ − 縮放、Esc 關、焦點回到縮圖。B 點 A 傳的圖：滿版、瀏海與 Home 指示條不蓋住按鈕、雙指可以縮放、關閉回到聊天。B 下載 A 傳的 PDF：iPhone 問「要下載嗎」後在「檔案」App 找得到，Android 在下載資料夾；打開後內容一樣、檔名一樣（中文也是）。從主畫面打開的 App（standalone）也試一次下載，記下結果。
+    - **大檔與網路**：B 用 4G／5G 傳 20 MB：進度條持續前進，傳完 A 看到卡片；再傳一次，途中開飛航模式：寫「網路中斷」或最多一分鐘後寫「上傳停住了」，關掉飛航後按「再試一次」成功；中途按取消，A 沒有出現任何東西。
+    - **切到背景**：B 上傳中切到別的 App 30 秒再回來：繼續傳，或失敗並說明、可以再試（iOS 可能會砍掉背景的連線，這是系統行為），不能卡住不動。
+    - **擋與上限**：傳 `.exe` 或 `.html`：馬上被擋；傳 30 MB 的影片：寫最大 25 MB。
+    - **24 小時與關房**：把會議開著隔天再看，同一張卡片寫「已刪除」、按不到；`/admin` 的「聊天檔案與備份」用量下降。另開一間房傳檔後結束會議：`/admin` 重新整理後用量下降（房間關閉當場刪）。
+    - 結果寫進 issue；有問題開 issue 修、必要時取消勾選 AC-5.4（AC 已由自動化勾，這一步是手機確認）。
+
 常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「媒體伺服器不認得這個分頁」＝ session token 過期（房間把成員移除了），重新整理；一直沒有對方的畫面 ＝ 網路擋 UDP，檢查 TURN secret 有沒有設（`/api/turn` 的 `turn` 要是 `true`）。
 
 ## 6. Realtime 免費額度保護（e11-t13，B1）
@@ -596,6 +611,13 @@ curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engin
 | 預定會議（每個帳號，I3） | 50 場（含結束後 90 天內的） | 409 `too_many_meetings` | Worker＋D1 |
 | `/api/meetings/<id>`（公開頁，I3） | 每個 isolate 10 秒 60 次；封鎖名單 | 429；403 | Worker |
 | `/api/account/*`（I2） | 每個 isolate 10 秒 60 次；非 GET 要本站 `Origin` 與 JSON | 429；403 `forbidden_origin`；415 | Worker |
+| 檔案大小（I5） | 單檔 25 MB，一定要有 `Content-Length`，`FixedLengthStream` 邊傳邊擋 | 413 `too_large`；411；400 `incomplete`，R2 什麼都不留 | Worker |
+| 檔案類型（I5） | 黑名單＋前 4 KB 看內容（`shared/files.ts`） | 415 `blocked_type`、`not_an_image` | 瀏覽器先擋，Worker 再擋 |
+| 每位成員的檔案（I5） | 30 個、150 MB（到期釋出） | 429 `member_quota` | RoomDO |
+| 每間房的檔案（I5） | 100 個、500 MB（到期釋出） | 429 `room_quota` | RoomDO |
+| 上傳次數（每個網路，I5） | 10 分鐘 15 次、一天 40 次 | 429 `rate_limited`＋`Retry-After`；聊天裡說幾分鐘後再試；`/admin` 的最近碰到限制的網路寫「上傳太多」 | `GuardDO`（全站） |
+| 全站儲存（I5） | `longtalk-files` 最多 2 GB，算已存的加傳輸中的 | 507 `storage_full`；聊天裡說空間滿了，舊檔案刪除後才能再傳。`FileLedgerDO` 讀不到時一律 503（寧可不收，也不要超過免費額度） | `FileLedgerDO`，每小時校正 |
+| `/api/files/*`（每個網路，I5） | 每個 isolate 10 秒 120 次；封鎖名單 | 429；403 `blocked` | Worker |
 | 封鎖名單 | 擁有者在 `/admin` 設定，1 小時／1 天／7 天／30 天 | `/api/rooms/*` 一律 403 `blocked`（首頁與預先加入頁說「這個網路目前不能開房／加入會議室」）；已經在會議裡的連線不受影響 | `GuardDO`，Worker 每 30 秒讀一次 |
 
 - **網路**＝IPv4 的一個位址、IPv6 的一個 /64（一個家庭或一支手機通常拿到整個 /64）。只存雜湊（96 bits），從不存位址；有 `IP_HASH_PEPPER` 時是以它為 key 的 HMAC，沒有時是一般 SHA-256（IPv4 只有 2³² 個，拿到 storage 的人可以窮舉回推，所以建議設 pepper）。
@@ -629,6 +651,8 @@ curl "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/analytics_engin
 **PR 預覽**用 Cloudflare 文件裡的公開測試 key（`wrangler.jsonc` 的 `env.preview.vars`）：site key `1x00000000000000000000BB`（隱形、永遠通過），secret key `1x0000000000000000000000000000000AA`（永遠通過；公開的測試值，不是 secret）。所以每個預覽都走完整的「403 → Turnstile → 201」流程，`e2e` 的瀏覽器測試也是。**真的 key 永遠不要放進 `env.preview`**。驗證失敗的情境由單元測試（假的 siteverify）負責。
 
 ### 安全標頭與 CSP
+
+聊天檔案（I5）不需要改頁面的 CSP：上傳與下載都是同網域的 `connect-src 'self'`，圖片顯示用 `blob:`（`img-src` 本來就有）。下載的回應自己帶 `Content-Security-Policy: default-src 'none'; sandbox; frame-ancestors 'none'`（`FILE_CSP`）。
 
 通行密鑰（I2）不需要改 CSP（WebAuthn 是瀏覽器 API，`/api/account` 是同網域的 `connect-src 'self'`）；Permissions-Policy 也不加 `publickey-credentials-get`／`-create`：兩者的預設本來就是 `self`，列出來 Firefox 與 Safari 只會在主控台報不認得的名字。
 
@@ -669,4 +693,60 @@ X-Frame-Options: DENY
 
 - **secrets lint**（`scripts/secrets.ts`）：`npm run lint` 掃 `src/`、`public/`、`index.html`（註解不算），`npm run budget` 再掃 build 出來的 `dist/client/`。擋：Worker 與 CI 的 secret 名稱（`REALTIME_APP_SECRET`、`REALTIME_TURN_KEY_ID`、`REALTIME_TURN_KEY_API_TOKEN`、`ADMIN_TOKEN`、`PREVIEW_ADMIN_TOKEN`、`TURNSTILE_SECRET_KEY`、`IP_HASH_PEPPER`、`CLOUDFLARE_API_TOKEN`）、私鑰、AWS／GitHub／Slack／AI／Google 的 key、JWT、Turnstile secret key（含測試用的）、名字像 secret 的變數被指定成長字串、`dist/client` 裡的 `.env`／`.dev.vars`。真的需要的那一行在行尾寫 `// secret-ok: <理由>`。（`/admin` 的說明文字因此不再寫出 `ADMIN_TOKEN` 這個名字。）
 - **npm audit**（`ci.yml`）：`npm audit --omit=dev --audit-level=high`，正式相依（React、router、styled-components、RNNoise）有 high／critical 就失敗；全部相依的報告寫進 run 的 summary、不失敗（目前 5 個 moderate，都在 Lighthouse 的開發相依）。
-- **濫用測試**（`preview.yml` 的 `abuse` job，`scripts/abuse.ts`）：瀏覽器測試跑完後對這個 PR 的預覽打：沒有 token 建房要 403、連續建房到第 11 次 429、一個 socket 一次送 141 個訊息被 4420 關掉、一個超大訊息被 1009 關掉、連續升級進同一間房被擋、120 個同時查詢、頁面的安全標頭；有 `PREVIEW_ADMIN_TOKEN` 時再封鎖自己的網路、確認 403、解除。約一分鐘、幾百個小請求。**不要對正式站跑**（腳本會拒絕；會用掉這個網路一天的建房額度）。
+- **濫用測試**（`preview.yml` 的 `abuse` job，`scripts/abuse.ts`）：瀏覽器測試跑完後對這個 PR 的預覽打：沒有 token 建房要 403、連續建房到第 11 次 429、一個 socket 一次送 141 個訊息被 4420 關掉、一個超大訊息被 1009 關掉、連續升級進同一間房被擋、120 個同時查詢、頁面的安全標頭；上傳（I5，經真的 R2）：沒 token 401、`.exe` 415、超過 25 MB 413、沒有長度的 body 411、傳一個小檔、房外下載 401、下載的標頭、假裝成文字的網頁 415；有 `PREVIEW_ADMIN_TOKEN` 時再封鎖自己的網路、確認 403、解除。約一分鐘、幾百個小請求。**不要對正式站跑**（腳本會拒絕；會用掉這個網路一天的建房額度）。
+
+## 12. 聊天檔案、到期刪除與 D1 備份（`e5-t05`、`e11-t08`，I5）
+
+**擁有者不用設定任何東西**：三個 bucket 已經建好（`longtalk-files`、`longtalk-files-preview`、`longtalk-backups`），只用 Worker 的 R2 綁定：沒有 R2 API token、沒有 CORS 規則、沒有 lifecycle 規則、頁面的 CSP 不變。帳號裡其他專案的 bucket（`bridgebook-files`、`tku-*`）碰都碰不到：Worker 只有綁定的那幾個。
+
+| 綁定 | 正式站 | PR 預覽 | 放什麼 |
+| --- | --- | --- | --- |
+| `FILES_BUCKET` | `longtalk-files` | `longtalk-files-preview`（所有預覽共用） | `uploads/<UTC 小時>/<id>`、`….thumb` |
+| `BACKUPS_BUCKET` | `longtalk-backups` | **沒有**（預覽不備份） | `d1/<UTC 日期>.jsonl.gz` |
+| `FILE_LEDGER`（DO） | 全站一個 | 每個預覽一個 | 計數、上次清除、上次備份 |
+| Cron `0 * * * *` | 有 | **沒有**（`"crons": []`） | `worker/scheduled.ts` |
+
+**如果部署失敗**：
+- `Too many cron triggers`：免費方案一個帳號能設的 Cron 數量有限（以 Cloudflare 文件為準，目前是 5 個），這個帳號裡其他 Worker 的也算。LongTalk 只用一個運算式。到 Workers & Pages › 其他 Worker › Settings › Triggers 拿掉一個用不到的，或暫時從 `wrangler.jsonc` 拿掉 `triggers`：檔案仍會在有人上傳時順便清（下面），但 **D1 不會備份**（`/admin` 會警告）。
+- PR 預覽或部署說沒有 R2 權限（`Authentication error`、`10000`、`not entitled`）：GitHub 的 `CLOUDFLARE_API_TOKEN` 要有 **Account › Workers R2 Storage › Edit**（Cloudflare 儀表板 → My Profile → API Tokens → 那把 token → Edit）。「Edit Cloudflare Workers」範本本來就有。
+
+**免費額度**：Workers 免費方案的 CPU 是每次 10 ms。上傳只有讀開頭時跑 JavaScript，之後是原生 `pipeTo`；備份整個資料庫讀一次再 gzip：現在這個量沒問題，帳號多到撐不住時 Cron 會失敗、`/admin` 的備份時間停住並出現警告，到時候改成 CI 跑 `wrangler d1 export`。Worker 的請求大小上限免費方案是 100 MB，25 MB 放得下。
+
+### 到期刪除
+
+- **每小時**：`worker/sweep.ts` 列出 `uploads/`（每 1000 個一次 Class A），刪掉 key 的小時已經滿 24 小時的（刪除不計費），其餘加總後校正 `FileLedgerDO`（當機、刪除失敗造成的誤差最多留一小時）。一個檔在開始上傳後 24 到 25 小時之間被刪；滿 24 小時起 Worker 已經不給下載。
+- **房間關閉**：RoomDO 當場把這間房的檔案一起刪，同時扣掉計數；刪失敗的話下一輪清掉。
+- **沒有 Cron 時**（PR 預覽，或 Cron 壞掉）：上傳時如果超過 2 小時沒有清除過，順便清一次（`LAZY_SWEEP_AFTER_MS`）。所以預覽的 bucket 不會一直長大，但沒人上傳時也不會動。
+- **想再加一道保險**（選用，不做也沒關係）：在 Cloudflare 儀表板 → R2 → `longtalk-files` → Settings → Object lifecycle rules，prefix `uploads/`、2 天後刪除。不要設比 2 天短。
+
+### D1 備份
+
+每天 UTC 18 點（台灣早上 2 點、雪梨清晨）備份到 `longtalk-backups`；失敗的話之後每小時再試（超過 26 小時沒備份就算到期，`BACKUP_STALE_MS`）。`worker/backup.ts`：Worker 不能透過綁定呼叫 D1 的匯出，所以用**一個 `batch`** 把表 `SELECT` 出來（一個交易，外鍵在副本裡也成立），寫成 gzip 的 JSON lines（第一行表頭、最後一行每張表的列數，切斷的檔案會被發現）。
+
+- **有什麼**：`accounts`、`credentials`（公鑰，不是私鑰）、`rooms`、`meetings`。
+- **沒有什麼**：`sessions`（裡面只有 token 的 SHA-256，本來就登入不了任何人（`worker/session.ts`），但還原後也用不到，所以連雜湊都不留：**還原後每個人重新用通行密鑰登入**）、`challenges`（5 分鐘就過期）。新的 migration 加了表卻沒決定要不要備份，測試會失敗。RoomDO 的東西（聊天、密碼雜湊、房間設定）在 Durable Object 裡，不在 D1，也不在這份備份。
+- **保留 7 天**（`BACKUP_RETENTION_DAYS`）：短，因為**刪除帳號**不會去改舊備份：帳號刪掉後最多 7 天，它還在備份裡（資料保留表，E11）。
+- **不另外加密**：要加密就得多一把 secret，而裡面沒有密碼也沒有 Email；靠 R2 的靜態加密與擁有者的 Cloudflare 帳號。
+
+### 還原
+
+1. **下載**備份（任一種）：儀表板 → R2 → `longtalk-backups` → `d1/` → 下載；或 `npx wrangler r2 object get longtalk-backups/d1/2026-11-05.jsonl.gz --remote --file backup.jsonl.gz`。
+2. **轉成 SQL**：`node --experimental-strip-types scripts/restore-backup.ts backup.jsonl.gz > restore.sql`（印出每張表的列數；檔案不完整會停下來）。
+3. **先在本機試**：
+   ```sh
+   npx wrangler d1 migrations apply longtalk --local
+   npx wrangler d1 execute longtalk --local --file restore.sql
+   npx wrangler d1 execute longtalk --local --command "SELECT COUNT(*) FROM accounts"
+   ```
+4. **正式站**（會**清掉**現有的帳號、通行密鑰、固定會議室、預定會議與所有登入，換成備份的內容；先用 `npx wrangler d1 time-travel info longtalk` 記下現在的書籤，或再下載一份最新備份）：
+   ```sh
+   npx wrangler d1 migrations apply longtalk --remote
+   npx wrangler d1 execute longtalk --remote --file restore.sql
+   ```
+5. **還原之後**：備份之後才建立的帳號不見了；**備份之後才刪除的帳號會回來**，要再刪一次：現在的資料庫還讀得到的話，還原前先存一份 `SELECT id FROM accounts`；還原後備份裡有、清單裡沒有的帳號，就是備份之後才刪的，用 `DELETE FROM accounts WHERE id = '…'` 刪掉（讀不到的話，照備份日期之後收到的刪除請求處理）。使用者全部要重新登入。D1 本身也有 Time Travel（免費方案 7 天），只是誤操作的話先用它比較快：`npx wrangler d1 time-travel restore longtalk --timestamp <時間>`；這份備份是給 D1 本身出事、或要搬家時用的。
+
+**演練**：`tests/worker/backup.test.ts` 每次提交都做一次：資料（含單引號、換行、`DROP TABLE`、emoji 的名字）→ 寫備份 → 解壓 → 轉 SQL → 套到一個跑過真 migration 的新資料庫 → 每張表逐列比對、外鍵檢查，備份裡找不到任何 session 雜湊。I5 也在本機真的走過一遍（workerd、本機 R2 與 D1）：`wrangler dev` 觸發 Cron（`/cdn-cgi/handler/scheduled`）→ `wrangler r2 object get --local` 拿到備份 → `restore-backup.ts` → `wrangler d1 execute --local --file restore.sql` → 列相同。
+
+### 查看
+
+`/admin` 的「聊天檔案與備份」：已用／上限、物件數、上次清除、上次備份；**有備份 bucket 卻超過 26 小時沒備份時有紅字**。Cron 的記錄：Cloudflare 儀表板 → Workers → `longtalk` → Logs（`observability` 開著）或 Settings › Triggers › Cron Events。

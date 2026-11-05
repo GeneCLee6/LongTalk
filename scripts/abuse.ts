@@ -10,6 +10,7 @@
 // Expects the preview's Turnstile test keys (wrangler.jsonc env.preview): a request without a
 // token gets 403 turnstile_required; the public dummy token passes.
 import { ROOM_CONNECT_RATE, ROOM_CREATE_LIMITS, SOCKET_MESSAGE_RATE } from '../shared/abuse.ts'
+import { MAX_FILE_BYTES, filePath, filesPath } from '../shared/files.ts'
 import { CloseCode, MAX_CLIENT_MESSAGE_CHARS, roomSocketPath } from '../shared/protocol.ts'
 
 const base = process.env.BASE_URL?.replace(/\/$/, '')
@@ -71,6 +72,108 @@ function socket(
 const join = (ws: WebSocket, name: string) =>
   ws.send(JSON.stringify({ t: 'join', name, token: null, client: crypto.randomUUID() }))
 
+/**
+ * Files in chat (I5, AC-5.4, AC-11.5) through the real R2 binding: who may, what may, the answer's
+ * headers. A tiny file, deleted with the room or the next sweep.
+ */
+async function uploads(roomId: string) {
+  const member = new WebSocket(wsBase + roomSocketPath(roomId))
+  const token = await new Promise<string | null>((resolve) => {
+    const timer = setTimeout(() => resolve(null), 8_000)
+    member.onopen = () => join(member, 'Uploader')
+    member.onmessage = (event) => {
+      const message = JSON.parse(String(event.data)) as { t?: string; token?: string }
+      if (message.t === 'welcome') {
+        clearTimeout(timer)
+        resolve(message.token ?? null)
+      }
+    }
+  })
+  if (!token) {
+    record('uploads: a member to test with', false, 'no welcome')
+    member.close()
+    return
+  }
+  const auth = { authorization: `Bearer ${token}` }
+  const grant = (body: object, headers: Record<string, string> = auth) =>
+    fetch(`${base}${filesPath(roomId)}`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const file = { name: 'abuse.txt', size: 5, type: 'text/plain', thumb: false }
+  record('uploads: outsiders', (await grant(file, {})).status === 401, 'POST without a token')
+  const blocked = await grant({ ...file, name: 'a.exe' })
+  record('uploads: blocked type', blocked.status === 415, `a.exe -> ${blocked.status}`)
+  const large = await grant({ ...file, size: MAX_FILE_BYTES + 1 })
+  record('uploads: too large', large.status === 413, `25 MB + 1 -> ${large.status}`)
+  const granted = await grant(file)
+  if (granted.status === 503) {
+    record('uploads: R2 binding', false, 'answered 503: is the bucket bound?')
+    member.close()
+    return
+  }
+  const { id } = (await granted.json()) as { id: string }
+  // A body with no declared length is refused before anything reaches R2
+  const unknownLength = await fetch(`${base}${filePath(roomId, id)}`, {
+    method: 'PUT',
+    headers: auth,
+    body: new Blob(['hello']).stream(),
+    duplex: 'half',
+  } as RequestInit)
+  record(
+    'uploads: a body of unknown length',
+    unknownLength.status === 411,
+    `-> ${unknownLength.status}`,
+  )
+  const put = await fetch(`${base}${filePath(roomId, id)}`, {
+    method: 'PUT',
+    headers: auth,
+    body: 'hello',
+  })
+  record('uploads: stored in R2', put.status === 201, `PUT -> ${put.status}`)
+  const outsider = await fetch(`${base}${filePath(roomId, id)}`)
+  record('uploads: download needs a member', outsider.status === 401, `-> ${outsider.status}`)
+  const got = await fetch(`${base}${filePath(roomId, id)}`, { headers: auth })
+  const text = await got.text()
+  const headers = got.headers
+  record(
+    'uploads: download headers',
+    got.status === 200 &&
+      text === 'hello' &&
+      headers.get('content-type') === 'application/octet-stream' &&
+      (headers.get('content-disposition') ?? '').startsWith('attachment') &&
+      headers.get('x-content-type-options') === 'nosniff' &&
+      (headers.get('content-security-policy') ?? '').includes('sandbox'),
+    `${got.status} ${headers.get('content-type')} ${headers.get('content-disposition')}`,
+  )
+  const page = await (await grant({ ...file, name: 'page.txt', size: 13 })).json() as { id: string }
+  const sniffed = await fetch(`${base}${filePath(roomId, page.id)}`, {
+    method: 'PUT',
+    headers: auth,
+    body: '<html></html>',
+  })
+  record('uploads: a page dressed as text', sniffed.status === 415, `-> ${sniffed.status}`)
+  // The largest file there is, end to end: within the free plan's CPU and request limits
+  const full = (await (
+    await grant({ ...file, name: 'full.zip', size: MAX_FILE_BYTES, type: 'application/zip' })
+  ).json()) as { id: string }
+  const started = Date.now()
+  const stored = await fetch(`${base}${filePath(roomId, full.id)}`, {
+    method: 'PUT',
+    headers: auth,
+    body: new Blob([new Uint8Array(MAX_FILE_BYTES).fill(7)]),
+  })
+  const fetched = await fetch(`${base}${filePath(roomId, full.id)}`, { headers: auth })
+  const size = stored.ok && fetched.ok ? (await fetched.arrayBuffer()).byteLength : -1
+  record(
+    'uploads: a full 25 MB file',
+    stored.status === 201 && size === MAX_FILE_BYTES,
+    `PUT ${stored.status}, GET ${fetched.status}, ${size} bytes, ${Date.now() - started} ms`,
+  )
+  member.close()
+}
+
 async function main() {
   // 1. Turnstile: no token, a token that passes
   const noToken = await createRoom(null)
@@ -100,6 +203,9 @@ async function main() {
     record('a room to test with', false, 'no room was created')
     return
   }
+
+  // Files first: the floods below use up what this network may do in a room
+  await uploads(rooms[2] ?? roomId)
 
   // 3. A frame flood on one socket closes it with rateLimited
   const flood = await socket(roomId, (ws) => {

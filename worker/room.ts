@@ -23,6 +23,16 @@ import {
   type SfuTrackRef,
   type UsageCursor,
 } from './room-host.ts'
+import type { ChatFile } from '../shared/files.ts'
+import type {
+  FileAccess,
+  FilesGone,
+  FilesState,
+  GrantDecision,
+  GrantRequest,
+  UploadClaim,
+} from './room-files.ts'
+import { FILE_LEDGER_OBJECT } from './file-ledger.ts'
 import { addressKey, type GuessRecord, type PasswordRecord } from './password.ts'
 import type { Schedule } from './scheduler.ts'
 import { USAGE_OBJECT } from './usage.ts'
@@ -50,6 +60,8 @@ const GUESSES_KEY = 'guesses'
 const ENDED_KEY = 'ended'
 /** A personal persistent room's slug and owner (I2, e1-t13) */
 const PERSISTENT_KEY = 'persistent'
+/** Files shared in the chat and uploads under way (I5) */
+const FILES_KEY = 'files'
 /** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
 const CHAT_PREFIX = 'chat:'
 const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
@@ -112,6 +124,7 @@ export class RoomDO extends DurableObject<Env> {
           void (record === null
             ? storage.delete(PERSISTENT_KEY)
             : storage.put(PERSISTENT_KEY, record)),
+        saveFiles: (state) => void storage.put(FILES_KEY, state),
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -124,6 +137,7 @@ export class RoomDO extends DurableObject<Env> {
           if (client) this.noteOffence(client, kind)
         }
       },
+      filesGone: (gone) => ctx.waitUntil(this.deleteFiles(gone)),
     })
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG))
     void ctx.blockConcurrencyWhile(async () => {
@@ -136,7 +150,7 @@ export class RoomDO extends DurableObject<Env> {
         storage.getAlarm(),
         storage.list<ChatMessage>({ prefix: CHAT_PREFIX }),
         storage.get<Ban[]>(BANS_KEY),
-        storage.get<unknown>([PASSWORD_KEY, GUESSES_KEY, ENDED_KEY, PERSISTENT_KEY]),
+        storage.get<unknown>([PASSWORD_KEY, GUESSES_KEY, ENDED_KEY, PERSISTENT_KEY, FILES_KEY]),
       ])
       const sockets = ctx
         .getWebSockets()
@@ -157,6 +171,7 @@ export class RoomDO extends DurableObject<Env> {
           guesses: (extras.get(GUESSES_KEY) as GuessRecord[] | undefined) ?? [],
           endedUntil: (extras.get(ENDED_KEY) as number | undefined) ?? null,
           persistent: (extras.get(PERSISTENT_KEY) as PersistentRecord | undefined) ?? null,
+          files: (extras.get(FILES_KEY) as FilesState | undefined) ?? null,
         },
       )
       // A room stored before C2 has no schedule: restore made one
@@ -218,6 +233,57 @@ export class RoomDO extends DurableObject<Env> {
   /** RPC from the SFU proxy: it created `sessionId` for the member holding `token` */
   async bindSfu(token: string, sessionId: string): Promise<boolean> {
     return this.host.bindSfu(token, sessionId)
+  }
+
+  /** RPC from POST /api/files/<room> (I5, worker/files.ts): may this member upload this? */
+  async grantUpload(token: string, request: GrantRequest): Promise<GrantDecision> {
+    return this.host.grantUpload(token, request)
+  }
+
+  /** RPC before the bytes of a file or its thumbnail go to R2 (I5) */
+  async claimUpload(
+    token: string,
+    id: string,
+    part: 'file' | 'thumb',
+    bytes: number,
+  ): Promise<UploadClaim> {
+    return this.host.claimUpload(token, id, part, bytes)
+  }
+
+  /** RPC: the thumbnail is stored (I5) */
+  async thumbStored(token: string, id: string): Promise<boolean> {
+    return this.host.thumbStored(token, id)
+  }
+
+  /** RPC: the file is stored; everyone gets the chat message (I5) */
+  async finishUpload(
+    token: string,
+    id: string,
+    stored: { kind: ChatFile['kind']; mime: string },
+  ): Promise<ChatFile | null> {
+    return this.host.finishUpload(token, id, stored)
+  }
+
+  /** RPC: the upload failed or was cancelled (I5) */
+  async abortUpload(token: string, id: string): Promise<boolean> {
+    return this.host.abortUpload(token, id)
+  }
+
+  /** RPC before every download (I5) */
+  async fileAccess(token: string, id: string): Promise<FileAccess> {
+    return this.host.fileAccess(token, id)
+  }
+
+  /** The room closed: its files leave R2 now rather than at the next sweep (I5) */
+  private async deleteFiles(gone: FilesGone): Promise<void> {
+    try {
+      if (gone.keys.length > 0) await this.env.FILES_BUCKET?.delete(gone.keys)
+      const ledger = this.env.FILE_LEDGER.get(this.env.FILE_LEDGER.idFromName(FILE_LEDGER_OBJECT))
+      await ledger.forget(gone.grants, gone.bytes, gone.keys.length)
+    } catch (error) {
+      // The sweep deletes them later and puts the count right
+      console.error('deleting a closed room\'s files failed', error)
+    }
   }
 
   /** Only the WebSocket upgrade, forwarded by the Worker from /api/rooms/<id>/ws */

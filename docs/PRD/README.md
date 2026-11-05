@@ -25,14 +25,14 @@ LongTalk 的產品需求都在這個資料夾。三層結構（為什麼是三�
 | [E2](e2-media-core-webrtc-sfu.md) | 媒體核心：WebRTC 與 SFU | 16／18 | 1／8 | 10 | 7 | in progress |
 | [E3](e3-screen-share.md) | 螢幕分享 | 10／11 | 0／6 | 5 | 5 | in progress |
 | [E4](e4-meeting-ui-experience.md) | 會議室介面與體驗 | 20／20 | 3／10 | 11 | 9 | in progress |
-| [E5](e5-chat-reactions-interaction.md) | 聊天、反應與互動 | 4／9 | 1／5 | 2 | 4 | in progress |
+| [E5](e5-chat-reactions-interaction.md) | 聊天、反應與互動 | 6／9 | 2／5 | 2 | 4 | in progress |
 | [E6](e6-audio-video-quality.md) | 音訊視訊品質 | 5／8 | 0／6 | 0 | 5 | in progress |
 | [E7](e7-annotation-whiteboard.md) | 畫筆標註與白板 | 0／9 | 0／5 | 0 | 0 | planned（M2） |
 | [E8](e8-recording-transcript-ai.md) | 錄影、逐字稿與 AI 摘要 | 3／9 | 0／6 | 0 | 3 | in progress |
 | [E9](e9-remote-control.md) | 遠端控制 | 0／9 | 0／5 | 0 | 0 | planned（M3） |
 | [E10](e10-scale-breakout.md) | 規模：大房間與分組討論室 | 0／7 | 0／5 | 0 | 0 | planned（M2–M3） |
-| [E11](e11-platform-security-cost-ops.md) | 平台、安全、成本與維運 | 7／13 | 4／11 | 5 | 4 | in progress |
-| | **合計** | **82／132** | **13／75** | **38** | **49** | |
+| [E11](e11-platform-security-cost-ops.md) | 平台、安全、成本與維運 | 8／13 | 5／11 | 5 | 4 | in progress |
+| | **合計** | **85／132** | **15／75** | **38** | **49** | |
 
 里程碑分布：M0 36 個、M1 51 個、M2 29 個、M3 16 個。M2／M3 的 task 刻意只寫一行，動工前那一批再細拆。
 

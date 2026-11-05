@@ -9,7 +9,9 @@ import {
   type AdminSummary,
   type EventCounts,
 } from '../../shared/telemetry.ts'
+import { BACKUP_STALE_MS } from '../../shared/files.ts'
 import { GB } from '../../shared/usage.ts'
+import { formatBytes } from '../room/chatText.ts'
 import { blockClient, fetchAdminSummary, unblockClient } from '../api/admin.ts'
 import { AdminBlocks } from './AdminBlocks.tsx'
 import { Button } from '../components/Button.tsx'
@@ -223,6 +225,47 @@ export default function AdminPage() {
           </p>
           <Small>{strings.admin.analyticsEngine(summary.analyticsEngine)}</Small>
           <Small>{strings.admin.privacy}</Small>
+        </Section>
+
+        <Section aria-labelledby="files">
+          <h2 id="files">{strings.admin.filesTitle}</h2>
+          {summary.files ? (
+            <>
+              <p>
+                {strings.admin.filesUsage(
+                  formatBytes(summary.files.bytes),
+                  formatBytes(summary.files.capBytes),
+                  summary.files.objects,
+                )}
+              </p>
+              <Small>
+                {summary.files.sweep
+                  ? strings.admin.filesSweep(
+                      formatDateTime(summary.files.sweep.at),
+                      summary.files.sweep.deletedObjects,
+                    )
+                  : strings.admin.filesNoSweep}
+              </Small>
+              <Small>
+                {!summary.files.backups
+                  ? strings.admin.filesNoBackupBucket
+                  : summary.files.backup
+                    ? strings.admin.filesBackup(
+                        formatDateTime(summary.files.backup.at),
+                        summary.files.backup.rows,
+                        formatBytes(summary.files.backup.bytes),
+                      )
+                    : strings.admin.filesNoBackup}
+              </Small>
+              {summary.files.backups &&
+                (!summary.files.backup ||
+                  telemetry.now - summary.files.backup.at > BACKUP_STALE_MS) && (
+                  <ProblemText role="alert">{strings.admin.filesBackupStale}</ProblemText>
+                )}
+            </>
+          ) : (
+            <p>{strings.admin.none}</p>
+          )}
         </Section>
 
         <AdminBlocks

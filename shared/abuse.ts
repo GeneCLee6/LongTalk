@@ -1,6 +1,7 @@
 // Abuse protection (I1, e11-t05): the limits the Worker and the rooms enforce, the IP blocklist
 // as /admin sees it, and the answers the browser gets. Every client is a keyed hash of its network
 // (worker/client-key.ts), never the address itself.
+import { NETWORK_UPLOAD_LIMITS } from './file-limits.ts'
 
 /** A sliding window: at most `count` in any `windowMs` */
 export type RateWindow = { count: number; windowMs: number }
@@ -40,14 +41,15 @@ export const MEETING_SAVE_LIMITS: readonly RateWindow[] = [
 
 /**
  * What GuardDO counts per network (GuardStore.limit): rooms made (`create`, random rooms and
- * persistent ones alike), accounts made, sign-ins started, meetings saved
+ * persistent ones alike), accounts made, sign-ins started, meetings saved, files uploaded (I5)
  */
-export type LimitKind = 'create' | 'register' | 'signin' | 'meeting'
+export type LimitKind = 'create' | 'register' | 'signin' | 'meeting' | 'upload'
 export const LIMITS: Readonly<Record<LimitKind, readonly RateWindow[]>> = {
   create: ROOM_CREATE_LIMITS,
   register: ACCOUNT_CREATE_LIMITS,
   signin: SIGNIN_LIMITS,
   meeting: MEETING_SAVE_LIMITS,
+  upload: NETWORK_UPLOAD_LIMITS,
 }
 
 /**
@@ -69,6 +71,12 @@ export const SOCKET_MESSAGE_RATE: RateWindow = { count: 120, windowMs: 10_000 }
  */
 export const ISOLATE_ROOM_RATE: RateWindow = { count: 60, windowMs: 10_000 }
 
+/**
+ * Requests one network may make to /api/files/* per Worker isolate (I5): a meeting's chat scrolling
+ * past thumbnails fits, hammering R2 reads does not. Best effort, like ISOLATE_ROOM_RATE
+ */
+export const ISOLATE_FILES_RATE: RateWindow = { count: 120, windowMs: 10_000 }
+
 /** How long a block can last, in hours (the /admin choices) */
 export const BLOCK_HOURS = [1, 24, 24 * 7, 24 * 30] as const
 export type BlockHours = (typeof BLOCK_HOURS)[number]
@@ -81,13 +89,20 @@ export const MAX_OFFENDERS = 50
 export const MAX_BLOCK_NOTE_CHARS = 80
 
 /** What a client did that counted against it */
-export type OffenceKind = 'createLimit' | 'turnstile' | 'connectLimit' | 'flood' | 'accountLimit'
+export type OffenceKind =
+  | 'createLimit'
+  | 'turnstile'
+  | 'connectLimit'
+  | 'flood'
+  | 'accountLimit'
+  | 'uploadLimit'
 export const OFFENCE_KINDS: readonly OffenceKind[] = [
   'createLimit',
   'turnstile',
   'connectLimit',
   'flood',
   'accountLimit',
+  'uploadLimit',
 ]
 
 /** One blocked network: its key (a hash), until when, and the owner's note */

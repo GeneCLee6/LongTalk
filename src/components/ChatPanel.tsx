@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useEffect,
   useId,
   useLayoutEffect,
@@ -9,11 +11,15 @@ import {
 } from 'react'
 import styled from 'styled-components'
 import { MAX_CHAT_CHARS, type ChatMessage } from '../../shared/chat.ts'
-import { chatTime, isSendKey, splitLinks } from '../room/chatText.ts'
+import { MAX_FILE_BYTES, type ChatFile } from '../../shared/files.ts'
+import { chatTime, formatBytes, isSendKey, splitLinks } from '../room/chatText.ts'
+import type { FileSharing } from '../room/useFileSharing.ts'
 import type { ChatSendResult } from '../room/RoomConnection.ts'
 import { strings } from '../strings.ts'
 import { color, fontSize, media, radius, size, space } from '../styles/tokens.ts'
-import { SendIcon } from './icons.tsx'
+import { ChatFileCard } from './ChatFileCard.tsx'
+import { ChatUploads } from './ChatUploads.tsx'
+import { AttachIcon, SendIcon } from './icons.tsx'
 import { useMediaQuery } from './layoutContext.ts'
 
 export interface ChatPanelProps {
@@ -24,7 +30,12 @@ export interface ChatPanelProps {
   onSend: (text: string) => ChatSendResult
   /** Put the cursor in the box when the panel opens (desktop; on phones the keyboard would cover the list) */
   autoFocus?: boolean
+  /** Sharing and opening files (I5, e5-t05); without it the panel is text only */
+  files?: FileSharing
 }
+
+// The image viewer is a lazy chunk (CLAUDE.md rule 6): most meetings never open it
+const Lightbox = lazy(() => import('./Lightbox.tsx'))
 
 /** Consecutive messages from one sender this close together share one header */
 const GROUP_MS = 2 * 60_000
@@ -45,7 +56,16 @@ const STICK_PX = 48
  * button sends (field test 2026-11-03: 注音 on a phone sent half a sentence). The list follows new messages while it
  * is scrolled to the bottom, and always after our own.
  */
-export function ChatPanel({ messages, you, onSend, autoFocus = false }: ChatPanelProps) {
+export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: ChatPanelProps) {
+  const picker = useRef<HTMLInputElement>(null)
+  const [viewing, setViewing] = useState<{ start: ChatFile; images: ChatFile[] } | null>(null)
+  const openImage = (start: ChatFile) => {
+    const now = Date.now()
+    const images = messages.flatMap((message) =>
+      message.file?.kind === 'image' && message.file.expiresAt > now ? [message.file] : [],
+    )
+    setViewing({ start, images })
+  }
   const [draft, setDraft] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
   const log = useRef<HTMLDivElement>(null)
@@ -160,10 +180,22 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false }: ChatPane
               return (
                 <Item key={message.id} $own={own} $grouped={grouped}>
                   {!grouped && <Meta aria-hidden="true">{strings.chat.meta(name, time)}</Meta>}
-                  <Bubble $own={own}>
-                    <Hidden>{strings.chat.spoken(name, time)}</Hidden>
-                    <MessageText text={message.text} />
-                  </Bubble>
+                  {message.file && files ? (
+                    <Bubble as="div" $own={own}>
+                      <Hidden>{strings.chat.spoken(name, time)}</Hidden>
+                      <ChatFileCard
+                        file={message.file}
+                        load={files.load}
+                        download={files.download}
+                        onView={openImage}
+                      />
+                    </Bubble>
+                  ) : (
+                    <Bubble $own={own}>
+                      <Hidden>{strings.chat.spoken(name, time)}</Hidden>
+                      <MessageText text={message.text} />
+                    </Bubble>
+                  )}
                 </Item>
               )
             })}
@@ -171,7 +203,40 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false }: ChatPane
         )}
       </Log>
       <Compose onSubmit={onSubmit}>
+        {files && files.uploads.length > 0 && (
+          <ChatUploads
+            uploads={files.uploads}
+            onCancel={files.cancel}
+            onRetry={files.retry}
+            onDismiss={files.dismiss}
+          />
+        )}
         <Box>
+          {files && (
+            <>
+              <Attach
+                type="button"
+                aria-label={strings.chat.file.attach}
+                title={strings.chat.file.attachHint(formatBytes(MAX_FILE_BYTES))}
+                onClick={() => picker.current?.click()}
+              >
+                <AttachIcon />
+              </Attach>
+              <input
+                ref={picker}
+                type="file"
+                multiple
+                hidden
+                data-testid="chat-file-input"
+                onChange={(event) => {
+                  const chosen = [...(event.target.files ?? [])]
+                  // The same file can be picked again after a failure
+                  event.target.value = ''
+                  if (chosen.length > 0) files.pick(chosen)
+                }}
+              />
+            </>
+          )}
           <Input
             ref={input}
             rows={1}
@@ -217,6 +282,17 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false }: ChatPane
           </Problem>
         )}
       </Compose>
+      {viewing && files && (
+        <Suspense fallback={null}>
+          <Lightbox
+            images={viewing.images}
+            start={viewing.start}
+            load={files.load}
+            download={files.download}
+            onClose={() => setViewing(null)}
+          />
+        </Suspense>
+      )}
     </Panel>
   )
 }
@@ -342,7 +418,7 @@ const Box = styled.div`
   display: flex;
   align-items: flex-end;
   gap: ${space(1)};
-  padding: ${space(1)} ${space(1)} ${space(1)} ${space(3)};
+  padding: ${space(1)} ${space(1)} ${space(1)} ${space(2)};
   border: 1px solid ${color.line};
   border-radius: ${radius.button};
   background: ${color.surface2};
@@ -371,6 +447,28 @@ const Input = styled.textarea`
   }
   &::placeholder {
     color: ${color.muted};
+  }
+`
+
+const Attach = styled.button`
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: ${size.toolbarButton};
+  height: ${size.toolbarButton};
+  padding: 0;
+  border: none;
+  border-radius: ${radius.button};
+  background: transparent;
+  color: ${color.muted};
+  cursor: pointer;
+
+  svg {
+    width: 20px;
+    height: 20px;
+  }
+  &:hover {
+    color: ${color.fg};
   }
 `
 

@@ -19,9 +19,20 @@
       // One object for the whole deployment: the telemetry counters behind /admin (e11-t03)
       { "name": "TELEMETRY", "class_name": "TelemetryDO" },
       // One object for the whole deployment: room-creation limits and the IP blocklist (e11-t05)
-      { "name": "GUARD", "class_name": "GuardDO" }
+      { "name": "GUARD", "class_name": "GuardDO" },
+      // One object for the whole deployment: what the upload bucket holds, its cap (e11-t08)
+      { "name": "FILE_LEDGER", "class_name": "FileLedgerDO" }
     ]
   },
+  // Files shared in chat (I5, e5-t05: 24 hours, shared/files.ts) and the daily D1 backup (e11-t08,
+  // 7 days). Reached only through these bindings: no API credentials, no CORS rule (DEPLOY.md §12)
+  "r2_buckets": [
+    { "binding": "FILES_BUCKET", "bucket_name": "longtalk-files" },
+    { "binding": "BACKUPS_BUCKET", "bucket_name": "longtalk-backups" }
+  ],
+  // Every hour: deletes expired uploads, puts the count right; once a day also backs up D1
+  // (worker/scheduled.ts). One expression on purpose: the free plan allows few per account
+  "triggers": { "crons": ["0 * * * *"] },
   // Accounts, passkeys, sessions and persistent rooms (I2, e1-t12, e1-t13). Tables in migrations/,
   // applied by the deploy workflow (`wrangler d1 migrations apply longtalk --remote`, DEPLOY.md §4)
   "d1_databases": [
@@ -43,7 +54,8 @@
     { "tag": "v1", "new_sqlite_classes": ["RoomDO"] },
     { "tag": "v2", "new_sqlite_classes": ["UsageDO"] },
     { "tag": "v3", "new_sqlite_classes": ["TelemetryDO"] },
-    { "tag": "v4", "new_sqlite_classes": ["GuardDO"] }
+    { "tag": "v4", "new_sqlite_classes": ["GuardDO"] },
+    { "tag": "v5", "new_sqlite_classes": ["FileLedgerDO"] }
   ],
   // The Realtime free-tier guard (e11-t13, DEPLOY.md §6): GB of SFU + TURN egress this calendar
   // month (UTC) after which cameras send low quality, and after which new video is refused.
@@ -66,9 +78,15 @@
           { "name": "ROOM", "class_name": "RoomDO" },
           { "name": "USAGE", "class_name": "UsageDO" },
           { "name": "TELEMETRY", "class_name": "TelemetryDO" },
-          { "name": "GUARD", "class_name": "GuardDO" }
+          { "name": "GUARD", "class_name": "GuardDO" },
+          { "name": "FILE_LEDGER", "class_name": "FileLedgerDO" }
         ]
       },
+      // Previews share one bucket of their own. No BACKUPS_BUCKET and no cron (`triggers` would
+      // be inherited, so it is emptied): a preview has nothing worth backing up, and its uploads
+      // expire through the sweep the next upload starts (LAZY_SWEEP_AFTER_MS, DEPLOY.md §12)
+      "r2_buckets": [{ "binding": "FILES_BUCKET", "bucket_name": "longtalk-files-preview" }],
+      "triggers": { "crons": [] },
       // Every PR preview shares one database (accounts made by its e2e test delete themselves);
       // preview.yml applies the migrations before each deploy. Never production's
       "d1_databases": [

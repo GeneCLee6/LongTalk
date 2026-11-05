@@ -11,6 +11,7 @@
 // drops just that event, so browsers may be deployed first. D4 added `rating` (e4-t18): the
 // after-leave screen's one question, a score and nothing else (no comment, no room, no member).
 import type { AbuseSummary } from './abuse.ts'
+import type { FilesStatus } from './files.ts'
 import type { UsageStatus } from './usage.ts'
 
 /** At most this many events per request */
@@ -233,6 +234,8 @@ export type AdminSummary = {
   analyticsEngine: boolean
   /** The blocklist and recent offenders (I1, e11-t05); null when the guard could not be read */
   abuse: AbuseSummary | null
+  /** What the upload bucket holds, the last sweep and backup (I5); null when unreadable */
+  files: FilesStatus | null
 }
 
 export const ADMIN_SUMMARY_PATH = '/api/admin/summary'

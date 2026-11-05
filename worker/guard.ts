@@ -73,7 +73,9 @@ export class GuardStore {
     const result = takeFromWindows(times, LIMITS[kind], now)
     this.creations.set(stored, result.times)
     if (!result.ok) {
-      await this.note(key, kind === 'create' ? 'createLimit' : 'accountLimit', now)
+      const offence: OffenceKind =
+        kind === 'create' ? 'createLimit' : kind === 'upload' ? 'uploadLimit' : 'accountLimit'
+      await this.note(key, offence, now)
       return { ok: false, retryAfterMs: result.retryAfterMs }
     }
     await this.storage.put(stored, result.times)

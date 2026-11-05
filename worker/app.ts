@@ -19,6 +19,10 @@ import { GUARD_OBJECT } from './guard.ts'
 import { CSP_REPORT_PATH, withApiHeaders } from './headers.ts'
 import type { RoomDO } from './room.ts'
 import { handleAccount } from './accounts.ts'
+import { FILES_API } from '../shared/files.ts'
+import { FILE_LEDGER_OBJECT } from './file-ledger.ts'
+import type { FileLedgerDO } from './file-ledger-do.ts'
+import { handleFiles, type FilesEnv } from './files.ts'
 import { handleMeetingView } from './meetings.ts'
 import { MEETINGS_API } from '../shared/meeting.ts'
 import { handleRooms } from './rooms.ts'
@@ -30,7 +34,7 @@ import type { UsageDO } from './usage-do.ts'
 import { USAGE_OBJECT, type UsageEnv } from './usage.ts'
 
 export interface Env
-  extends SfuEnv, TurnEnv, UsageEnv, TelemetryEnv, TurnstileEnv, ClientKeyEnv {
+  extends SfuEnv, TurnEnv, UsageEnv, TelemetryEnv, TurnstileEnv, ClientKeyEnv, FilesEnv {
   ASSETS: Fetcher
   ROOM: DurableObjectNamespace<RoomDO>
   /** One object for the whole deployment: the month's Realtime egress (e11-t13) */
@@ -39,6 +43,8 @@ export interface Env
   TELEMETRY: DurableObjectNamespace<TelemetryDO>
   /** One object for the whole deployment: room-creation limits, IP blocklist (e11-t05) */
   GUARD: DurableObjectNamespace<GuardDO>
+  /** One object for the whole deployment: what the upload bucket holds, its cap (I5, e11-t08) */
+  FILE_LEDGER: DurableObjectNamespace<FileLedgerDO>
   /**
    * Accounts, passkeys, sessions, persistent rooms (I2) and scheduled meetings (I3), migrations/.
    * Optional so a deployment without it still serves rooms; /api/account then answers 503
@@ -92,6 +98,11 @@ export function guardDeps(env: Pick<Env, 'GUARD'>): GuardDeps {
   }
 }
 
+/** The file ledger's RPC as the Worker uses it (worker/files.ts) */
+export function fileLedger(env: Pick<Env, 'FILE_LEDGER'>) {
+  return env.FILE_LEDGER.get(env.FILE_LEDGER.idFromName(FILE_LEDGER_OBJECT))
+}
+
 type WaitUntil = Pick<ExecutionContext, 'waitUntil'>
 
 // The Worker answers /api/* and hands everything else to the static assets (the React app).
@@ -133,6 +144,14 @@ async function handleApi(
   if (url.pathname.startsWith(`${MEETINGS_API}/`)) {
     return handleMeetingView(request, env, url, { guard: guardDeps(env) })
   }
+  if (url.pathname.startsWith(`${FILES_API}/`)) {
+    return handleFiles(request, env, url, {
+      guard: guardDeps(env),
+      room: (roomId) => env.ROOM.get(env.ROOM.idFromName(roomId)),
+      ledger: fileLedger(env),
+      waitUntil: (promise) => ctx?.waitUntil(promise),
+    })
+  }
   if (url.pathname.startsWith('/api/sfu/')) {
     return handleSfu(request, env, {
       room: (roomId) => env.ROOM.get(env.ROOM.idFromName(roomId)),
@@ -168,6 +187,10 @@ async function handleApi(
         ...(await guard.summary()),
         turnstile: turnstileSiteKey(env) !== null,
         pepper: Boolean(env.IP_HASH_PEPPER),
+      }),
+      files: async () => ({
+        ...(await fileLedger(env).status()),
+        backups: env.BACKUPS_BUCKET !== undefined,
       }),
     }
     return url.pathname === EVENTS_PATH

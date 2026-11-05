@@ -84,6 +84,14 @@ export const PAGE_HEADERS: Readonly<Record<string, string>> = {
   'X-Frame-Options': 'DENY',
 }
 
+/**
+ * A shared file's answer (I5, e5-t05): whatever someone uploaded must never run as this origin. The
+ * browser fetches it with the member's token, so it cannot even be opened by following a link;
+ * should it ever be rendered, `sandbox` gives it a unique origin with no scripts, and nosniff keeps
+ * the type we chose (worker/files.ts: `application/octet-stream` unless the bytes are a safe image).
+ */
+export const FILE_CSP = "default-src 'none'; sandbox; frame-ancestors 'none'"
+
 /** The Worker's answers (/api/*): JSON, never a page, so nothing may run or frame them */
 export const API_HEADERS: Readonly<Record<string, string>> = {
   'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",

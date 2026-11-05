@@ -171,6 +171,9 @@
 //   Also `RecordingInfo.consented`, `consent`, `lobby.recording`, close code `recordingDeclined`.
 // v17 → v18 (I2): `RoomInfo.persistent` (a personal persistent room, /r/<slug>: its ended screen
 //   offers to come back, the room is still there). Room keys may be slugs (shared/slug.ts).
+// v18 → v19 (I5): `ChatMessage.file`: a shared file, a message the room writes itself when the
+//   upload through the Worker finishes (worker/files.ts). The rest of the flow is HTTP, not this
+//   socket. A v18 browser would show only the name, with no way to open it.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -183,7 +186,7 @@ import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 18
+export const PROTOCOL_VERSION = 19
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'

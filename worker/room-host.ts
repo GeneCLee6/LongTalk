@@ -1,4 +1,14 @@
 import { CHAT_CHUNK, CHAT_HISTORY, ChatRateLimit, type ChatMessage } from '../shared/chat.ts'
+import type { ChatFile } from '../shared/files.ts'
+import {
+  RoomFiles,
+  type FileAccess,
+  type FilesGone,
+  type FilesState,
+  type GrantDecision,
+  type GrantRequest,
+  type UploadClaim,
+} from './room-files.ts'
 import { diff } from '../shared/patch.ts'
 import {
   BAN_MS,
@@ -202,6 +212,8 @@ export type RestoreExtras = {
   endedUntil?: number | null
   /** A personal persistent room's slug and owner (I2) */
   persistent?: PersistentRecord | null
+  /** Files shared in the chat and uploads under way (I5) */
+  files?: FilesState | null
 }
 
 /** What survives the object being evicted */
@@ -230,6 +242,8 @@ export interface RoomStorage {
    * a room that is never persistent (tests) needs none
    */
   savePersistent?(record: PersistentRecord | null): void
+  /** Files shared in the chat and uploads under way (I5), saved whenever they change */
+  saveFiles?(state: FilesState): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -287,6 +301,11 @@ export interface RoomHostDeps {
    * client. `connId` is null for an upgrade refused before it had one; `ip` its address key.
    */
   offence?: (connId: string | null, ip: string | null, kind: OffenceKind) => void
+  /**
+   * The room closed with files stored (I5): the adapter deletes them from R2 right away. Best
+   * effort: whatever is missed goes with the hourly sweep (worker/sweep.ts).
+   */
+  filesGone?: (gone: FilesGone) => void
 }
 
 export type Admission = { ok: true } | { ok: false; code: number; reason: string }
@@ -350,6 +369,8 @@ export class RoomHost {
   private storedSchedule = '{}'
   /** The latest CHAT_HISTORY chat messages, oldest first (D3) */
   private chat: ChatMessage[] = []
+  /** Files shared in the chat and uploads under way (I5): limits and who may have what */
+  private files = new RoomFiles()
   /** The id of the last chat message the room accepted (0 before the first) */
   private chatId = 0
   /** CHAT_RATE per member; in memory only (an eviction forgets it) */
@@ -435,6 +456,7 @@ export class RoomHost {
     }
     this.chat = [...chat].sort((a, b) => a.id - b.id).slice(-CHAT_HISTORY)
     this.chatId = this.chat.at(-1)?.id ?? 0
+    this.files = new RoomFiles(info ? extras.files : null)
     this.reported = 0
     this.usage = usage?.state ?? 'normal'
     this.usageAt = usage?.at ?? this.deps.now()
@@ -1430,13 +1452,11 @@ export class RoomHost {
       return
     }
     const member = this.members.get(memberId)!
-    const message: ChatMessage = {
-      id: ++this.chatId,
-      from: memberId,
-      name: member.name,
-      text,
-      at: now,
-    }
+    this.postChat({ id: ++this.chatId, from: memberId, name: member.name, text, at: now })
+  }
+
+  /** A message the room accepted: stored, older ones dropped, sent to everyone in the room */
+  private postChat(message: ChatMessage): void {
     this.chat.push(message)
     this.deps.storage.saveChat(message)
     while (this.chat.length > CHAT_HISTORY) this.deps.storage.dropChat(this.chat.shift()!.id)
@@ -1460,6 +1480,90 @@ export class RoomHost {
   /** The chat messages the room keeps, oldest first (for tests and the adapter) */
   get chatHistory(): readonly ChatMessage[] {
     return this.chat
+  }
+
+  /**
+   * POST /api/files/<room> (I5, e5-t05): may the member holding `token` upload this file? The
+   * member must be in the room (worker/roles.ts `uploadFile`; who waits may not) and within the
+   * member's and the room's limits. The grant is opaque, single use and short-lived.
+   */
+  grantUpload(token: string, request: GrantRequest): GrantDecision {
+    const memberId = this.info ? this.byToken.get(token) : undefined
+    if (memberId === undefined) return { ok: false, reason: 'unauthorized' }
+    if (!this.allowed(memberId, 'uploadFile')) return { ok: false, reason: 'forbidden' }
+    const decision = this.files.grant(memberId, request, this.deps.now())
+    this.saveFiles()
+    return decision
+  }
+
+  /** PUT /api/files/<room>/<id>[/thumb] is about to store `bytes`: uses the grant up */
+  claimUpload(token: string, id: string, part: 'file' | 'thumb', bytes: number): UploadClaim {
+    const memberId = this.info ? this.byToken.get(token) : undefined
+    if (memberId === undefined) return { ok: false, reason: 'unauthorized' }
+    if (!this.allowed(memberId, 'uploadFile')) return { ok: false, reason: 'forbidden' }
+    const claim = this.files.claim(memberId, id, part, bytes, this.deps.now())
+    this.saveFiles()
+    return claim
+  }
+
+  /** The thumbnail reached R2 */
+  thumbStored(token: string, id: string): boolean {
+    const memberId = this.info ? this.byToken.get(token) : undefined
+    if (memberId === undefined) return false
+    const stored = this.files.thumbStored(memberId, id)
+    if (stored) this.saveFiles()
+    return stored
+  }
+
+  /**
+   * The file reached R2 and the Worker read what it is: everyone sees it as a chat message from
+   * the member (the message's own id, name and time, like `chat`). Null when the member lost the
+   * right meanwhile (removed, the room closed): the Worker then deletes what it stored.
+   */
+  finishUpload(
+    token: string,
+    id: string,
+    stored: { kind: ChatFile['kind']; mime: string },
+  ): ChatFile | null {
+    const memberId = this.info ? this.byToken.get(token) : undefined
+    if (memberId === undefined || !this.allowed(memberId, 'uploadFile')) return null
+    const file = this.files.finish(memberId, id, stored)
+    if (!file) return null
+    this.saveFiles()
+    const member = this.members.get(memberId)!
+    this.postChat({
+      id: ++this.chatId,
+      from: memberId,
+      name: member.name,
+      text: file.name,
+      at: this.deps.now(),
+      file,
+    })
+    return file
+  }
+
+  /** The upload failed or was cancelled: its place in the limits is free again */
+  abortUpload(token: string, id: string): boolean {
+    const memberId = this.info ? this.byToken.get(token) : undefined
+    if (memberId === undefined) return false
+    const aborted = this.files.abort(id, memberId)
+    if (aborted) this.saveFiles()
+    return aborted
+  }
+
+  /**
+   * GET /api/files/<room>/<id> (I5): only someone in the room (worker/roles.ts `downloadFile`),
+   * only a file of this room, only until it expires.
+   */
+  fileAccess(token: string, id: string): FileAccess {
+    const memberId = this.info ? this.byToken.get(token) : undefined
+    if (memberId === undefined) return { ok: false, reason: 'unauthorized' }
+    if (!this.allowed(memberId, 'downloadFile')) return { ok: false, reason: 'forbidden' }
+    return this.files.access(id, this.deps.now())
+  }
+
+  private saveFiles(): void {
+    this.deps.storage.saveFiles?.(this.files.state)
   }
 
   /**
@@ -2119,6 +2223,9 @@ export class RoomHost {
     this.cameIn.clear()
     this.lobbies.clear()
     this.password = null
+    // The files go with the meeting (I5), even if their 24 hours are not over
+    const gone = this.files.takeAll()
+    if (gone.keys.length > 0 || gone.grants.length > 0) this.deps.filesGone?.(gone)
     // A digest still being made for this room is dropped when it is ready
     this.passwordSeq++
     this.guard.clear()

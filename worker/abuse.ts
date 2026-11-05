@@ -5,6 +5,7 @@ import {
   type BlockEntry,
   type LimitKind,
   type OffenceKind,
+  type RateWindow,
 } from '../shared/abuse.ts'
 import type { CreateDecision } from './guard.ts'
 
@@ -57,9 +58,15 @@ const recent = new Map<string, number[]>()
  * memory and per isolate, so only a first line against a flood; RoomDO and GuardDO hold the
  * real limits.
  */
-export function takeIsolateRate(key: string, now = Date.now()): boolean {
-  const result = takeFromWindows(recent.get(key) ?? [], [ISOLATE_ROOM_RATE], now)
-  recent.set(key, result.times)
+export function takeIsolateRate(
+  key: string,
+  now = Date.now(),
+  rate: RateWindow = ISOLATE_ROOM_RATE,
+): boolean {
+  // Each limit counts on its own (a chat's thumbnails do not spend /api/rooms/*)
+  const counted = rate === ISOLATE_ROOM_RATE ? key : `${rate.count}:${key}`
+  const result = takeFromWindows(recent.get(counted) ?? [], [rate], now)
+  recent.set(counted, result.times)
   if (recent.size > 10_000) recent.clear()
   return result.ok
 }

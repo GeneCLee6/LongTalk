@@ -136,6 +136,7 @@ import { useSpeakerTest } from '../room/useSpeakerTest.ts'
 import { browserHints, detectGuide, detectSystem } from '../room/permissionGuide.ts'
 import { useMicLevel } from '../room/useMicLevel.ts'
 import { useChatNotifications } from '../room/useChatNotifications.ts'
+import { useFileSharing } from '../room/useFileSharing.ts'
 import { useRoomConnection } from '../room/useRoomConnection.ts'
 import { useRoomTelemetry } from '../room/useRoomTelemetry.ts'
 import type { LocalTracks } from '../room/RoomMedia.ts'
@@ -707,6 +708,7 @@ function Room({
   } = useRoomConnection(roomId, choices.name, choices.password)
   const toasts = useToasts()
   const { show } = toasts
+  const fileSharing = useFileSharing(roomId, state.token)
   const roomInfo = state.view?.room ?? null
   // In the waiting room (F2): no view, only the lobby (kept while the socket reconnects)
   const lobby = state.lobby
@@ -2057,7 +2059,13 @@ function Room({
             >
               {panelTabs}
               {panel === 'chat' ? (
-                <ChatPanel messages={state.chat} you={state.you} onSend={sendChat} autoFocus />
+                <ChatPanel
+                  messages={state.chat}
+                  you={state.you}
+                  onSend={sendChat}
+                  files={fileSharing}
+                  autoFocus
+                />
               ) : (
                 participantsPanel
               )}
@@ -2109,7 +2117,12 @@ function Room({
           >
             {panelTabs}
             {panel === 'chat' ? (
-              <ChatPanel messages={state.chat} you={state.you} onSend={sendChat} />
+              <ChatPanel
+                messages={state.chat}
+                you={state.you}
+                onSend={sendChat}
+                files={fileSharing}
+              />
             ) : (
               participantsPanel
             )}
