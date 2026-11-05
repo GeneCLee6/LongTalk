@@ -30,6 +30,12 @@ env:
   WORKER: longtalk-pr-${{ github.event.pull_request.number }}
   PR: ${{ github.event.pull_request.number }}
 
+# `shell: bash` is what turns on pipefail (a step without it runs plain `bash -e`, where the last
+# command of a pipe decides: `x | tee` would hide every failure of x)
+defaults:
+  run:
+    shell: bash
+
 jobs:
   deploy:
     if: github.event.action != 'closed'
@@ -290,8 +296,6 @@ jobs:
           node-version: '22'
 
       - name: Abuse test against the preview
-        # `shell: bash` is what turns on pipefail: without it, tee's exit code hid every failed check
-        shell: bash
         run: node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/abuse.ts | tee -a "$GITHUB_STEP_SUMMARY"
 
   cleanup:

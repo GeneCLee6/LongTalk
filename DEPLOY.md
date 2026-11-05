@@ -693,7 +693,7 @@ X-Frame-Options: DENY
 
 - **secrets lint**（`scripts/secrets.ts`）：`npm run lint` 掃 `src/`、`public/`、`index.html`（註解不算），`npm run budget` 再掃 build 出來的 `dist/client/`。擋：Worker 與 CI 的 secret 名稱（`REALTIME_APP_SECRET`、`REALTIME_TURN_KEY_ID`、`REALTIME_TURN_KEY_API_TOKEN`、`ADMIN_TOKEN`、`PREVIEW_ADMIN_TOKEN`、`TURNSTILE_SECRET_KEY`、`IP_HASH_PEPPER`、`CLOUDFLARE_API_TOKEN`）、私鑰、AWS／GitHub／Slack／AI／Google 的 key、JWT、Turnstile secret key（含測試用的）、名字像 secret 的變數被指定成長字串、`dist/client` 裡的 `.env`／`.dev.vars`。真的需要的那一行在行尾寫 `// secret-ok: <理由>`。（`/admin` 的說明文字因此不再寫出 `ADMIN_TOKEN` 這個名字。）
 - **npm audit**（`ci.yml`）：`npm audit --omit=dev --audit-level=high`，正式相依（React、router、styled-components、RNNoise）有 high／critical 就失敗；全部相依的報告寫進 run 的 summary、不失敗（目前 5 個 moderate，都在 Lighthouse 的開發相依）。
-- **濫用測試**（`preview.yml` 的 `abuse` job，`scripts/abuse.ts`）：瀏覽器測試跑完後對這個 PR 的預覽打：沒有 token 建房要 403、連續建房到第 11 次 429、一個 socket 一次送 141 個訊息被 4420 關掉、一個超大訊息被 1009 關掉、連續升級進同一間房被擋、120 個同時查詢、頁面的安全標頭；上傳（I5，經真的 R2）：沒 token 401、`.exe` 415、超過 25 MB 413、超過許可大小的 chunked body 被拒（Cloudflare 邊緣可能先補上真的長度，所以 400 或 411 都算）、傳一個小檔與 25 MB 整、、房外下載 401、下載的標頭、假裝成文字的網頁 415；有 `PREVIEW_ADMIN_TOKEN` 時再封鎖自己的網路、確認 403、解除。約一分鐘、幾百個小請求。**不要對正式站跑**（腳本會拒絕；會用掉這個網路一天的建房額度）。
+- **濫用測試**（`preview.yml` 的 `abuse` job，`scripts/abuse.ts`）：瀏覽器測試跑完後對這個 PR 的預覽打：沒有 token 建房要 403、連續建房到第 11 次 429、一個 socket 一次送 141 個訊息被 4420 關掉、一個超大訊息被 1009 關掉、連續升級進同一間房被擋、120 個同時查詢、頁面的安全標頭；上傳（I5，經真的 R2）：沒 token 401、`.exe` 415、超過 25 MB 413、超過許可大小的 chunked body 被拒（Cloudflare 邊緣可能先補上真的長度，所以 400 或 411 都算）、傳一個小檔與 25 MB 整、房外下載 401、下載的標頭、假裝成文字的網頁 415；有 `PREVIEW_ADMIN_TOKEN` 時再封鎖自己的網路、確認 403、解除。約一分鐘、幾百個小請求。**不要對正式站跑**（腳本會拒絕；會用掉這個網路一天的建房額度）。
 
 ## 12. 聊天檔案、到期刪除與 D1 備份（`e5-t05`、`e11-t08`，I5）
 
