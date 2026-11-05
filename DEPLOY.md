@@ -771,8 +771,8 @@ X-Frame-Options: DENY
    npx wrangler d1 execute longtalk --remote --command "SELECT account_id FROM rooms WHERE slug = '…'"
    # 先列出他的固定會議室：D1 的刪除碰不到它們的 RoomDO
    npx wrangler d1 execute longtalk --remote --command "SELECT slug FROM rooms WHERE account_id = '…'"
-   # 刪除（外鍵會一起刪通行密鑰、session、固定會議室、預定會議）
-   npx wrangler d1 execute longtalk --remote --command "PRAGMA foreign_keys = ON; DELETE FROM challenges WHERE account_id = '…'; DELETE FROM accounts WHERE id = '…'"
+   # 刪除：和 worker/account-db.ts 的 deleteAccount 同樣的表、同樣的順序
+   npx wrangler d1 execute longtalk --remote --command "DELETE FROM meetings WHERE account_id = '…'; DELETE FROM rooms WHERE account_id = '…'; DELETE FROM sessions WHERE account_id = '…'; DELETE FROM credentials WHERE account_id = '…'; DELETE FROM challenges WHERE account_id = '…'; DELETE FROM accounts WHERE id = '…'"
    ```
    **這條路徑沒有清 RoomDO**（名稱、密碼雜湊、等候室設定），目前也沒有管理 API 可以清：`DELETE /api/account` 才會（`worker/accounts.ts`）。所以能請本人按就請本人按；非代刪不可時，那些 RoomDO 裡的設定會留著，要另外處理（目前只能寫一個一次性的 Worker 呼叫 `destroy()`，要用時再做）。告訴對方這個限制。
 3. **會議、聊天、檔案**（有沒有帳號都一樣）：這些**隨會議消失**：主持人結束或空房 10 分鐘就刪聊天與成員，檔案當場刪或最多 25 小時。對方給得出會議室網址時，看房間還在不在就知道；還開著的話請主持人結束會議。**你沒有工具、也不應該去讀別人的聊天**。要立刻刪某個檔案只有 R2 儀表板（`longtalk-files`，key 是 `uploads/<UTC 小時>/<id>`，id 只有 RoomDO 知道，所以實際上認不出是誰的；等它到期就好）。
