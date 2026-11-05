@@ -9,7 +9,7 @@
 // a browser or from a network address mean waiting PASSWORD_WAIT_MS (PasswordGuard). The digest
 // only lives in the room's own storage and goes with the room. The password itself is never
 // logged, never put in a URL the Worker sees, and never sent back to anyone.
-import { PASSWORD_MAX_FAILS, PASSWORD_WAIT_MS } from '../shared/password.ts'
+import { GUESS_MEMORY_MS, PASSWORD_MAX_FAILS, PASSWORD_WAIT_MS } from '../shared/password.ts'
 
 /** A stored password: base64 salt and digest */
 export type PasswordRecord = { salt: string; hash: string }
@@ -79,8 +79,7 @@ export type GuessRecord = {
   until: number | null
 }
 
-/** Wrong guesses older than this no longer count */
-export const GUESS_MEMORY_MS = 10 * 60_000
+export { GUESS_MEMORY_MS }
 /** The most browsers and addresses kept at once (the oldest goes first) */
 export const MAX_GUESS_RECORDS = 500
 

@@ -293,6 +293,12 @@ export function PreJoin(props: PreJoinProps) {
           <LanguageSelect />
           <ThemeSelect />
         </Preferences>
+        {/* A new tab: leaving would stop the preview and lose what was typed here */}
+        <Policy>
+          <a href="/privacy" target="_blank" rel="noopener" aria-label={strings.privacy.linkNewTab}>
+            {strings.privacy.link}
+          </a>
+        </Policy>
         {props.onSettings && (
           <SettingsRow>
             <Button variant="secondary" onClick={props.onSettings}>
@@ -312,6 +318,14 @@ const SettingsRow = styled.div`
   svg {
     width: 18px;
     height: 18px;
+  }
+`
+
+const Policy = styled.div`
+  font-size: ${fontSize.small};
+
+  a {
+    color: ${color.primary};
   }
 `
 

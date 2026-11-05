@@ -750,3 +750,47 @@ X-Frame-Options: DENY
 ### 查看
 
 `/admin` 的「聊天檔案與備份」：已用／上限、物件數、上次清除、上次備份；**有備份 bucket 卻超過 26 小時沒備份時有紅字**。Cron 的記錄：Cloudflare 儀表板 → Workers → `longtalk` → Logs（`observability` 開著）或 Settings › Triggers › Cron Events。
+
+## 13. 隱私權政策與刪除請求（`e11-t07`，I6）
+
+`/privacy` 是照程式寫的白話說明，**不是法律文件**，也不宣稱符合任何法律；要律師看的問題在 `docs/NEXT.md`。文字在 `src/privacy/policy.zh-TW.ts`、`policy.en.ts`（`RULES.md` §1），日期與聯絡方式在 `shared/privacy.ts`。
+
+**改聯絡方式**：`shared/privacy.ts` 的 `PRIVACY_CONTACT`，只有這一個地方。現在是 GitHub Issues（`isPublic: true`，頁面會警告不要寫個資）；換成私人管道時 `url` 寫新的（`https:` 或 `mailto:`）、`isPublic: false`。不要把還沒決定公開的 Email 放進來：這個 repo 是公開的。
+
+**要定期再看的三個數字**（Cloudflare 的文件，不是我們的程式，測試比對不到；`src/privacy/facts.ts`）：Workers Logs 免費方案保留 3 天（[文件](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)）、D1 Time Travel 免費方案 7 天、SQLite 的 Durable Object 時間點復原 30 天（[文件](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)）。換方案或文件改了要一起改頁面。
+
+### 收到刪除請求時
+
+先分清楚是哪一種。**不要要求對方在公開的 issue 裡提供更多個資**；issue 裡有個資的話，請對方自己編輯掉，或由你刪除那則留言（`gh issue` 或網頁），也算是這個請求的一部分。
+
+1. **有帳號的人**：請他自己在 `/me` 按「刪除帳號」，這是最快也最確定是本人的方式（帳號沒有 Email，你沒有別的方法確認對方是誰）。通行密鑰都掉了、登不進去時，他只能給你固定會議室的網址或顯示名稱，**這不能證明他是本人**；要不要代刪由你判斷。
+2. **你代刪帳號**（確認是本人之後）：
+   ```sh
+   # 用顯示名稱或固定會議室找帳號（名字不是唯一的，先看清楚）
+   npx wrangler d1 execute longtalk --remote --command "SELECT id, name, created_at FROM accounts WHERE name = '…'"
+   npx wrangler d1 execute longtalk --remote --command "SELECT account_id FROM rooms WHERE slug = '…'"
+   # 先列出他的固定會議室：D1 的刪除碰不到它們的 RoomDO
+   npx wrangler d1 execute longtalk --remote --command "SELECT slug FROM rooms WHERE account_id = '…'"
+   # 刪除（外鍵會一起刪通行密鑰、session、固定會議室、預定會議）
+   npx wrangler d1 execute longtalk --remote --command "PRAGMA foreign_keys = ON; DELETE FROM challenges WHERE account_id = '…'; DELETE FROM accounts WHERE id = '…'"
+   ```
+   **這條路徑沒有清 RoomDO**（名稱、密碼雜湊、等候室設定），目前也沒有管理 API 可以清：`DELETE /api/account` 才會（`worker/accounts.ts`）。所以能請本人按就請本人按；非代刪不可時，那些 RoomDO 裡的設定會留著，要另外處理（目前只能寫一個一次性的 Worker 呼叫 `destroy()`，要用時再做）。告訴對方這個限制。
+3. **會議、聊天、檔案**（有沒有帳號都一樣）：這些**隨會議消失**：主持人結束或空房 10 分鐘就刪聊天與成員，檔案當場刪或最多 25 小時。對方給得出會議室網址時，看房間還在不在就知道；還開著的話請主持人結束會議。**你沒有工具、也不應該去讀別人的聊天**。要立刻刪某個檔案只有 R2 儀表板（`longtalk-files`，key 是 `uploads/<UTC 小時>/<id>`，id 只有 RoomDO 知道，所以實際上認不出是誰的；等它到期就好）。
+4. **沒有帳號的人的資料**：**沒有身分可以查**。LongTalk 不存 Email；名字只在會議期間的 RoomDO，兩個人可以同名；瀏覽器 id 只在對方的瀏覽器裡。誠實回覆：能查的東西不存在，會議資料已經或即將自動刪除，瀏覽器裡的請他清除網站資料。遙測沒有任何可以連到人的東西，不用處理。
+5. **網路雜湊**（`GuardDO`）：對方提供 IP 才算得出來，而且大概率沒有必要；`/admin` 的封鎖名單可以解除封鎖。其他的雜湊沒有管理工具可以刪，也沒有自動到期（`docs/NEXT.md` I6）。
+6. **錄影**：LongTalk 沒有檔案，只有錄的人有。告訴對方找錄的人；LongTalk 也不知道那是誰（紀錄隨會議刪除）。
+7. **備份**：不要去改舊備份。告訴對方**最多 7 天**（`BACKUP_RETENTION_DAYS`）後最後一份含他的備份會被刪除。**記下這個請求的日期與帳號 id**，至少留 7 天：這段期間要是從備份還原，§12「還原」第 5 步要再刪一次。Cloudflare 自己的 Time Travel 與時間點復原也可能留更久（頁面有寫），你不用動它們，但不要在這段期間用它們還原而忘了重刪。
+8. **別人手上的東西**：下載的檔案、錄影、截圖、加進日曆的活動，網站都刪不到，直接這樣回。
+9. **回覆**：說明做了什麼、哪些還會留多久。回覆裡不要重複對方的個資。
+
+### 頁面與程式的對應（改程式時檢查）
+
+| 頁面寫的 | 在哪裡 |
+| --- | --- |
+| 保留表的數字 | `src/privacy/facts.ts`（讀常數；`tests/app/privacy.test.tsx` 釘住） |
+| 瀏覽器裡的 key | `src/privacy/facts.ts`（測試掃 `src/`） |
+| 只有一個 cookie | `worker/session.ts`、`tests/worker/privacyFacts.test.ts` |
+| 沒有追蹤、只連自己的伺服器 | CSP，`shared/security-headers.ts`（測試釘住） |
+| 存在哪些 Cloudflare 服務、沒指定地區 | `wrangler.jsonc`（測試比對） |
+| 遙測沒有名字、房號 | `shared/telemetry.ts`（`scrubErrorText`） |
+| 錄影流程 | `docs/PRD/e8-recording-transcript-ai.md` 的同意清單 |

@@ -57,9 +57,37 @@ for (const scheme of ['light', 'dark'] as const) {
       await page.goto('/admin')
       await expect(page.getByRole('heading', { name: strings.admin.lockedTitle })).toBeVisible()
       await expectNoViolations(page, 'admin')
+
+      // The privacy policy (I6, e11-t07)
+      await page.goto('/privacy')
+      await expect(page.getByRole('heading', { level: 1, name: strings.privacy.link })).toBeVisible()
+      await expectNoViolations(page, 'privacy policy')
     })
   })
 }
+
+test('/privacy reads on a phone, in English too (I6)', async ({ browser }) => {
+  const context = await browser.newContext({ ...viewports.phone, locale: 'en-AU' })
+  const page = await context.newPage()
+  await page.goto('/')
+  await page.getByRole('link', { name: 'Privacy policy' }).click()
+  await expect(page).toHaveURL(/\/privacy$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Privacy policy' })).toBeVisible()
+  await expect(page.getByRole('table', { name: 'Data retention' })).toBeVisible()
+  await expectNoViolations(page, 'privacy policy on a phone, English')
+  // No sideways scrolling: the tables turn into cards and long names wrap
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  )
+  expect(overflow).toBeLessThanOrEqual(0)
+  // Switching language swaps the text without leaving the page
+  await page.getByLabel('Language').selectOption('zh-TW')
+  await expect(page.getByRole('heading', { level: 1, name: strings.privacy.link })).toBeVisible()
+  // The third-party notices are really served
+  const notices = await page.request.get('/third-party-notices.txt')
+  expect(notices.ok()).toBe(true)
+  await context.close()
+})
 
 test('/me signed out and signed in (I2) has no axe violations', async ({ page }) => {
   // A passkey for localhost from Chromium's virtual authenticator
