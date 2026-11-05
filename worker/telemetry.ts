@@ -2,6 +2,9 @@ import {
   ERROR_ALERT_PER_HOUR,
   JOIN_ALERT_FAIL_RATIO,
   JOIN_ALERT_MIN,
+  MAX_ERROR_SAMPLES,
+  TELEMETRY_DAYS,
+  TELEMETRY_HOURS,
   emptyCounts,
   type AlertCode,
   type ClientEvent,
@@ -15,12 +18,7 @@ import {
 // so Vitest runs it directly; TelemetryDO (telemetry-do.ts) stores the record and holds the rate
 // limit.
 
-/** Daily counters are kept this long (the retention table's 90 days for telemetry) */
-export const TELEMETRY_DAYS = 90
-/** Hourly counters are kept this long (enough for the last 24 hours and the error alert) */
-export const TELEMETRY_HOURS = 48
-/** Distinct client errors kept for /admin */
-export const MAX_ERROR_SAMPLES = 20
+export { MAX_ERROR_SAMPLES, TELEMETRY_DAYS, TELEMETRY_HOURS }
 
 /** What TelemetryDO stores */
 export type TelemetryRecord = {

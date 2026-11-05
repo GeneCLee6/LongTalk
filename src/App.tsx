@@ -13,6 +13,8 @@ const AdminPage = lazy(() => import('./pages/AdminPage.tsx'))
 const MePage = lazy(() => import('./pages/MePage.tsx'))
 // A scheduled meeting's public page (I3): its own chunk too, without the account API
 const MeetingPage = lazy(() => import('./pages/MeetingPage.tsx'))
+// The privacy policy (I6, e11-t07): its own chunk, its text loaded per language after that
+const PrivacyPage = lazy(() => import('./pages/PrivacyPage.tsx'))
 
 export function App() {
   // Switching language (G1, e4-t15) re-renders everything from here down with the other
@@ -29,6 +31,7 @@ export function App() {
             <Route path="/admin" element={<AdminPage />} />
             <Route path="/me" element={<MePage />} />
             <Route path="/m/:meetingId" element={<MeetingPage />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="*" element={<HomePage />} />
           </Routes>
         </Suspense>

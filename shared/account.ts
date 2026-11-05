@@ -15,6 +15,9 @@ export const MAX_SESSIONS = 20
 /** Persistent rooms one account may have */
 export const MAX_PERSISTENT_ROOMS = 5
 
+/** The one cookie LongTalk sets (worker/session.ts has its attributes; /privacy names it) */
+export const SESSION_COOKIE = '__Host-lt_session'
+
 /** A session nobody used for this long ends */
 export const SESSION_IDLE_MS = 30 * 24 * 60 * 60_000
 /** And every session ends this long after signing in, used or not: then sign in again */

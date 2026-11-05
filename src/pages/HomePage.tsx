@@ -171,6 +171,9 @@ export function HomePage() {
           </li>
         ))}
       </Perks>
+      <Footer>
+        <Link to="/privacy">{strings.privacy.link}</Link>
+      </Footer>
     </Page>
   )
 }
@@ -178,7 +181,7 @@ export function HomePage() {
 const Page = styled.main`
   min-height: 100dvh;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr auto auto;
   font-family: ${font.current};
   background: ${color.bg};
   color: ${color.fg};
@@ -281,6 +284,20 @@ const Offline = styled.p`
     width: 20px;
     height: 20px;
     color: ${color.warn};
+  }
+`
+
+const Footer = styled.footer`
+  padding: 0 ${space(7)} ${space(5)};
+  text-align: center;
+  font-size: ${fontSize.small};
+
+  a {
+    color: ${color.primary};
+  }
+
+  @media (max-width: ${breakpoint.phone}) {
+    padding: 0 ${space(4)} ${space(4)};
   }
 `
 
