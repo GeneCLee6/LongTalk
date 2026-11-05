@@ -1,6 +1,7 @@
 // The room's text chat (D3, e5-t01): what a message is, how long it may be, how much the room
 // keeps and how fast a member may send. Shared by the Worker (RoomHost decides) and the browser
 // (which checks the same limits before sending, so a refused message stays in the box).
+import type { ChatFile } from './files.ts'
 
 /** A message's length in characters (code points), after normalizeChatText (E5: ≤ 2000 字) */
 export const MAX_CHAT_CHARS = 2_000
@@ -23,6 +24,11 @@ export type ChatMessage = {
   text: string
   /** When the room accepted it (ms since the epoch, the server's clock) */
   at: number
+  /**
+   * A file a member shared (I5, e5-t05): the room writes this message itself when the upload
+   * finishes; `text` is then the file's name, for previews and older readers
+   */
+  file?: ChatFile
 }
 
 // Control characters (but the newline) and the bidirectional overrides that could make text
@@ -83,6 +89,21 @@ export class ChatRateLimit {
   }
 }
 
+/** A shared file in a message, as far as the browser checks it (the server is trusted) */
+function isChatFile(value: unknown): value is ChatFile {
+  if (typeof value !== 'object' || value === null) return false
+  const file = value as Record<string, unknown>
+  return (
+    typeof file.id === 'string' &&
+    typeof file.name === 'string' &&
+    typeof file.size === 'number' &&
+    typeof file.mime === 'string' &&
+    (file.kind === 'image' || file.kind === 'file') &&
+    typeof file.thumb === 'boolean' &&
+    typeof file.expiresAt === 'number'
+  )
+}
+
 /** A message the room sent, as far as the browser checks it (the server is trusted) */
 export function isChatMessage(value: unknown): value is ChatMessage {
   if (typeof value !== 'object' || value === null) return false
@@ -92,6 +113,7 @@ export function isChatMessage(value: unknown): value is ChatMessage {
     typeof message.from === 'string' &&
     typeof message.name === 'string' &&
     typeof message.text === 'string' &&
-    typeof message.at === 'number'
+    typeof message.at === 'number' &&
+    (message.file === undefined || isChatFile(message.file))
   )
 }

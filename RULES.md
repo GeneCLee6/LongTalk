@@ -11,7 +11,9 @@
 | `worker/room.ts` | `RoomDO`：每房一個，房間狀態與權限的唯一真相 | 前端邏輯 |
 | `worker/roles.ts`（F1） | 誰能做什麼：伺服器的判斷（`authorize`）；表本身在 `shared/roles.ts`，前端只拿來決定顯示哪些按鈕 | 在其他地方判斷權限 |
 | `worker/accounts.ts`（I2） | `/api/account/*`：通行密鑰（`webauthn.ts`）、session（`session.ts`）、D1 的查詢（`account-db.ts`，表在 `migrations/`）、固定會議室、預定會議（I3；公開的 `GET /api/meetings/<id>` 在 `meetings.ts`） | 房間狀態（固定會議室的設定在 RoomDO，經 RPC）；寄信、密碼 |
-| `worker/index.ts` | Worker 入口：匯出 handler 與 DO class | 其他邏輯 |
+| `worker/files.ts`（I5） | `/api/files/*`：上傳與下載，串流到 R2 綁定；誰能做什麼問 RoomDO（`room-files.ts`），全站上限問 `FileLedgerDO`（`file-ledger.ts`）；規則與數字在 `shared/files.ts`、`shared/file-limits.ts` | 把檔案讀進記憶體（只有開頭與縮圖）；房間狀態 |
+| `worker/scheduled.ts`（I5） | Cron：`sweep.ts` 刪到期檔案、`backup.ts` D1 備份 | 帶任何 secret（只用綁定） |
+| `worker/index.ts` | Worker 入口：匯出 handler（`fetch`、`scheduled`）與 DO class | 其他邏輯 |
 | `src/media/` | `MediaTransport` 介面與實作（A2 起） | 元件直接碰 `RTCPeerConnection` 或 SFU API |
 | `src/pages/` | 組合：取狀態、接路由 | 樣式細節以外的規則判斷 |
 | `src/components/` | 展示與互動 | 直接呼叫 API 或 WebSocket（由 props 傳入 callback） |

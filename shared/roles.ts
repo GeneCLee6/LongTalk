@@ -55,6 +55,12 @@ export const PERMISSIONS = {
   shareScreen: { who: IN_ROOM, on: 'self', since: 'D1' },
   /** Send a chat message to everyone (D3) */
   chat: { who: IN_ROOM, on: 'self', since: 'D3' },
+  /**
+   * Share a file in the chat, and download what others shared (I5, e5-t05): RoomDO decides for
+   * the Worker's upload and download routes (worker/files.ts)
+   */
+  uploadFile: { who: IN_ROOM, on: 'self', since: 'I5' },
+  downloadFile: { who: IN_ROOM, on: 'self', since: 'I5' },
   /** Reactions and raising a hand (G3) */
   react: { who: IN_ROOM, on: 'self', since: 'G3' },
   raiseHand: { who: IN_ROOM, on: 'self', since: 'G3' },

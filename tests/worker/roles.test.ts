@@ -18,6 +18,8 @@ const EXPECTED: Record<Action, string> = {
   media: 'HCP',
   shareScreen: 'HCP',
   chat: 'HCP',
+  uploadFile: 'HCP',
+  downloadFile: 'HCP',
   react: 'HCP',
   raiseHand: 'HCP',
   annotate: 'HCP',

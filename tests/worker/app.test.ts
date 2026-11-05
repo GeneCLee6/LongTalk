@@ -62,7 +62,8 @@ function env(overrides: Partial<Env> = {}): Env {
     USAGE: fakeUsage().namespace,
     TELEMETRY: fakeTelemetry().namespace,
     // Requests without CF-Connecting-IP (all of these) are never limited: no guard calls
-    GUARD: { idFromName: (name: string) => name, get: () => ({}) } as unknown as Env['GUARD'],
+    FILE_LEDGER: undefined as never,
+  GUARD: { idFromName: (name: string) => name, get: () => ({}) } as unknown as Env['GUARD'],
     ...overrides,
   }
 }

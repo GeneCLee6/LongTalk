@@ -24,7 +24,7 @@ export function ChatPreview({ message, onOpen, onDismiss }: ChatPreviewProps) {
         <Bubble key={message.id}>
           <Open type="button" onClick={onOpen} aria-label={strings.chat.previewOpen(message.name)}>
             <Name>{message.name}</Name>
-            <Text>{message.text}</Text>
+            <Text>{message.file ? strings.chat.file.message(message.file.name) : message.text}</Text>
           </Open>
           <Close type="button" aria-label={strings.common.close} onClick={onDismiss}>
             <CloseIcon />

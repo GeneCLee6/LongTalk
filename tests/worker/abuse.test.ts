@@ -228,6 +228,7 @@ describe('POST /api/rooms abuse protection', () => {
       USAGE: {} as Env['USAGE'],
       TELEMETRY: fakeTelemetry().namespace,
       GUARD: guard.namespace,
+      FILE_LEDGER: undefined as never,
     }
   })
 
@@ -361,6 +362,7 @@ describe('/api/admin/blocks', () => {
       USAGE: {} as Env['USAGE'],
       TELEMETRY: fakeTelemetry().namespace,
       GUARD: guard.namespace,
+      FILE_LEDGER: undefined as never,
       ADMIN_TOKEN: 'owner-secret',
     }
   })
@@ -504,6 +506,7 @@ describe('CSP reports', () => {
       USAGE: {} as Env['USAGE'],
       TELEMETRY: telemetry.namespace,
       GUARD: {} as Env['GUARD'],
+      FILE_LEDGER: undefined as never,
     } satisfies Env
     const res = await handleRequest(
       fromIp('/api/csp-report', {

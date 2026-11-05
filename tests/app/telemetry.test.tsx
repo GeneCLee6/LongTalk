@@ -152,6 +152,15 @@ describe('useRoomTelemetry', () => {
 
 describe('AdminPage', () => {
   const summary: AdminSummary = {
+    files: {
+      bytes: 1024 * 1024 * 300,
+      objects: 12,
+      reservedBytes: 0,
+      capBytes: 2 * 1024 * 1024 * 1024,
+      sweep: { at: Date.UTC(2026, 10, 2), deletedObjects: 3, deletedBytes: 99 },
+      backup: { at: Date.UTC(2026, 10, 2), key: 'd1/2026-11-02.jsonl.gz', bytes: 2048, rows: 7 },
+      backups: true,
+    },
     telemetry: {
       now: Date.UTC(2026, 10, 2),
       last24h: {
@@ -248,6 +257,9 @@ describe('AdminPage', () => {
     )
     expect(screen.getByText('TypeError: x is undefined')).toBeInTheDocument()
     expect(screen.getByText(/2026-11：約 12.3 GB（正常）/)).toBeInTheDocument()
+    // Files in chat and backups (I5)
+    expect(screen.getByText(strings.admin.filesUsage('300 MB', '2.00 GB', 12))).toBeInTheDocument()
+    expect(screen.getByText(/7 列，2.0 KB/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: strings.admin.lock }))
     expect(screen.getByRole('heading', { name: strings.admin.lockedTitle })).toBeInTheDocument()
   })

@@ -370,3 +370,46 @@ export function RecordIcon() {
     </svg>
   )
 }
+
+export function AttachIcon() {
+  return (
+    <svg {...common}>
+      <path d="M20 11.5 12.5 19a5 5 0 0 1-7-7l8-8a3.3 3.3 0 0 1 4.7 4.7l-8 8a1.7 1.7 0 0 1-2.4-2.4l7.3-7.3" />
+    </svg>
+  )
+}
+
+export function FileIcon() {
+  return (
+    <svg {...common}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+    </svg>
+  )
+}
+
+export function DownloadIcon() {
+  return (
+    <svg {...common}>
+      <path d="M12 4v11M7.5 11 12 15.5 16.5 11M5 20h14" />
+    </svg>
+  )
+}
+
+export function ZoomInIcon() {
+  return (
+    <svg {...common}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-4-4M11 8v6M8 11h6" />
+    </svg>
+  )
+}
+
+export function ZoomOutIcon() {
+  return (
+    <svg {...common}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-4-4M8 11h6" />
+    </svg>
+  )
+}

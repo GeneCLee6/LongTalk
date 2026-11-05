@@ -55,7 +55,10 @@ depends_on: []
 | 固定會議室 | slug、擁有者帳號 id、建立時間（D1）；名稱、密碼的加鹽雜湊、等候室、鎖定（那間房的 RoomDO） | 到擁有者刪除那間房或帳號；會議本身的資料（成員、聊天、錄影狀態）在會議結束或空房 10 分鐘時清掉，和隨機會議室一樣 |
 | 預定會議（I3） | 隨機 id（公開頁 `/m/<id>`）、擁有者帳號 id、用哪間固定會議室、標題、說明、開始時間、時長、結束時間、主辦人的時區（IANA 名稱，例如 `Asia/Taipei`）、修改次數、建立與修改時間；**不存與會者、Email、密碼**。拿到連結的人看得到標題、說明、時間、時區與擁有者的**顯示名稱**（開始前 15 分鐘起還有固定會議室的網址） | 到擁有者刪除那場、那間固定會議室或帳號；否則**會議結束 90 天後**（`MEETING_RETENTION_MS`）：從那時起 `/me` 與公開頁都看不到，下一次有人儲存預定會議時從 D1 刪掉。下載的 `.ics` 與加進別人日曆的活動在對方那裡，網站刪不到 |
 
-**刪除帳號**（`/me`，`DELETE /api/account`）：先刪每一間固定會議室的 RoomDO 資料（正在裡面的人看到會議結束），再刪 D1 裡這個帳號的所有列（預定會議、帳號、通行密鑰、session、challenge、固定會議室），這台瀏覽器同時登出；不留備份（D1 的每日備份是 I5，`e11-t08`，到時候備份的保留期要寫進這裡）。使用者裝置裡的通行密鑰網站刪不到：`/me` 提醒自己刪，Chrome 132+ 用那把登入時會收到 `signalUnknownCredential` 並移除。遙測（`TelemetryDO`）不記帳號 id。
+| 聊天裡的檔案（I5） | 檔案內容（R2，`uploads/<小時>/<id>`）、瀏覽器做的縮圖；RoomDO 記檔名、大小、類型、誰傳的（成員 id，不是帳號）、到期時間。**不記 IP**（每個網路的上傳次數只存雜湊，在 `GuardDO`）。圖片的 EXIF（可能有定位）照原樣保留在原檔，縮圖沒有 | **最多 24 小時**：滿 24 小時（從開始上傳算）就下載不到，每小時的 Cron 在 24–25 小時之間刪除；房間關閉時當場刪除 |
+| D1 每日備份（I5，`longtalk-backups`） | `accounts`、`credentials`（公鑰）、`rooms`、`meetings` 的完整內容，gzip 的 JSON lines（`d1/<日期>.jsonl.gz`）；**不含** `sessions`（只有雜湊也不留）與 `challenges`。沒有另外加密（靠 R2 的靜態加密），只有擁有者的 Cloudflare 帳號拿得到 | **7 天**（`BACKUP_RETENTION_DAYS`）：每天的備份寫好後刪掉超過 7 天的 |
+
+**刪除帳號**（`/me`，`DELETE /api/account`）：先刪每一間固定會議室的 RoomDO 資料（正在裡面的人看到會議結束），再刪 D1 裡這個帳號的所有列（預定會議、帳號、通行密鑰、session、challenge、固定會議室），這台瀏覽器同時登出；**每日備份裡還留著最多 7 天**（I5，`e11-t08`）：刪除當下不會去改舊備份，7 天後最後一份含這個帳號的備份被刪掉，資料才完全不存在。從備份還原時，還原點之後刪掉的帳號會**回來**：`DEPLOY.md` §12 的還原步驟要求還原後再處理這段期間的刪除請求（隱私權政策頁 `e11-t07` 要照這段寫）。使用者裝置裡的通行密鑰網站刪不到：`/me` 提醒自己刪，Chrome 132+ 用那把登入時會收到 `signalUnknownCredential` 並移除。遙測（`TelemetryDO`）不記帳號 id。
 
 ## 驗收條件
 
@@ -63,10 +66,10 @@ depends_on: []
 - [ ] AC-11.2 — CI：lint、typecheck、test、build、budget 全綠才可合併；M1 加視覺回歸與 Lighthouse。（M0 部分 2026-10-31 完成：`main` 受保護，`CI / verify` 必過、禁止 force-push、管理員同樣受限；M1 部分等 `e4-t14`、`e4-t17`）
 - [ ] AC-11.3 — 進房成功率、失敗原因、重連、TURN 比例、評分可在 `/admin` 看；錯誤有告警。（D4 起評分也在 `/admin`：平均與 1–5 分分布，`e4-t18`。還不勾：告警只是 `/admin` 上的紅字旗標，不會主動通知，主動通知在 `e11-t09`）
 - [ ] AC-11.4 — 成本儀表板：各項用量與預估費用、月預算、自動降級可演練、告警。
-- [ ] AC-11.5 — 建房速率限制與 Turnstile、訊息速率、上傳配額、IP 黑名單；濫用測試。（I1 #36 做了上傳配額以外的全部；上傳配額等檔案上傳 I5 `e5-t05`；正式站的 Turnstile 等擁有者設定 key，`DEPLOY.md` §11）
+- [x] AC-11.5 — 建房速率限制與 Turnstile、訊息速率、上傳配額、IP 黑名單；濫用測試。（I1 #36 做了上傳配額以外的全部；I5 補上上傳配額：每位成員、每間房、每個網路、全站 2 GB，`scripts/abuse.ts` 加了上傳的檢查。正式站的 Turnstile 程式已經在，只等擁有者設定 key，`DEPLOY.md` §11）
 - [x] AC-11.6 — `BROWSER-SUPPORT.md` 完整且與 `capabilities.ts` 一致。（H6 #35：18 項能力 × 6 個瀏覽器全部有記號與退路；一致性兩道檢查：`tests/app/media/capabilities.test.ts` 比對列、順序、欄位與記號，`e2e/local/browsers.spec.ts` 在 Chromium、Firefox、WebKit 裡跑 app 自己的偵測和 Chrome、Firefox、Safari 欄比對。實機的 ● 是 AC-2.8 的事）
 - [x] AC-11.7 — CSP、HSTS、Permissions-Policy、COOP；`npm audit` 無高風險；secrets 不進前端（lint 擋）。（I1 #36：`public/_headers`＝`shared/security-headers.ts`；CI 的 `npm audit --omit=dev --audit-level=high`；`scripts/secrets.ts` 在 lint 與 budget）
-- [ ] AC-11.8 — 隱私權政策頁、資料保留表、錄影同意清單、刪除請求流程；R2 到期刪除與 D1 備份有排程測試。
+- [ ] AC-11.8 — 隱私權政策頁、資料保留表、錄影同意清單、刪除請求流程；R2 到期刪除與 D1 備份有排程測試。（I5 #40 做完後半句：R2 到期刪除、D1 備份、還原演練都有假時鐘的排程測試，資料保留表補上檔案與備份。前半句是 `e11-t07`，I6，所以還不勾）
 - [ ] AC-11.9 — E2EE 可行性 ADR。
 - [ ] AC-11.10 — 多租戶：帳號配額、方案、擁有者後台。
 - [x] AC-11.11 — **只用免費額度**：Realtime（SFU＋TURN）每月流出有計數；達 800 GB 新連線預設低畫質、達 950 GB 不再建立新的視訊 session（只留音訊）、每月 1 日歸零；門檻可設定、有測試、`/api/usage` 可查。
@@ -86,7 +89,7 @@ depends_on: []
 - [x] `e11-t05` 濫用防護：建房速率、Turnstile、訊息速率、IP 黑名單（全站一個 `GuardDO`：每個網路（IPv4、IPv6 /64，只存雜湊，可選 `IP_HASH_PEPPER`）建房 10 分鐘 10 間、一天 60 間；Turnstile 在兩把 key 都設了才開，Worker 打 siteverify；封鎖名單有到期、`/admin` 管理，`/api/rooms/*` 一律 403；RoomDO 每房每網路每分鐘 60 次升級、每連線 10 秒 120 個訊息，超過 4420，超大訊息 1009；協定 v16；`scripts/abuse.ts` 在每個 PR 預覽跑） · AC-11.5 · #36
 - [x] `e11-t06` 安全標頭、CSP、Permissions-Policy、secrets lint、依賴稽核進 CI（CSP 回報進遙測；`e2e/local/security.spec.ts` 確認 RNNoise、service worker、喇叭測試、`/admin` 在 CSP 下都正常） · AC-11.7 · #36
 - [ ] `e11-t07` 法遵：隱私權政策頁、資料保留表、錄影同意清單、刪除請求 · AC-11.8 · S · ← e8-t02
-- [ ] `e11-t08` R2 到期刪除 cron、D1 每日備份到 R2、還原演練 · AC-11.8 · S · ← e11-t02
+- [x] `e11-t08` R2 到期刪除 cron、D1 每日備份到 R2、還原演練（Cron 每小時一次，正式站才有；`FileLedgerDO` 記帳與校正；gzip 的 JSON lines、保留 7 天、不含 session；`scripts/restore-backup.ts` 與 `DEPLOY.md` §12 的還原步驟；演練在 `tests/worker/backup.test.ts`，每次提交都跑）· AC-11.8 · S · ← e11-t02 · I5
 
 ### M2
 

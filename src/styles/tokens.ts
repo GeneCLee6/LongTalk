@@ -184,10 +184,15 @@ export const motion = {
   toastMs: 4000,
 } as const
 
+/** Behind a thumbnail made from a transparent image (a JPEG has no transparency, I5) */
+export const thumbnailBackdrop = '#ffffff'
+
 export const layer = {
   overlay: 10,
   menu: 20,
   // Bottom sheets and full-screen drawers (phones), above menus, below toasts
   drawer: 25,
+  // The image viewer (I5), opened from the chat drawer
+  lightbox: 28,
   toast: 30,
 } as const
