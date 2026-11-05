@@ -399,6 +399,7 @@ async function expectSeesShare(viewer: Member, sharer: Member) {
     console.log(`${tag} recover ${what} result fps ${f}`)
     return f >= SHARE_FRAMES_PER_SECOND
   }
+  void onSender
   if ((viewer as Member & { arm?: string }).arm === 'camOn') {
     await toolbarButton(sharer, strings.toolbar.camOn).click()
     console.log(`${tag} recover camera-off clicked`)
