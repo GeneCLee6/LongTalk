@@ -14,6 +14,12 @@ concurrency:
   group: deploy
   cancel-in-progress: false
 
+# `shell: bash` is what turns on pipefail (a step without it runs plain `bash -e`, where the last
+# command of a pipe decides: `x | tee` would hide every failure of x)
+defaults:
+  run:
+    shell: bash
+
 jobs:
   deploy:
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')

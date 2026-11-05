@@ -114,16 +114,19 @@ async function uploads(roomId: string) {
     return
   }
   const { id } = (await granted.json()) as { id: string }
-  // A body with no declared length is refused before anything reaches R2
-  const unknownLength = await fetch(`${base}${filePath(roomId, id)}`, {
+  // A chunked body that runs past its grant. Cloudflare's edge may buffer it and fill in the real
+  // Content-Length (then the size does not match the grant: 400) or pass it on without one (411).
+  // Either way nothing is stored; the Worker's own 411 and FixedLengthStream are in the unit tests
+  const chunked = (await (await grant(file)).json()) as { id: string }
+  const unknownLength = await fetch(`${base}${filePath(roomId, chunked.id)}`, {
     method: 'PUT',
     headers: auth,
-    body: new Blob(['hello']).stream(),
+    body: new Blob(['more than five bytes']).stream(),
     duplex: 'half',
   } as RequestInit)
   record(
-    'uploads: a body of unknown length',
-    unknownLength.status === 411,
+    'uploads: a chunked body past its grant',
+    unknownLength.status === 411 || unknownLength.status === 400,
     `-> ${unknownLength.status}`,
   )
   const put = await fetch(`${base}${filePath(roomId, id)}`, {
