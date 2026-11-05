@@ -399,13 +399,15 @@ async function expectSeesShare(viewer: Member, sharer: Member) {
     console.log(`${tag} recover ${what} result fps ${f}`)
     return f >= SHARE_FRAMES_PER_SECOND
   }
-  for (const [what, action] of [
-    ['setParameters-same', 'same'],
-    ['scale', 'scale'],
-    ['replaceTrack', 'replace'],
-    ['toggle-active', 'toggle'],
-  ]) {
-    if (await onSender(what, action)) break
+  if ((viewer as Member & { arm?: string }).arm === 'camOn') {
+    await toolbarButton(sharer, strings.toolbar.camOn).click()
+    console.log(`${tag} recover camera-off clicked`)
+    let f = 0
+    for (let i = 0; i < 6; i++) {
+      await viewer.page.waitForTimeout(1500)
+      f = Math.max(f, await sample(`after camera-off +${i}`))
+    }
+    console.log(`${tag} recover camera-off result fps ${f}`)
   }
 }
 
@@ -478,6 +480,11 @@ async function meet(a: Member, b: Member, testInfo: TestInfo) {
     [a, b],
   ] as const) {
     await test.step(`${sharer.engine} shares: ${viewer.engine} sees the screen`, async () => {
+      if (sharer.engine === 'webkit' && (viewer as Member & { arm?: string }).arm === 'camOff') {
+        await toolbarButton(sharer, strings.toolbar.camOn).click()
+        await toolbarButton(sharer, strings.toolbar.camOff).waitFor()
+        await viewer.page.waitForTimeout(1500)
+      }
       await toolbarButton(sharer, strings.toolbar.share).click()
       await expect(
         sharer.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
@@ -548,9 +555,9 @@ test('WebKit and Chromium in one room, where this WebKit build has WebRTC and de
     test.skip(!usable, 'this WebKit build has no WebRTC or no capture devices')
     const url = await openRoom(browser)
     testInfo.annotations.push({ type: 'room', description: url })
-    const arm = ['canvas', 'gum', 'screenSingle', 'noSim'][testInfo.repeatEachIndex % 4]
+    const arm = ['camOn', 'camOff'][testInfo.repeatEachIndex % 2]
     // At most 10 rooms in 10 minutes from one address (shared/abuse.ts)
-    await new Promise((resolve) => setTimeout(resolve, 15_000))
+    await new Promise((resolve) => setTimeout(resolve, 25_000))
     console.log(`DIAG start repeat ${testInfo.repeatEachIndex} arm ${arm}`)
     members.push(
       await join(other, 'chromium', url, 'Chris', { permissions: ['camera', 'microphone'], arm }),
@@ -565,3 +572,96 @@ test('WebKit and Chromium in one room, where this WebKit build has WebRTC and de
     await safari.close()
   }
 })
+
+for (const engine of ['webkit', 'chromium'] as const) {
+  test(`DIAG loopback ${engine}`, async ({}, testInfo) => {
+    test.setTimeout(60_000)
+    const launched = engine === 'webkit' ? await webkit.launch() : await chromium.launch({ args: chromiumFakeMedia })
+    try {
+      const context = await launched.newContext({ permissions: ['camera', 'microphone'] })
+      const page = await context.newPage()
+      await page.goto(new URL('/', String(testInfo.project.use.baseURL)).href)
+      for (const single of [true, false]) {
+        const out = await page.evaluate(async (useCamOnly) => {
+          const color = (v: HTMLVideoElement) => {
+            const c = document.createElement('canvas')
+            c.width = 16
+            c.height = 9
+            const g = c.getContext('2d')!
+            g.drawImage(v, 0, 0, 16, 9)
+            const d = g.getImageData(0, 0, 16, 9).data
+            let r = 0, gr = 0, b = 0
+            for (let i = 0; i < d.length; i += 4) { r += d[i]; gr += d[i + 1]; b += d[i + 2] }
+            const n = d.length / 4
+            return [r / n, gr / n, b / n].map((x) => Math.round(x)).join('/')
+          }
+          const a = new RTCPeerConnection()
+          const b = new RTCPeerConnection()
+          a.onicecandidate = (e) => e.candidate && void b.addIceCandidate(e.candidate)
+          b.onicecandidate = (e) => e.candidate && void a.addIceCandidate(e.candidate)
+          const videos = new Map<string, HTMLVideoElement>()
+          b.ontrack = (e) => {
+            const v = document.createElement('video')
+            v.muted = true
+            v.autoplay = true
+            v.playsInline = true
+            v.srcObject = new MediaStream([e.track])
+            document.body.append(v)
+            void v.play().catch(() => undefined)
+            videos.set(e.transceiver.mid ?? '?', v)
+          }
+          const nego = async () => {
+            await a.setLocalDescription(await a.createOffer())
+            await b.setRemoteDescription(a.localDescription!)
+            await b.setLocalDescription(await b.createAnswer())
+            await a.setRemoteDescription(b.localDescription!)
+          }
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
+          a.addTransceiver(stream.getVideoTracks()[0], { direction: 'sendonly' })
+          await nego()
+          await new Promise((r) => setTimeout(r, 3000))
+          const log: string[] = []
+          const stats = async () => {
+            const parts: string[] = []
+            ;(await a.getStats()).forEach((r) => {
+              if (r.type === 'outbound-rtp' && r.kind === 'video') parts.push(`tx m${r.mid} e${r.framesEncoded} k${r.keyFramesEncoded} p${r.pliCount} ${Math.round(r.bytesSent / 1000)}k`)
+            })
+            ;[...videos].forEach(([mid, v]) => parts.push(`rx m${mid} ${v.videoWidth} ${v.videoWidth ? color(v) : '-'}`))
+            return parts.join(' | ')
+          }
+          log.push('camera only: ' + (await stats()))
+          if (!useCamOnly) {
+            const canvas = document.createElement('canvas')
+            canvas.width = 1280
+            canvas.height = 720
+            const g = canvas.getContext('2d')!
+            let frame = 0
+            const draw = () => {
+              frame += 1
+              g.fillStyle = '#ffffff'
+              g.fillRect(0, 0, 1280, 720)
+              g.fillStyle = '#0e7490'
+              g.fillRect((frame * 8) % 1280, 200, 160, 160)
+            }
+            draw()
+            const timer = setInterval(draw, 1000 / 15)
+            a.addTransceiver(canvas.captureStream(15).getVideoTracks()[0], { direction: 'sendonly' })
+            await nego()
+            for (let i = 0; i < 4; i++) {
+              await new Promise((r) => setTimeout(r, 1500))
+              log.push(`both +${i}: ` + (await stats()))
+            }
+            clearInterval(timer)
+          }
+          a.close()
+          b.close()
+          stream.getTracks().forEach((t) => t.stop())
+          return log
+        }, single)
+        console.log(`DIAG loopback ${engine} ${single ? 'single' : 'two'}:\n  ` + out.join('\n  '))
+      }
+    } finally {
+      await launched.close()
+    }
+  })
+}

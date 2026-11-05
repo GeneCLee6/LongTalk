@@ -259,7 +259,7 @@ jobs:
 
       - name: Firefox (then WebKit) with Chromium against the preview
         if: steps.check.outputs.run == 'true'
-        run: npm run test:e2e -- --project=firefox -g WebKit --repeat-each=16 --retries=0
+        run: npm run test:e2e -- --project=firefox -g "WebKit|loopback" --repeat-each=14 --retries=0
 
       - uses: actions/upload-artifact@v4
         if: always() && steps.check.outputs.run == 'true'
