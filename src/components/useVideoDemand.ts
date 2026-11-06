@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, type RefObject } from 'react'
+import { createContext, useContext, useEffect, useRef, type RefObject } from 'react'
 import { devicePixels } from '../media/layers.ts'
 import type { VideoDemandStore } from '../room/videoDemand.ts'
 
@@ -14,12 +14,20 @@ export const VideoDemandContext = createContext<VideoDemandStore | null>(null)
  * an IntersectionObserver for visibility (a strip scrolled past, a page swiped away: clipped by
  * the scroller like anything else) and the picture's aspect once frames arrive. Stops reporting
  * when the track goes or the element unmounts. Our own camera is never received: no report.
+ *
+ * `zoom` (a zoomed share, e3-t11): the picture is drawn that many times larger than the element,
+ * which a ResizeObserver cannot see. Asking by the drawn size is what makes zoomed-in text sharp;
+ * the layer choice is capped at the top layer anyway, and a burst of changes is one recompute
+ * (RoomMedia debounces).
  */
 export function useVideoDemand(
   ref: RefObject<HTMLVideoElement | null>,
   track: MediaStreamTrack | null,
+  zoom = 1,
 ): void {
   const store = useContext(VideoDemandContext)
+  const scale = useRef(zoom)
+  const reportNow = useRef<(() => void) | null>(null)
   useEffect(() => {
     const element = ref.current
     if (!store || !element || !track) return
@@ -35,8 +43,8 @@ export function useVideoDemand(
           ? element.videoWidth / element.videoHeight
           : null
       store.report(track, view, {
-        width: devicePixels(width, ratio),
-        height: devicePixels(height, ratio),
+        width: devicePixels(width * scale.current, ratio),
+        height: devicePixels(height * scale.current, ratio),
         visible,
         aspect,
         sourceShortSide:
@@ -45,6 +53,7 @@ export function useVideoDemand(
             : null,
       })
     }
+    reportNow.current = report
     report()
     const observers: { disconnect: () => void }[] = []
     if (typeof ResizeObserver !== 'undefined') {
@@ -69,7 +78,12 @@ export function useVideoDemand(
     return () => {
       for (const observer of observers) observer.disconnect()
       element.removeEventListener('resize', report)
+      reportNow.current = null
       store.report(track, view, null)
     }
   }, [store, ref, track])
+  useEffect(() => {
+    scale.current = zoom
+    reportNow.current?.()
+  }, [zoom])
 }

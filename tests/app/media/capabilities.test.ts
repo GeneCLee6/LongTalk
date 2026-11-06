@@ -64,6 +64,7 @@ function fullBrowser(): CapabilityEnv {
     indexedDB: {},
     PublicKeyCredential: class {},
     onbeforeinstallprompt: null,
+    document: { fullscreenEnabled: true },
     navigator: {
       serviceWorker: {},
       standalone: false,

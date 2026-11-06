@@ -4,6 +4,7 @@ import {
   endsPushToTalk,
   modalOpen,
   shortcutFor,
+  showsOnPage,
   startsPushToTalk,
   type ShortcutAction,
 } from './shortcuts.ts'
@@ -50,6 +51,9 @@ export function useRoomShortcuts({
       return
     }
     const action = shortcutFor(event, { modal })
+    if (action && showsOnPage(action) && document.fullscreenElement) {
+      void document.exitFullscreen?.()
+    }
     if (action && onAction(action) !== false) event.preventDefault()
   })
   const onKeyUp = useEffectEvent((event: KeyboardEvent) => {

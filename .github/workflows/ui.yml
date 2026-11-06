@@ -75,7 +75,7 @@ jobs:
         run: npx wrangler d1 migrations apply longtalk --local
 
       - name: axe and keyboard checks, advanced noise suppression, security headers and CSP, local recording in Chromium
-        run: npx playwright test -c playwright.local.config.ts a11y.spec.ts noise.spec.ts security.spec.ts recording.spec.ts uploads.spec.ts
+        run: npx playwright test -c playwright.local.config.ts a11y.spec.ts noise.spec.ts security.spec.ts recording.spec.ts uploads.spec.ts annotation.spec.ts
 
       - name: Lighthouse accessibility ≥ 0.95
         env:
