@@ -9,8 +9,8 @@
 //    (its short side at least UPSCALE_OK of it) is the one to ask for.
 // 2. Visibility: a video that is not drawn (a page out of view, a strip scrolled past, the camera
 //    shown as an initial, the browser tab in the background) gets the lowest layer. Realtime has no
-//    way to pause a subscription short of closing it (a renegotiation each way), so lowest is as
-//    low as it goes.
+//    way to pause a subscription short of closing it (a renegotiation each way): that is for after
+//    a grace, and for RoomMedia (L1, subscriptions.ts).
 // 3. Bandwidth: everything asked for must fit DOWNLINK_BUDGET_BPS (AC-2.6: an 8-person grid
 //    stays under 4 Mbps, audio included), counted at each layer's bitrate cap. Over it, the
 //    smallest tiles step down first, cameras before the screen. The SFU sends what is asked for

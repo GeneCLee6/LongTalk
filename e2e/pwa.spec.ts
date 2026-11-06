@@ -94,9 +94,10 @@ test('M mutes and unmutes, and Space held while muted talks', async ({ browser }
   await expect(page.getByRole('dialog', { name: strings.shortcuts.title })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog', { name: strings.shortcuts.title })).toHaveCount(0)
-  await context.close()
   // L1 (e2-t18, e10-t01): the same room, as a large one seen on a phone
   const url = page.url()
-  await page.context().close()
+  // Leaving for real: a member that only drops stays on the stage for the reconnect grace
+  await page.getByRole('button', { name: strings.toolbar.leave, exact: true }).click()
+  await context.close()
   await receivesOnlyWhatIsInView(browser, url)
 })

@@ -781,7 +781,12 @@ describe('Batches against the scripted SFU (L1)', () => {
     // The last page's are still on their way, or here; none of the first page's were closed
     await sleep(100)
     expect(Object.keys(bob.getState().received).sort()).toEqual([...keys].sort())
-    expect(sfu.log.filter((l) => l.includes('pull batch'))).toHaveLength(2)
+    // Each camera was pulled once, however it was batched: nothing was closed and pulled again
+    const session = (l: string) => l.startsWith('s5 ')
+    const pulled = sfu.log
+      .filter((l) => session(l) && l.includes(' pull '))
+      .reduce((sum, l) => sum + (Number(/pull batch (\d+)/.exec(l)?.[1]) || 1), 0)
+    expect(pulled).toBe(keys.length)
     await bob.close()
   })
 })
