@@ -86,7 +86,9 @@ async function join(
   const context = await browser.newContext({ locale: 'zh-TW', ...options })
   await context.addInitScript(stubScreen)
   await context.addInitScript(keepPeerConnections)
+  await context.addInitScript(diagScript) // TEMP-DIAG
   const page = await context.newPage()
+  const diagLog = diagEvents(page) // TEMP-DIAG
   page.on('console', (message) => {
     if (message.type() === 'error')
       console.log(`[${name} ${engine}] ${message.text().slice(0, 300)}`)
@@ -101,7 +103,18 @@ async function join(
   })
   await page.goto(url)
   await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill(name)
-  await page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
+  // TEMP-DIAG
+  await page
+    .getByRole('button', { name: strings.prejoin.join, exact: true })
+    .click()
+    .catch(async (error: unknown) => {
+      await diagDump(page, `STUCK real ${name}`, diagLog)
+      await test.info().attach(`stuck-${name}.png`, {
+        body: await page.screenshot({ fullPage: true }),
+        contentType: 'image/png',
+      })
+      throw error
+    })
   await expect(page.getByRole('region', { name: strings.room.grid })).toBeVisible()
   return { name, engine, context, page }
 }
@@ -455,16 +468,30 @@ test('TEMP join probe', async ({ browser }, testInfo) => {
   test.setTimeout(420_000)
   const url = await openRoom(browser)
   const other = await chromium.launch({ args: chromiumFakeMedia })
-  const chris = await join(other, 'chromium', url, 'Chris', { permissions: ['camera', 'microphone'] })
   const started = Date.now()
   let tried = 0
   const stuck: number[] = []
   try {
-    while (Date.now() - started < 330_000 && tried < 40) {
+    while (Date.now() - started < 330_000) {
       tried += 1
       const safari = await webkit.launch()
+      let chris: Member | null = null
       try {
-        const context = await safari.newContext({ locale: 'zh-TW', permissions: ['camera', 'microphone'] })
+        // The same steps as the WebKit test below: a probe page on the same browser, then a
+        // Chromium joins, and at once WebKit
+        const probe = await safari.newPage()
+        await probe.goto(new URL('/', String(testInfo.project.use.baseURL)).href)
+        await probe.evaluate(async () => {
+          await navigator.mediaDevices.enumerateDevices()
+        })
+        await probe.close()
+        chris = await join(other, 'chromium', url, 'Chris', {
+          permissions: ['camera', 'microphone'],
+        })
+        const context = await safari.newContext({
+          locale: 'zh-TW',
+          permissions: ['camera', 'microphone'],
+        })
         await context.addInitScript(stubScreen)
         await context.addInitScript(keepPeerConnections)
         await context.addInitScript(diagScript)
@@ -484,16 +511,14 @@ test('TEMP join probe', async ({ browser }, testInfo) => {
             body: await page.screenshot({ fullPage: true }),
             contentType: 'image/png',
           })
-        } else if (tried <= 2) {
-          await diagDump(page, `ok ${tried}`, events)
         }
       } finally {
+        await chris?.context.close()
         await safari.close()
       }
     }
   } finally {
     console.log(`[DIAG summary] tried=${tried} stuck=${stuck.length} ${JSON.stringify(stuck)}`)
-    await chris.context.close()
     await other.close()
   }
 })
