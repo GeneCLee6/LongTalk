@@ -35,6 +35,8 @@ class Layer {
   readonly segments = new Map<number, Set<string>>()
   readonly tallies = new Map<string, Tally>()
   cost = 0
+  /** Strokes whose last `add` said they are still being drawn (J4: the clear race) */
+  readonly live = new Set<string>()
   /** The segment taking new strokes, and how full it is */
   open = 0
   openCost = 0
@@ -57,6 +59,13 @@ export type PutResult = { stroke: Stroke; evicted: string[] }
 export class RoomAnnotations {
   private readonly layers = new Map<string, Layer>()
   private readonly dirty = new Set<string>()
+  /**
+   * Strokes cleared by someone else while still being drawn (J4). Their author does not know yet,
+   * and sends the rest and then the whole stroke: without this, the `add` at the end brought back
+   * what everyone just saw go. Forgotten when that final `add` arrives or the author drops it. Only
+   * in memory: after an eviction the worst is the old behaviour, for that one stroke.
+   */
+  private readonly clearedWhileDrawn = new Map<string, Set<string>>()
 
   /** From storage after a wake-up; a segment of a share `live` does not list is deleted */
   constructor(
@@ -106,6 +115,7 @@ export class RoomAnnotations {
     const entry = layer.entries.get(id)
     if (!entry) return
     layer.entries.delete(id)
+    layer.live.delete(id)
     layer.segments.get(entry.segment)?.delete(id)
     layer.cost -= entry.cost
     const tally = layer.tally(entry.stroke.by)
@@ -153,11 +163,13 @@ export class RoomAnnotations {
   /**
    * Adds a stroke (stamped with its member in `by`), or replaces the member's own with its id,
    * keeping its place. Null when the id is someone else's. Past the limits older strokes fall out,
-   * the member's own first when it is the member's limit.
+   * the member's own first when it is the member's limit. `live`: it is still being drawn.
    */
-  put(share: string, stroke: Stroke): PutResult | null {
+  put(share: string, stroke: Stroke, live = false): PutResult | null {
     const layer = this.layer(share)
     const existing = layer.entries.get(stroke.id)
+    if (live) layer.live.add(stroke.id)
+    else layer.live.delete(stroke.id)
     if (existing) {
       if (existing.stroke.by !== stroke.by) return null
       return this.replace(share, layer, existing, stroke)
@@ -234,8 +246,47 @@ export class RoomAnnotations {
     return this.replace(share, layer, existing, stroke)
   }
 
+  /**
+   * Someone else is clearing a layer, or `by`'s strokes on it: what is being drawn right now is
+   * remembered as cleared. Call before clearing.
+   */
+  noteClearedWhileDrawn(share: string, by: string | null): void {
+    const layer = this.layers.get(share)
+    if (!layer) return
+    for (const id of layer.live) {
+      if (by !== null && layer.entries.get(id)?.stroke.by !== by) continue
+      const cleared = this.clearedWhileDrawn.get(share) ?? new Set<string>()
+      cleared.add(id)
+      this.clearedWhileDrawn.set(share, cleared)
+    }
+  }
+
+  /**
+   * Whether an `add` of this stroke brings back something cleared while it was being drawn. The
+   * final one (`live` false) is the last the room hears of it, so it is forgotten then.
+   */
+  refusedAsCleared(share: string, id: string, live: boolean): boolean {
+    const cleared = this.clearedWhileDrawn.get(share)
+    if (!cleared?.has(id)) return false
+    if (!live) cleared.delete(id)
+    return true
+  }
+
+  /** The strokes kept from an earlier meeting (J4), up to what the layer may hold */
+  seed(share: string, strokes: readonly Stroke[]): void {
+    const limits = limitsOf(share)
+    for (const stroke of strokes) {
+      const layer = this.layer(share)
+      if (layer.entries.has(stroke.id)) continue
+      if (layer.entries.size >= limits.strokes) return
+      if (layer.cost + strokeCost(stroke) > limits.cost) return
+      this.put(share, stroke)
+    }
+  }
+
   /** The member's own stroke goes; false when there is no such stroke of theirs */
   remove(share: string, member: string, id: string): boolean {
+    this.clearedWhileDrawn.get(share)?.delete(id)
     const layer = this.layers.get(share)
     if (layer?.entries.get(id)?.stroke.by !== member) return false
     this.drop(share, layer, id)
@@ -264,6 +315,7 @@ export class RoomAnnotations {
   reset(): void {
     this.layers.clear()
     this.dirty.clear()
+    this.clearedWhileDrawn.clear()
   }
 
   /** The strokes of a share in order, oldest first */

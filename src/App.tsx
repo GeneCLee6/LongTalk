@@ -3,18 +3,18 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { LoadFailedBoundary } from './components/LoadFailed.tsx'
 import { UpdatePrompt } from './components/UpdatePrompt.tsx'
 import { HomePage } from './pages/HomePage.tsx'
-import { useLocale } from './strings.ts'
+import { useLocale, withDictionary } from './strings.ts'
 
 // The room page is its own chunk: the home page must stay within its JS budget (CLAUDE.md rule 6)
-const RoomPage = lazy(() => import('./pages/RoomPage.tsx'))
+const RoomPage = lazy(withDictionary(() => import('./pages/RoomPage.tsx')))
 // The owner's dashboard (e11-t03): its own chunk, in neither the home nor the room page's JS
-const AdminPage = lazy(() => import('./pages/AdminPage.tsx'))
+const AdminPage = lazy(withDictionary(() => import('./pages/AdminPage.tsx')))
 // The account page (I2): its own chunk, with the WebAuthn code; accounts are optional
-const MePage = lazy(() => import('./pages/MePage.tsx'))
+const MePage = lazy(withDictionary(() => import('./pages/MePage.tsx')))
 // A scheduled meeting's public page (I3): its own chunk too, without the account API
-const MeetingPage = lazy(() => import('./pages/MeetingPage.tsx'))
+const MeetingPage = lazy(withDictionary(() => import('./pages/MeetingPage.tsx')))
 // The privacy policy (I6, e11-t07): its own chunk, its text loaded per language after that
-const PrivacyPage = lazy(() => import('./pages/PrivacyPage.tsx'))
+const PrivacyPage = lazy(withDictionary(() => import('./pages/PrivacyPage.tsx')))
 
 export function App() {
   // Switching language (G1, e4-t15) re-renders everything from here down with the other

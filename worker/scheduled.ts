@@ -1,6 +1,6 @@
 import { BACKUP_HOUR_UTC, BACKUP_STALE_MS, type FilesStatus } from '../shared/files.ts'
 import { writeBackup } from './backup.ts'
-import { sweepUploads } from './sweep.ts'
+import { sweepUploads, type RoomsExist } from './sweep.ts'
 import { FILE_LEDGER_OBJECT } from './file-ledger.ts'
 import type { Env } from './app.ts'
 
@@ -19,14 +19,38 @@ export interface LedgerDeps {
   status(): Promise<Pick<FilesStatus, 'backup'>>
 }
 
+/** D1's `rooms` knows which persistent rooms exist (J4): whose whiteboard stays in the bucket */
+function roomsExistIn(db: D1Database): RoomsExist {
+  return async (rooms) => {
+    const existing = new Set<string>()
+    // D1 allows 100 bound parameters a query
+    for (let at = 0; at < rooms.length; at += 90) {
+      const part = rooms.slice(at, at + 90)
+      const { results } = await db
+        .prepare(
+          `SELECT slug, created_at FROM rooms WHERE slug IN (${part.map(() => '?').join(',')})`,
+        )
+        .bind(...part.map((room) => room.slug))
+        .all<{ slug: string; created_at: number }>()
+      const made = new Map(results.map((row) => [row.slug, row.created_at]))
+      for (const room of part) if (made.get(room.slug) === room.createdAt) existing.add(room.key)
+    }
+    return existing
+  }
+}
+
 /** The sweep and the count, once. Nothing to do without the bucket */
 export async function runSweep(
-  env: Pick<Env, 'FILES_BUCKET'>,
+  env: Pick<Env, 'FILES_BUCKET'> & Partial<Pick<Env, 'DB'>>,
   ledger: Pick<LedgerDeps, 'reconcile'>,
   now: number,
 ): Promise<void> {
   if (!env.FILES_BUCKET) return
-  const { live, deleted } = await sweepUploads(env.FILES_BUCKET, now)
+  const { live, deleted } = await sweepUploads(
+    env.FILES_BUCKET,
+    now,
+    env.DB ? roomsExistIn(env.DB) : undefined,
+  )
   await ledger.reconcile(live, deleted)
 }
 

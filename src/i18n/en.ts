@@ -1,46 +1,18 @@
-import type { Strings, TileState } from './types.ts'
+import { enHome } from './en.home.ts'
+import { mergeDictionaries } from './merge.ts'
+import type { RoomStrings, Strings, TileState } from './types.ts'
 
-// The English dictionary (G1, e4-t15): the same keys as zh-TW.ts, which the `Strings` type
+// The English dictionary (G1, e4-t15): the same keys as zh-TW.ts, which the `RoomStrings` type
 // enforces. British/Australian spelling (colour, cancelled), curly apostrophes and quotes.
 // The product name is English only: LongTalk.
+//
+// J4: only what the home page does not use (en.home.ts has that); see zh-TW.ts.
 
 const lower = (kind: string) => kind.toLowerCase()
 const plural = (count: number, one: string, many: string) => (count === 1 ? one : many)
 const enSignal = { good: 'good signal', fair: 'fair signal', poor: 'poor signal' }
 
-export const en: Strings = {
-  appName: 'LongTalk',
-  tagline: 'The meeting room that never cuts out',
-  home: {
-    intro:
-      'Send a link and your friends are in with one click. No app, no sign-up, no 40-minute limit.',
-    createRoom: 'Start a room',
-    creatingRoom: 'Starting…',
-    createRoomFailed: 'Couldn’t start a room. Please try again.',
-    verifying: 'Checking…',
-    createRoomVerifyFailed: 'The human check didn’t pass. Please try again.',
-    createRoomRateLimited: (minutes: number) =>
-      `Too many rooms from this network. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
-    createRoomBlocked: 'This network can’t start or join rooms right now.',
-    joinLabel: 'Room link or code',
-    joinPlaceholder: 'Paste a link or type a code',
-    join: 'Join',
-    joinInvalid: 'That doesn’t look like a room. Paste the whole link or the 10-character code.',
-    perks: [
-      {
-        title: 'No time limit',
-        body: 'Talk till sunrise without being cut off. A room closes only after the last person leaves.',
-      },
-      {
-        title: 'Nothing to install',
-        body: 'Open it in a browser and go, on your phone too. No account needed.',
-      },
-      {
-        title: 'Screen sharing and drawing',
-        body: 'Share your whole screen, a window or a tab; soon you’ll be able to draw on it too.',
-      },
-    ],
-  },
+export const enRoom: RoomStrings = {
   prejoin: {
     title: 'Ready to join?',
     roomCode: (roomId: string) => `Room ${roomId}`,
@@ -152,15 +124,6 @@ export const en: Strings = {
     withoutDevices:
       'You can also join without your microphone and camera: you’ll see and hear everyone, and can turn yours on later.',
     retry: 'Try again',
-  },
-  language: {
-    label: 'Language',
-    section: 'Language',
-    names: { 'zh-TW': '繁體中文', en: 'English' },
-  },
-  theme: {
-    label: 'Appearance',
-    names: { system: 'Match system', light: 'Light', dark: 'Dark' },
   },
   room: {
     title: (roomId: string) => `Room ${roomId}`,
@@ -558,6 +521,32 @@ export const en: Strings = {
     clearOneBody: (name: string) =>
       `Everything ${name} drew goes, for everyone at once. This cannot be undone.`,
     clearConfirm: 'Clear',
+    // A persistent room's board from an earlier meeting (J4, e7-t08): nobody here drew those
+    earlier: 'An earlier meeting',
+    // Exporting (J4, e7-t07)
+    exportButton: 'Export',
+    exporting: {
+      boardTitle: 'Export the whiteboard',
+      shareTitle: 'Export the picture and marks',
+      hint: 'The file is made in this browser and not uploaded. Laser pointers and names are left out.',
+      working: 'Making the file…',
+      failed: 'The export failed. Please try again.',
+      viewPng: 'What’s on screen (PNG)',
+      wholePng: 'Everything (PNG)',
+      wholePdf: 'Everything (PDF, several pages if it’s large)',
+      framePng: 'The current picture and marks (PNG)',
+      framePdf: 'The current picture and marks (PDF)',
+      boardFile: 'whiteboard',
+      shareFile: 'shared screen',
+    },
+    // Marks without a pointer (J4, e7-t09): a cursor moved with the arrow keys
+    keyboard: {
+      cursor: 'Keyboard pen: arrow keys move, Enter starts or ends, Esc leaves',
+      up: 'Arrow keys move (Shift goes faster), Enter starts drawing, Esc leaves',
+      down: 'Drawing: arrow keys move, Enter ends, Esc cancels this stroke',
+      eraser: 'Arrow keys move, Enter erases your own mark here, Esc leaves',
+      laser: 'Arrow keys move the laser pointer, Esc leaves',
+    },
   },
   whiteboard: {
     section: 'Whiteboard',
@@ -714,15 +703,8 @@ export const en: Strings = {
       },
     },
   },
-  privacy: {
-    link: 'Privacy policy',
-    linkNewTab: 'Privacy policy (opens in a new tab)',
-    loading: 'Loading…',
-  },
   account: {
     title: 'My account',
-    homeLink: 'Sign in',
-    homeLinkSignedIn: 'My account',
     back: 'Home',
     loading: 'Loading…',
     intro:
@@ -1088,31 +1070,6 @@ export const en: Strings = {
     rejoin: 'Rejoin',
     home: 'Back to home',
   },
-  loadFailed: {
-    title: 'Couldn’t load. Please reload',
-    body: 'The connection may have dropped, or LongTalk was just updated. Reload to carry on.',
-    reload: 'Reload',
-  },
-  pwa: {
-    installLabel: 'Install app',
-    installTitle: 'Install LongTalk',
-    installBody: 'Put it on your computer or phone and start a meeting in one tap next time.',
-    install: 'Install',
-    installDismiss: 'No thanks',
-    iosTitle: 'Add LongTalk to your Home Screen',
-    iosBody: 'In Safari, tap Share, then “Add to Home Screen” to open it like an app next time.',
-    iosDismiss: 'Got it',
-    updateLabel: 'New version',
-    update: 'A new version is ready. Reload to use it.',
-    updateRoom:
-      'A new version is ready. Reloading brings you straight back to this meeting, or it can wait until the meeting ends.',
-    updateReload: 'Reload',
-    updateLater: 'Later',
-    offlineTitle: 'You’re offline',
-    offlineHome: 'You’re offline. Connect to the internet to start or join a meeting.',
-    offlineRoom:
-      'Joining a meeting needs the internet. LongTalk will try again once you’re back online.',
-  },
   shortcuts: {
     title: 'Keyboard shortcuts',
     menu: 'Keyboard shortcuts…',
@@ -1347,11 +1304,6 @@ export const en: Strings = {
     prejoinAgree: 'I agree to this meeting being recorded',
     waiting: 'This meeting is being recorded. You’ll be asked to agree when you’re let in.',
     prejoinLeave: 'Don’t join, go home',
-    leftover: (when: string) => `There’s a recording that wasn’t saved (started ${when}).`,
-    leftoverDownload: 'Download the unfinished recording',
-    leftoverDelete: 'Delete',
-    leftoverDownloaded: 'Downloaded the unfinished recording',
-    leftoverDeleted: 'Deleted the unfinished recording',
     shareLabel: (name: string) => `${name}’s screen`,
     allow: 'Allow to record',
     revoke: 'Take back recording',
@@ -1370,3 +1322,5 @@ export const en: Strings = {
     unknown: 'Something unexpected went wrong.',
   },
 }
+
+export const en: Strings = /*#__PURE__*/ mergeDictionaries(enHome, enRoom)

@@ -57,8 +57,16 @@ export function useShareGestures(
     const frame = frameRef.current
     if (!enabled || !frame) return
     const wheel = (event: WheelEvent) => onWheel(event)
+    // Safari's own pinch on the page, which touch-action does not always stop (J4, e7-t09)
+    const gesture = (event: Event) => event.preventDefault()
     frame.addEventListener('wheel', wheel, { passive: false })
-    return () => frame.removeEventListener('wheel', wheel)
+    frame.addEventListener('gesturestart', gesture, { passive: false })
+    frame.addEventListener('gesturechange', gesture, { passive: false })
+    return () => {
+      frame.removeEventListener('wheel', wheel)
+      frame.removeEventListener('gesturestart', gesture)
+      frame.removeEventListener('gesturechange', gesture)
+    }
   }, [enabled, frameRef])
 
   if (!enabled) return {}

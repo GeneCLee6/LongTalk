@@ -75,7 +75,8 @@ export class FileLedger {
   /** The upload reached R2: `bytes` in `objects` objects move from promised to stored */
   commit(id: string, bytes: number, objects: number): void {
     delete this.record.reservations[id]
-    this.record.bytes += bytes
+    // Less than 0: a persistent room's whiteboard got smaller (J4)
+    this.record.bytes = Math.max(0, this.record.bytes + bytes)
     this.record.objects += objects
   }
 

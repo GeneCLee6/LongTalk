@@ -80,6 +80,13 @@ export const WHITEBOARD_LAYER = 'whiteboard'
 
 export const isWhiteboard = (layer: string): boolean => layer === WHITEBOARD_LAYER
 
+/**
+ * Who drew a stroke restored from an earlier meeting of a persistent room (J4, e7-t08): member ids
+ * end with their meeting, so nobody in this one owns it. Only someone who may clear the layer can
+ * take these away. Not a UUID, so never a member
+ */
+export const PAST_AUTHOR = 'earlier'
+
 export const spaceOf = (layer: string): CoordSpace =>
   isWhiteboard(layer) ? BOARD_SPACE : PICTURE_SPACE
 
@@ -494,6 +501,52 @@ export function parseAnnotationOps(
 /** How visible a laser pointer last heard of at `heardAt` is at `now`: 1 down to 0 */
 export const laserOpacity = (heardAt: number, now: number): number =>
   Math.max(0, Math.min(1, 1 - (now - heardAt) / LASER_FADE_MS))
+
+// ---------------------------------------------------------------------------------------------
+// What strokes cover (J4, e7-t07: exporting all of a board)
+
+export interface Bounds {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+/** The area a stroke covers in content coordinates of a square picture, with its line's thickness */
+export function strokeBounds(stroke: Stroke): Bounds {
+  if (stroke.tool === 'text') {
+    const box = textBounds(stroke, 1)
+    return { minX: box.x, minY: box.y, maxX: box.x + box.width, maxY: box.y + box.height }
+  }
+  const reach =
+    lineWidthRatio(stroke) / 2 + (stroke.tool === 'arrow' ? arrowHeadRatio(stroke.width) : 0)
+  const xs = stroke.points.map((point) => point[0])
+  const ys = stroke.points.map((point) => point[1])
+  return {
+    minX: Math.min(...xs) - reach,
+    minY: Math.min(...ys) - reach,
+    maxX: Math.max(...xs) + reach,
+    maxY: Math.max(...ys) + reach,
+  }
+}
+
+/** The area all of them cover; null when there is nothing */
+export function strokesBounds(strokes: readonly Stroke[]): Bounds | null {
+  let all: Bounds | null = null
+  for (const stroke of strokes) {
+    if (stroke.points.length === 0) continue
+    const one = strokeBounds(stroke)
+    all = all
+      ? {
+          minX: Math.min(all.minX, one.minX),
+          minY: Math.min(all.minY, one.minY),
+          maxX: Math.max(all.maxX, one.maxX),
+          maxY: Math.max(all.maxY, one.maxY),
+        }
+      : one
+  }
+  return all
+}
 
 // ---------------------------------------------------------------------------------------------
 // Hit-testing (the eraser, J2): how near a point comes to what is drawn

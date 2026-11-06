@@ -1,6 +1,7 @@
 // I6 (e11-t07): what /privacy says about the deployment, checked against the deployment's own
 // files. A failure here means the policy (src/privacy/policy.*.ts) needs rereading, not only this.
 import { describe, expect, it } from 'vitest'
+import { BOARD_PREFIX, UPLOAD_PREFIX } from '../../shared/files.ts'
 import { BACKUP_EXCLUDED, BACKUP_TABLES } from '../../worker/backup.ts'
 import { GUESS_MEMORY_MS } from '../../worker/password.ts'
 import { clearSessionCookie, sessionCookie, SESSION_COOKIE } from '../../worker/session.ts'
@@ -26,6 +27,17 @@ describe('what /privacy says about the deployment', () => {
   it('the worker reads the constants the page quotes', () => {
     expect(GUESS_MEMORY_MS).toBe(10 * 60_000)
     expect([TELEMETRY_DAYS, TELEMETRY_HOURS, MAX_ERROR_SAMPLES]).toEqual([90, 48, 20])
+  })
+
+  it('a personal room\'s whiteboard (J4) is in the retention table and outside the 24 hours', () => {
+    expect(BOARD_PREFIX).not.toContain(UPLOAD_PREFIX)
+    for (const language of ['zh-TW', 'en']) {
+      const policy = fs.readFileSync(`src/privacy/policy.${language}.ts`, 'utf8')
+      expect(policy).toContain("key: 'boards'")
+      expect(policy).toContain('f.boardSaveMinutes')
+    }
+    // Not on the backups' list: it is in R2, not in D1, and the policy says backups are of D1
+    expect(BACKUP_TABLES.join()).not.toContain('board')
   })
 
   it('backups hold these tables, and leave out signed-in browsers and challenges', () => {

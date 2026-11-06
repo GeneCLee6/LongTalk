@@ -24,8 +24,13 @@ export const Frame = styled.figure<{ $grab: boolean; $interactive: boolean; $dra
   ${({ $interactive }) =>
     $interactive &&
     css`
-      /* The tile's own pinch and drag, not the browser's */
+      /* The tile's own pinch and drag, not the browser's: no page zoom, pull to refresh or
+         long-press menu while a finger is on it (J4, e7-t09) */
       touch-action: none;
+      overscroll-behavior: contain;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
     `}
   ${({ $grab, $dragging }) =>
     $grab &&
@@ -89,8 +94,17 @@ export const Controls = styled.div<{ $pinned: boolean }>`
   display: flex;
   align-items: center;
   gap: ${space(0.5)};
+  max-width: calc(100% - ${space(4)});
   padding: ${space(0.5)};
   border-radius: ${radius.pill};
+  /* A narrow tile: one row a finger slides along, not a block over the picture (J4, e7-t09) */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  touch-action: pan-x;
+  > * {
+    flex: none;
+  }
   background: ${color.overlay};
   cursor: default;
   opacity: ${({ $pinned }) => ($pinned ? 1 : 0)};

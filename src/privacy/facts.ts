@@ -1,6 +1,7 @@
 import { SESSION_COOKIE, SESSION_IDLE_MS, SESSION_MAX_MS, CHALLENGE_TTL_MS } from '../../shared/account.ts'
 import { BLOCK_HOURS, LIMITS, MAX_OFFENDERS } from '../../shared/abuse.ts'
 import { CHAT_HISTORY } from '../../shared/chat.ts'
+import { BOARD_SAVE_MS } from '../../shared/annotation-limits.ts'
 import { BACKUP_RETENTION_DAYS, FILE_TTL_MS } from '../../shared/file-limits.ts'
 import { MEETING_RETENTION_MS } from '../../shared/meeting.ts'
 import { GUESS_MEMORY_MS } from '../../shared/password.ts'
@@ -42,6 +43,7 @@ export const FACTS = {
   /** The hourly sweep goes by the hour in a file's key, so at most an hour later */
   fileGoneHours: FILE_TTL_MS / HOUR + 1,
   backupDays: BACKUP_RETENTION_DAYS,
+  boardSaveMinutes: BOARD_SAVE_MS / MINUTE,
   sessionIdleDays: SESSION_IDLE_MS / DAY,
   sessionMaxDays: SESSION_MAX_MS / DAY,
   challengeMinutes: CHALLENGE_TTL_MS / MINUTE,

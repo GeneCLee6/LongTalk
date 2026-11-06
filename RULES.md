@@ -20,7 +20,7 @@
 | `src/components/` | 展示與互動 | 直接呼叫 API 或 WebSocket（由 props 傳入 callback） |
 | `src/styles/tokens.ts` | 顏色、字體、間距 | — |
 | `src/pwa/`（G4） | service worker 的規則與 handler（`swRouting.ts`、`swWorker.ts`、`sw.ts`，`scripts/swPlugin.ts` 打包成 `/sw.js`），頁面端的註冊、新版本與安裝（`pwa.ts`、`update.ts`、`install.ts`） | app 匯入 `swRouting.ts`／`swWorker.ts`（只有 `sw.ts` 能匯入，型別除外）；service worker 碰 `/api/*` |
-| `src/strings.ts` | 介面文字的唯一入口：目前語言的字典、`setLocale`、`Intl` 日期時間；字典本身在 `src/i18n/zh-TW.ts`、`en.ts` | 在模組層級存字典的一部分（`const text = strings.room` 會凍結成開頁時的語言） |
+| `src/strings.ts` | 介面文字的唯一入口：目前語言的字典、`setLocale`、`withDictionary`、`Intl` 日期時間；字典本身在 `src/i18n/`：首頁用的 `zh-TW.home.ts`、`en.home.ts`，其餘 `zh-TW.ts`、`en.ts`（各自一個 lazy chunk，J4） | 在模組層級存字典的一部分（`const text = strings.room` 會凍結成開頁時的語言） |
 
 - **伺服器把關**：權限、房間狀態、錄影與同意，只在 RoomDO 判斷；前端只是按鈕。
 - **DRY**：顏色只在 `styles/tokens.ts`；介面文字只在 `strings.ts`。`npm run lint` 會擋（G5，`scripts/literals.ts`）：`src/` 的程式碼（註解不算）裡有中文字或全形標點、顏色字面值（`#rgb`、`rgb()`、`hsl()`）、JSX 標籤之間的文字、`aria-label`／`title`／`placeholder`／`alt`／`label` 的字面文字就失敗；字典、`tokens.ts`、`brand.ts`、隱私權政策的文字（`src/privacy/policy.*`）除外，真的需要的那一行在行尾寫 `// literal-ok: <理由>`。
@@ -31,6 +31,8 @@
 ### 介面文字與語言（G1，`e4-t15`）
 
 - 加一句介面文字：**兩本字典同一個 key 都要加**——先加 `src/i18n/zh-TW.ts`（`Strings` 型別從這本推導），再加 `src/i18n/en.ts`；英文少了 `npm run typecheck` 就失敗，`tests/app/g1.test.tsx` 也會比對兩本的 key、檢查英文裡沒有中文。
+- **首頁的第一次載入用到的字**（J4）放在 `src/i18n/zh-TW.home.ts`、`en.home.ts`，其他全部在 `zh-TW.ts`、`en.ts`（一種語言一個 chunk，每個 lazy 頁面用 `withDictionary` 和程式碼一起載）。一般的字不用想，放 `zh-TW.ts`。**只有**首頁、`App`、`LoadFailed`、語言與外觀選單、PWA 提示這些第一次載入就在的元件要用的字才放 `*.home.ts`；放錯時 `tests/app/dictionarySplit.test.ts` 會列出來（型別分不出來，實際上會是 `undefined`）。同一節可以拆在兩邊（`account`、`record`），但第一次載入的程式不能把整節存成變數。元件照舊只 import `strings`。`App.tsx` 新增 lazy 頁面要包 `withDictionary`，測試會擋。`zhTW`、`en` 這兩個合併好的 export 只給測試、e2e、`scripts/` 用；app 不讀。
+- 換語言：首頁立刻換（兩種語言的首頁字都在第一次載入裡，所以不用等也不會閃）；在會議室等 chunk 到了才整頁一起換，之前的畫面照舊，不 remount。Chunk 載不到（離線又沒快取）語言就不變。
 - 元件裡照舊 `import { strings } from '../strings.ts'`，**在用到的地方**讀 `strings.x.y`（render 或事件裡）；不要在模組層級把它存成常數或表格（要表格就寫成函式，例如 `memberActions()`）。
 - 有變數的句子寫成函式（`(count: number) => …`），英文的單複數在函式裡處理；不要在元件裡拼字串。
 - 日期時間用 `strings.ts` 的 `formatClock`、`formatDateTime`、`formatDay`（`Intl`），不要 `toLocaleString('zh-TW')` 寫死。

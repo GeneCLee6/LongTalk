@@ -60,6 +60,7 @@ describe('the retention numbers', () => {
       fileHours: 24,
       fileGoneHours: 25,
       backupDays: 7,
+      boardSaveMinutes: 5,
       sessionIdleDays: 30,
       sessionMaxDays: 90,
       challengeMinutes: 5,
