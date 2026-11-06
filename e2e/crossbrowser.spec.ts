@@ -464,64 +464,6 @@ function diagEvents(page: Page) {
   return events
 }
 
-test('TEMP join probe', async ({ browser }, testInfo) => {
-  test.setTimeout(420_000)
-  const url = await openRoom(browser)
-  const other = await chromium.launch({ args: chromiumFakeMedia })
-  const started = Date.now()
-  let tried = 0
-  const stuck: number[] = []
-  try {
-    while (Date.now() - started < 330_000) {
-      tried += 1
-      const safari = await webkit.launch()
-      let chris: Member | null = null
-      try {
-        // The same steps as the WebKit test below: a probe page on the same browser, then a
-        // Chromium joins, and at once WebKit
-        const probe = await safari.newPage()
-        await probe.goto(new URL('/', String(testInfo.project.use.baseURL)).href)
-        await probe.evaluate(async () => {
-          await navigator.mediaDevices.enumerateDevices()
-        })
-        await probe.close()
-        chris = await join(other, 'chromium', url, 'Chris', {
-          permissions: ['camera', 'microphone'],
-        })
-        const context = await safari.newContext({
-          locale: 'zh-TW',
-          permissions: ['camera', 'microphone'],
-        })
-        await context.addInitScript(stubScreen)
-        await context.addInitScript(keepPeerConnections)
-        await context.addInitScript(diagScript)
-        const page = await context.newPage()
-        const events = diagEvents(page)
-        await page.goto(url)
-        await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill('Wes')
-        const button = page.getByRole('button', { name: strings.prejoin.join, exact: true })
-        const ok = await expect(button)
-          .toBeEnabled({ timeout: 8_000 })
-          .then(() => true)
-          .catch(() => false)
-        if (!ok) {
-          stuck.push(tried)
-          await diagDump(page, `STUCK ${tried}`, events)
-          await testInfo.attach(`stuck-${tried}.png`, {
-            body: await page.screenshot({ fullPage: true }),
-            contentType: 'image/png',
-          })
-        }
-      } finally {
-        await chris?.context.close()
-        await safari.close()
-      }
-    }
-  } finally {
-    console.log(`[DIAG summary] tried=${tried} stuck=${stuck.length} ${JSON.stringify(stuck)}`)
-    await other.close()
-  }
-})
 // TEMP-DIAG-END
 
 test('Firefox and Chromium in one room see and hear each other, a mute and each other’s screen', async ({
