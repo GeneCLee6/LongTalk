@@ -12,6 +12,7 @@ import {
   type PublishedTrack,
   type RemoteTrack,
   type SubscribeOptions,
+  type SubscribeRequest,
   type TrackRef,
   type TransportStats,
   type Unsubscribe,
@@ -156,9 +157,27 @@ export class FakeTransport implements MediaTransport {
     return remote
   }
 
+  /** One entry per subscribeMany call: its size, what the SFU would see as one exchange (L1) */
+  readonly subscribeBatches: number[] = []
+
+  subscribeMany(
+    requests: readonly SubscribeRequest[],
+  ): Promise<PromiseSettledResult<RemoteTrack>[]> {
+    this.subscribeBatches.push(requests.length)
+    return Promise.allSettled(requests.map(({ ref, options }) => this.subscribe(ref, options)))
+  }
+
   async unsubscribe(ref: TrackRef): Promise<void> {
     this.#requireSession()
     this.remoteEnded(ref)
+  }
+
+  /** One entry per unsubscribeMany call: its size (L1) */
+  readonly unsubscribeBatches: number[] = []
+
+  async unsubscribeMany(refs: readonly TrackRef[]): Promise<void> {
+    this.unsubscribeBatches.push(refs.length)
+    await Promise.all(refs.map((ref) => this.unsubscribe(ref)))
   }
 
   async setPreferredLayer(ref: TrackRef, layer: Layer): Promise<void> {
@@ -169,6 +188,12 @@ export class FakeTransport implements MediaTransport {
     if (this.preferredLayers.get(trackKey(ref)) === layer) return
     this.preferredLayers.set(trackKey(ref), layer)
     this.layerRequests.push({ key: trackKey(ref), layer })
+  }
+
+  setPreferredLayers(
+    changes: readonly { ref: TrackRef; layer: Layer }[],
+  ): Promise<PromiseSettledResult<void>[]> {
+    return Promise.allSettled(changes.map(({ ref, layer }) => this.setPreferredLayer(ref, layer)))
   }
 
   async setTopLayer(trackName: string, top: Layer): Promise<void> {

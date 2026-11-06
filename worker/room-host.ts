@@ -71,6 +71,8 @@ import { ROOM_CONNECT_RATE, SOCKET_MESSAGE_RATE, type OffenceKind } from '../sha
 import { REACTION_RATE, type Reaction } from '../shared/reactions.ts'
 import {
   ASSUMED_BITRATE,
+  isVideoKind,
+  MAX_ASSUMED_VIDEO_BPS,
   MAX_REPORTED_BITRATE,
   RELAY_OVERHEAD,
   type UsageState,
@@ -2118,8 +2120,9 @@ export class RoomHost {
 
   /**
    * Egress since the last call, for UsageDO (shared/usage.ts): what the browsers reported, and
-   * the server's estimate (elapsed time × every unmuted track each connected member receives ×
-   * its assumed bitrate, × RELAY_OVERHEAD for a member receiving through TURN). Called by the
+   * the server's estimate (elapsed time × every unmuted track each connected member could
+   * receive × its assumed bitrate, the video capped at MAX_ASSUMED_VIDEO_BPS per receiver, ×
+   * RELAY_OVERHEAD for a member receiving through TURN). Called by the
    * sweep alarm.
    */
   takeUsage(): UsageDelta {
@@ -2130,15 +2133,19 @@ export class RoomHost {
     let bitsPerSecond = 0
     for (const [receiverId, receiver] of this.members) {
       if (receiver.reconnecting) continue
-      let received = 0
+      let sound = 0
+      let video = 0
       for (const [publisherId, publisher] of this.members) {
         if (publisherId === receiverId) continue
         for (const track of publisher.tracks) {
           // A muted track sends nothing (B2); a member lying about it still shows up in the
           // receivers' own reports
-          if (!track.muted) received += ASSUMED_BITRATE[track.kind]
+          if (track.muted) continue
+          if (isVideoKind(track.kind)) video += ASSUMED_BITRATE[track.kind]
+          else sound += ASSUMED_BITRATE[track.kind]
         }
       }
+      const received = sound + Math.min(video, MAX_ASSUMED_VIDEO_BPS)
       bitsPerSecond += this.relayed.has(receiverId) ? received * RELAY_OVERHEAD : received
     }
     const clientBytes = this.reported

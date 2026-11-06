@@ -361,7 +361,7 @@ describe('SFU proxy: what it forwards', () => {
     expect((await send(`${base}/a%2F..%2Fb/renegotiate`, {})).status).toBe(400)
     expect((await send(`${base}/s/renegotiate`, 'sdp')).status).toBe(400)
     expect((await send(`${base}/s/renegotiate`, [])).status).toBe(400)
-    expect((await send(`${base}/s/renegotiate`, { sdp: 'x'.repeat(70_000) })).status).toBe(400)
+    expect((await send(`${base}/s/renegotiate`, { sdp: 'x'.repeat(1_100_000) })).status).toBe(400)
     expect(t.fetchMock).not.toHaveBeenCalled()
   })
 
@@ -376,7 +376,7 @@ describe('SFU proxy: what it forwards', () => {
     ).toBeNull()
     expect(planTracks({ tracks: [{ location: 'remote', trackName: 'x' }] })).toBeNull()
     expect(planTracks({ tracks: [{ location: 'elsewhere' }] })).toBeNull()
-    expect(planTracks({ tracks: Array(9).fill(remote) })).toBeNull()
+    expect(planTracks({ tracks: Array(17).fill(remote) })).toBeNull()
     expect(
       planTracks({ sessionDescription: offer, tracks: [{ location: 'local', mid: '1' }, remote] }),
     ).toEqual({ pushesVideo: true, pulls: [{ sessionId: 's', trackName: 't' }] })

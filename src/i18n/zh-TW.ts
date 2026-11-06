@@ -167,6 +167,7 @@ export const zhTWRoom = {
     previous: '上一頁',
     next: '下一頁',
     strip: '其他參與者',
+    sideSpeaker: '正在講話（不在這一頁）',
   },
   // What the stage shows (G2, e4-t10, e4-t11): the layout, pinning, the spotlight, hiding tiles
   view: {
@@ -1211,6 +1212,9 @@ export const zhTWRoom = {
       audioOnly: '建議切換成純音訊',
     },
     budget: '視訊預算',
+    videoSubscriptions: '收到的視訊',
+    videoSubscriptionsValue: (received: number, unseen: number) =>
+      unseen > 0 ? `${received} 路，${unseen} 路不在畫面上、沒有訂閱` : `${received} 路`,
     paused: (count: number) => `暫停 ${count} 人的視訊`,
     uplinkNormal: '正常',
     uplinkLimited: '已關閉你送出的最高畫質',

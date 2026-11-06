@@ -2,7 +2,7 @@
 // tiles of one aspect ratio in a container. Pure: the room page feeds it the stage's size from a
 // ResizeObserver and lets CSS place the tiles (no per-tile positioning in JS).
 
-/** The gallery holds up to this many tiles (M0; pages up to 16 are M2) */
+/** The most tiles the layouts' tests go through in one grid (M0's room) */
 export const MAX_GRID_TILES = 8
 
 /** Video tiles are 16:9 unless the caller says otherwise */
@@ -168,6 +168,55 @@ export function pagedLayout({
 }: GridInput & { pageSize?: number }): GridLayout & { pages: number } {
   const pages = pageCount(count, pageSize)
   return { ...gridLayout({ ...rest, count: Math.min(Math.floor(count), pageSize) }), pages }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Large rooms on a desktop (L1, e10-t02, AC-10.2): past GALLERY_PAGE_SIZE tiles the gallery is
+// paged like a phone's, and someone speaking on a page out of view gets a tile in a column beside
+// it. The column stays while the gallery is paged, so a new speaker never resizes the grid.
+
+/** Tiles on one page of a desktop's gallery (F32: 一頁最多 16 格) */
+export const GALLERY_PAGE_SIZE = 16
+
+/** A desktop's gallery goes to pages only when it does not fit one */
+export const galleryIsPaged = (count: number): boolean => Math.floor(count) > GALLERY_PAGE_SIZE
+
+/** The side column's width: this share of the stage, within bounds, px */
+const SIDE_SHARE = 0.16
+const SIDE_MIN = 112
+const SIDE_MAX = 200
+
+/** The tile in the column beside a paged gallery */
+export interface GallerySide {
+  tileWidth: number
+  tileHeight: number
+}
+
+export function gallerySide(
+  width: number,
+  height: number,
+  aspect: number = DEFAULT_TILE_ASPECT,
+): GallerySide {
+  if (!(width > 0) || !(height > 0) || !(aspect > 0)) return { tileWidth: 0, tileHeight: 0 }
+  const tileWidth = Math.floor(
+    Math.min(Math.max(width * SIDE_SHARE, SIDE_MIN), SIDE_MAX, width / 3, height * aspect),
+  )
+  return { tileWidth, tileHeight: Math.floor(tileWidth / aspect) }
+}
+
+/**
+ * The tile the side column shows: the speaker's, when their page is out of view. Null otherwise,
+ * and when nobody is speaking.
+ */
+export function sideTile(
+  speaker: number | null,
+  view: PagesInView,
+  count: number,
+  pageSize = GALLERY_PAGE_SIZE,
+): number | null {
+  if (speaker === null || !(speaker >= 0) || speaker >= Math.floor(count)) return null
+  const page = Math.floor(speaker / pageSize)
+  return page >= view.first && page <= view.last ? null : speaker
 }
 
 /** The strip beside (or under) the big tile takes about this share of the stage, within bounds */

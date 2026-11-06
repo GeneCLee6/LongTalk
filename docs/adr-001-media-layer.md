@@ -125,7 +125,7 @@ interface MediaTransport {
 - **發布**：沒有新端點。transceiver `sendonly`、`sendEncodings` 每層一個 `rid` ＋ `scaleResolutionDownBy`，offer 帶 `a=simulcast:send f;h;q` 與每層的 `a=rid:<id> send`；照常 `tracks/new`（`location: 'local'`、`mid`、`trackName`），answer 回 `a=simulcast:recv f;h;q`。一條 m-section、一組 payload type，所以 #13 的 payload type 問題不會因 simulcast 回來（只送 VP8 照舊）；起始頻寬改寫只碰 VP8 的 fmtp，simulcast 那幾行原封不動，照樣有效（測試與實測都確認）。
 - **訂閱**：`tracks/new` 的 remote 軌可以帶 `simulcast: { preferredRid, priorityOrdering, ridNotAvailable }`。`priorityOrdering`：`none`＝頻寬不夠也照送 preferredRid；`asciibetical`＝頻寬不夠時依 a–z 的優先順序降（a 最想要，所以 `f` > `h` > `q`）。`ridNotAvailable`：`none`＝發布者沒送那層就不換；`asciibetical`＝換成排序後下一個有的層。**兩個預設都是 `none`**。我們用 `priorityOrdering: 'none'`、`ridNotAvailable: 'asciibetical'`，每次都明寫（為什麼見下面「實測」）。
 - **換層**：`PUT …/sessions/{接收端 session}/tracks/update`，body `{ tracks: [{ location: 'remote', mid: 接收端的 mid, sessionId, trackName, simulcast: {...} }] }`，不帶 SDP。實測回 `200 { requiresImmediateRenegotiation: false, tracks: [{ mid }] }`；它仍是 session 的一次變更，所以走同一個佇列（一次一個），回應若要重新協商就先回答（`setPreferredLayer`）。
-- **沒有暫停**：API 沒有 `enabled`／`pause` 之類的欄位；要停收只能關掉那條軌（雙方各重新協商一次）。所以看不見的格子是「最低層」，不是暫停；真正的退訂留給 M2 的 `e2-t18`。
+- **沒有暫停**：API 沒有 `enabled`／`pause` 之類的欄位；要停收只能關掉那條軌（雙方各重新協商一次）。H1 時看不見的格子是「最低層」，不是暫停；L1（`e2-t18`）起真的退訂，見「只訂閱看得到的人」。
 - 文件沒寫：支援哪些 codec、最多幾層、SFU 自己的頻寬估計怎麼算與何時換層。實測看到的行為記在下面。
 
 ### 發布（`src/media/encoding.ts` `SIMULCAST`）
@@ -349,6 +349,62 @@ interface MediaTransport {
 | 背景模糊 | 195 % | 21 | 每秒 12 張遮罩、一張 19 ms（worker）；畫圖占頁面時間 78 % |
 
 沒有編碼器、用真的 Y4M／MJPEG 假鏡頭的會議室頁：64 % → 95 %，29 fps。**這是最壞的情況，不代表真的筆電**：有 GPU 時 canvas 的畫圖大部分在 GPU；反過來，真的筆電同時還在解別人的視訊。要實機量（`DEPLOY.md` §5 第 33 步）。
+
+## 只訂閱看得到的人（L1，2026-11-06，`e2-t18`、`e10-t01`、`e10-t02`，#49）
+
+### 規則（`src/media/subscriptions.ts`，純函式，測試用假時鐘）
+
+- **鏡頭**：格子把座位報給 `VideoDemandStore`（`TileSeat`，以鏡頭的 trackKey 為 key，沒訂閱也報）。在視線內停 150 ms 才訂閱（一路翻過的頁不訂閱）；離開 10 秒才退訂（`UNSEEN_GRACE_MS`，期間最低層）；分頁在背景 30 秒（`HIDDEN_GRACE_MS`）。分頁器（桌機 16 格、手機 4 格）自己說哪幾頁在畫面上，換頁立即生效；其他地方（格狀、條帶、大格）用 IntersectionObserver。
+- **講話者例外**：`setVideoPriority` 留的鏡頭（釘選、聚光燈、大格、講話者，最多 2 個、各留 15 秒）不看畫面；分頁在背景時不留。
+- **預先訂閱**：只在指標或焦點停在換頁鈕上時（`TileSightContext` 的 `near`，最低層）。手機慢慢滑到一半時下一頁已經算在畫面上。**和 PRD 原文不同**：一直預先訂閱下一頁，25 人兩頁的房間就是訂閱所有人。
+- **聲音**：麥克風一律訂閱（PRD：不可見者退訂視訊但保留音訊）；靜音的麥克風不送封包，不花流量。50 人時要不要只收主持人與講話者留給 M3 `e10-t06`。
+- **分享**：一律訂閱（最多 3 個），側列捲出去時最低層。
+- **錄影**：`buildScene` 讀軌，不讀格子，所以這個瀏覽器在錄影時，錄影要畫的鏡頭（同意的人）不看畫面都收（`setVideoNeeded`），分頁在背景也收。代價：大房間錄影的人收到所有同意者的最低層。
+- **優先順序**：純音訊模式 ＞ 頻寬自適應的停收（只留 kept）＞ 上面的規則。錄影不蓋過自適應（聲音優先）。`pausedVideos` 只有前兩者（格子說「網路不佳」），不在畫面上的是 `unseenVideos`（統計面板「收到的視訊」寫幾路、幾路沒訂閱，AC-10.1）。
+- **格子**：別人的格子下面一直有名字首字，`<video>` 第一幀之前是透明的，所以先看到首字、再看到畫面，沒有黑格；不在畫面上、畫面還在路上的鏡頭不會被念成「鏡頭沒開」（`videoWaiting`），「隱藏沒有視訊的人」也不會把它藏起來（藏了就永遠訂閱不到）。
+
+### 一次 SDP 交換一批（`MediaTransport.subscribeMany`、`unsubscribeMany`、`setPreferredLayers`）
+
+Realtime 的 `tracks/new`、`tracks/close`、`tracks/update` 都收陣列（PR 預覽實測）。一頁的鏡頭是一個 POST ＋一個 renegotiate，不是 15 次；一條軌失敗（`empty_track_error`）只影響它自己，照舊退避重試；靜音的軌排在後面的批次（從沒送過封包的軌可能卡住整個呼叫約 8 秒）。每批最多 16 條，代理（`worker/sfu.ts`）放寬到 16。起始層在訂閱時就依座位大小與預算選好，不用等第二個 `tracks/update`。
+
+### 實測中發現並修掉的
+
+- **代理的 body 上限 64 KB**：約 20 條軌時 SDP 就超過，`tracks/close` 回 400，SFU 繼續送、瀏覽器卻停了（L1 之前 25 人的房間也會中）。放寬到 1 MiB。
+- **靜音的麥克風被當成聲音有問題**（H2 起就有）：瀏覽器把沒有封包的時間算進 `concealedSamples`（靜音 4 秒 `concealedSamples` 比例 1.00，全是 `silentConcealedSamples`），只要房裡有一個人靜音，判斷就卡在 `fair`，**下行一旦被降級就回不來**（實測 15 個靜音麥克風：只剩 1 路鏡頭 7 分鐘）。現在扣掉靜音的部分、這段時間沒封包的軌不判。
+- **在交換途中翻走**：還在 pending 的鏡頭也有寬限，不會一回來就關掉。
+- **同一頁的格子相隔幾 ms 離開**：一起退訂（`GRACE_BATCH_MS`），也不會漏掉最後幾個。
+
+### 實測（PR 預覽 #49，同一台電腦一個 headless Chromium，19 人：Zoe ＋ 18 個 bot，假鏡頭 1280×720，bot 的分頁算在背景所以不解碼鏡頭、麥克風靜音）
+
+機器被 18 個編碼器佔滿（CPU-bound），時間偏慢，看位元率與訂閱數，不看 fps。`candidate-pair.bytesReceived` 算下行，`inbound-rtp` 算每路；每路最低層約 117 kbps。
+
+| Zoe 看的 | 訂閱的鏡頭 | 下行 |
+| --- | --- | --- |
+| 桌機 1280×800 第 1 頁（15 格，全部 180p） | 15 | **2.29 Mbps** |
+| 同上，所有人都訂閱（L1 之前的行為，指標停在換頁鈕上量到的） | 18 | **2.75 Mbps** |
+| 桌機第 2 頁（3 格＋留著的講話者） | 6 | **0.90 Mbps** |
+| 手機 390×844 第 1、2 頁（4 格一頁＋留著的講話者；這個 headless 是 1 倍像素，都是 180p） | 5–6 | **0.78–0.97 Mbps** |
+
+所以大部分人不在畫面上時，下行約是原本的 1／3；以 25 人算，L1 之前至少 24 × 117 kbps ≈ 2.8 Mbps，手機約剩 1 Mbps（25 人是**算的**，正式測試是 L2）。
+
+| 從換頁到每格都解出第一幀 | 第一格 | 中位 | 最後一格 | SFU 呼叫 |
+| --- | --- | --- | --- | --- |
+| 寬限內翻回去（15 格、3 格） | 30–120 ms | 30–150 ms | 30–150 ms | **0** |
+| 寬限後到第 2 頁（3 格） | 0.9–2.0 s | 0.9–2.0 s | 0.9–2.8 s | 1 POST ＋ 1 renegotiate |
+| 寬限後回第 1 頁（10–15 格，一批） | 60–80 ms（留著的那幾格） | 1.0–2.0 s | 1.7–2.7 s，有一次 5.0 s | 1 POST ＋ 1 renegotiate |
+
+- 來回翻頁 3 輪（每輪超過寬限）：m-section 停在 35 條（SFU 重複使用），下行回到 2.35–2.47 Mbps，沒有累積。
+- 講話者側格：Zoe 在第 2 頁、第 1 頁的 bot 講過話：右欄出現「正在講話（不在這一頁）」、有畫面，翻到他那頁時回到格子裡（單元測試）。
+- **這台機器量不到的**：一個瀏覽器程序最多開 16 條音訊輸入（第 17 個 bot 起 `getUserMedia` 的麥克風開不了），所以量測的 18 個 bot 只有 15 條麥克風；L2 要分程序或分機器。
+
+### 免費額度
+
+伺服器估算原本假設每人收每一條 cam 1.5 Mbps；取大的那個記帳，所以 L1 省的流量記不到帳（25 人一小時算成約 400 GB）。改成每個接收端的視訊最多算 6 Mbps（`MAX_ASSUMED_VIDEO_BPS`，AC-10.3 的上限）；瀏覽器回報的實際值照舊取大的。
+
+### 沒有驗證的
+
+- 兩台真的裝置、真的鏡頭、真的麥克風（AC-10.1、AC-10.2 不勾，`DEPLOY.md` §5 第 34 步）；真的鏡頭比假鏡頭難壓，第一幀可能不同。
+- 25 人（L2）；錄影時翻頁只有單元測試，沒有在預覽上量；Safari、Firefox 的 `silentConcealedSamples`（讀不到時，沒封包的區間照樣不判，剛靜音的那一個區間可能是 `fair`）。
 
 ## 後果
 

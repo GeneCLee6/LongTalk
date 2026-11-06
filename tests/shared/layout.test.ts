@@ -24,6 +24,10 @@ import {
   tileAspect,
   visibleTiles,
   type TileEntry,
+  GALLERY_PAGE_SIZE,
+  galleryIsPaged,
+  gallerySide,
+  sideTile,
 } from '../../shared/layout.ts'
 
 const ASPECT = 16 / 9
@@ -499,5 +503,45 @@ describe('shareSlots (H5, e3-t07): which share is in the main area', () => {
     // They stopped: the latest; our own share is never a choice
     expect(shareSlots(['b', 'c'], 'me', 'a')).toEqual({ main: 'c', strip: ['b'] })
     expect(shareSlots(['b', 'me'], 'me', 'me')).toEqual({ main: 'b', strip: [] })
+  })
+})
+
+describe('a large room on a desktop (L1, e10-t02)', () => {
+  it('goes to pages only past sixteen tiles', () => {
+    expect(GALLERY_PAGE_SIZE).toBe(16)
+    expect(galleryIsPaged(16)).toBe(false)
+    expect(galleryIsPaged(17)).toBe(true)
+    expect(pageCount(25, GALLERY_PAGE_SIZE)).toBe(2)
+    expect(pageRange(1, 25, GALLERY_PAGE_SIZE)).toEqual({ start: 16, end: 25 })
+  })
+
+  it('a page keeps the same tile size however few are on it', () => {
+    const size = { width: 1040, height: 640 }
+    const full = pagedLayout({ count: 25, pageSize: GALLERY_PAGE_SIZE, ...size })
+    const sixteen = gridLayout({ count: 16, ...size })
+    expect(full.tileWidth).toBe(sixteen.tileWidth)
+    expect(full.cols * full.rows).toBeGreaterThanOrEqual(16)
+    expect(full.pages).toBe(2)
+  })
+
+  it('sizes the side column within bounds, 16:9, and never more than a third', () => {
+    expect(gallerySide(1280, 720)).toEqual({ tileWidth: 200, tileHeight: 112 })
+    expect(gallerySide(900, 600).tileWidth).toBe(144)
+    expect(gallerySide(600, 600).tileWidth).toBe(112)
+    expect(gallerySide(240, 600).tileWidth).toBe(80)
+    expect(gallerySide(0, 600)).toEqual({ tileWidth: 0, tileHeight: 0 })
+  })
+
+  it('shows the speaker at the side only when their page is out of view', () => {
+    const first = { first: 0, last: 0, current: 0 }
+    const second = { first: 1, last: 1, current: 1 }
+    const between = { first: 0, last: 1, current: 0 }
+    expect(sideTile(20, first, 25)).toBe(20)
+    expect(sideTile(20, second, 25)).toBeNull()
+    expect(sideTile(3, second, 25)).toBe(3)
+    expect(sideTile(20, between, 25)).toBeNull()
+    expect(sideTile(null, first, 25)).toBeNull()
+    expect(sideTile(-1, first, 25)).toBeNull()
+    expect(sideTile(30, first, 25)).toBeNull()
   })
 })

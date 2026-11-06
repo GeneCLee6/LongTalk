@@ -110,6 +110,12 @@ export default function StatsPanel({
             </Row>
           )}
           <Row label={text.budget}>{bitrate(snapshot.downlink.budgetBps)}</Row>
+          <Row label={text.videoSubscriptions}>
+            {text.videoSubscriptionsValue(
+              Object.keys(snapshot.layers).length,
+              snapshot.unseen.length,
+            )}
+          </Row>
           <Row label={text.uplink}>
             {snapshot.uplink.cam === 'high' && snapshot.uplink.screen === 'high'
               ? text.uplinkNormal
@@ -291,6 +297,7 @@ function exportJson(snapshot: StatsSnapshot, describe: StatsPanelProps['describe
   const keys = [
     ...snapshot.sample.inbound.map((t) => `${t.sessionId}/${t.trackName}`),
     ...snapshot.paused,
+    ...snapshot.unseen,
   ]
   const members = Object.fromEntries(keys.map((key) => [key, describe(key)]))
   const body = {
