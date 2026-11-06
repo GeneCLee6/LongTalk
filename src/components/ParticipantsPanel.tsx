@@ -339,7 +339,8 @@ export function ParticipantsPanel({
           </WaitingList>
         </Waiting>
       )}
-      <List aria-label={strings.participants.list}>
+      {/* The settings can leave it short enough to scroll, and a row may have nothing to tab to */}
+      <List aria-label={strings.participants.list} tabIndex={0}>
         {sorted.map((member) => {
           const mic = member.tracks.find((t) => t.kind === 'mic')
           const cam = member.tracks.find((t) => t.kind === 'cam')

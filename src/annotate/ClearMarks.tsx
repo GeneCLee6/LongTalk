@@ -55,7 +55,7 @@ export default function ClearMarks({ store, layer: layerId, nameOf }: ClearMarks
         <ClearIcon />
       </Control>
       {open && (
-        <div onPointerDown={stop} onDoubleClick={stop} onKeyDown={onKeyDown} onWheel={stop}>
+        <div onPointerDown={stop} onDoubleClick={stop} onKeyDown={onKeyDown}>
           {choice ? (
             <ConfirmDialog
               title={

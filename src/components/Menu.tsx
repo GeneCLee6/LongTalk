@@ -242,6 +242,9 @@ const List = styled.div<{
           ${$align === 'start' ? 'left' : 'right'}: 0;
           z-index: ${layer.menu};
           min-width: 200px;
+          /* 更多 has grown past a laptop's height (J3): it scrolls rather than leave the screen */
+          max-height: calc(100dvh - ${space(24)});
+          overflow-y: auto;
           padding: ${space(1)};
           background: ${color.surface};
           border: 1px solid ${color.line};
