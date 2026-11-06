@@ -464,17 +464,40 @@ function diagEvents(page: Page) {
   return events
 }
 
+// TEMP-DIAG-END
+
+test('Firefox and Chromium in one room see and hear each other, a mute and each other’s screen', async ({
+  browser,
+}, testInfo) => {
+  test.setTimeout(240_000)
+  const other = await chromium.launch({ args: chromiumFakeMedia })
+  const members: Member[] = []
+  try {
+    const url = await openRoom(browser)
+    testInfo.annotations.push({ type: 'room', description: url })
+    members.push(
+      await join(other, 'chromium', url, 'Chris', { permissions: ['camera', 'microphone'] }),
+    )
+    members.push(await join(browser, 'firefox', url, 'Fiona'))
+    await meet(members[0], members[1], testInfo)
+  } finally {
+    await leave(members, testInfo)
+    await other.close()
+  }
+})
+
 test('TEMP join probe under load', async ({ browser }, testInfo) => {
   test.setTimeout(480_000)
   const { spawn } = await import('node:child_process')
-  const url = await openRoom(browser)
+  let url = await openRoom(browser)
   const other = await chromium.launch({ args: chromiumFakeMedia })
   const started = Date.now()
   const counts = { 0: [0, 0], 8: [0, 0], 16: [0, 0] } as Record<number, number[]>
   let tried = 0
   try {
     while (Date.now() - started < 400_000) {
-      const hogs = [0, 8, 16][tried % 3]
+      const hogs = 0
+      if (tried < 8) url = await openRoom(browser)
       tried += 1
       const children = Array.from({ length: hogs }, () =>
         spawn(process.execPath, ['-e', 'for(;;){}'], { stdio: 'ignore' }),
@@ -519,27 +542,6 @@ test('TEMP join probe under load', async ({ browser }, testInfo) => {
     }
   } finally {
     console.log(`[DIAG summary] tried=${tried} [joins, stuck] by hogs ${JSON.stringify(counts)}`)
-    await other.close()
-  }
-})
-// TEMP-DIAG-END
-
-test('Firefox and Chromium in one room see and hear each other, a mute and each other’s screen', async ({
-  browser,
-}, testInfo) => {
-  test.setTimeout(240_000)
-  const other = await chromium.launch({ args: chromiumFakeMedia })
-  const members: Member[] = []
-  try {
-    const url = await openRoom(browser)
-    testInfo.annotations.push({ type: 'room', description: url })
-    members.push(
-      await join(other, 'chromium', url, 'Chris', { permissions: ['camera', 'microphone'] }),
-    )
-    members.push(await join(browser, 'firefox', url, 'Fiona'))
-    await meet(members[0], members[1], testInfo)
-  } finally {
-    await leave(members, testInfo)
     await other.close()
   }
 })
