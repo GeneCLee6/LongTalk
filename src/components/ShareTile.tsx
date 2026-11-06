@@ -129,15 +129,10 @@ export function ShareTile({
         {fullscreen.active && recording && <RecordingTag>{recording}</RecordingTag>}
         {picker && <PickerSlot>{picker}</PickerSlot>}
         {ready && (
-          // Pressing a control is not the start of a drag or a double-click on the picture
           <Controls
             role="group"
             aria-label={strings.screenShare.viewControls}
             $pinned={zoom > 1 || annotating}
-            onPointerDown={(event) => event.stopPropagation()}
-            onPointerMove={(event) => event.stopPropagation()}
-            onPointerUp={(event) => event.stopPropagation()}
-            onDoubleClick={(event) => event.stopPropagation()}
           >
             {annotator !== null && (
               <Control

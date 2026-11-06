@@ -15,6 +15,14 @@ export interface ShareGestureOptions {
   onToggleFullscreen?: () => void
 }
 
+/**
+ * A press on something on the tile with a job of its own (the view controls, the picker between
+ * shares) is not a gesture on the picture. It must not even be captured: a captured pointer's
+ * click goes to the capturing element, so the button would never hear it.
+ */
+const onControl = (target: EventTarget | null): boolean =>
+  target instanceof Element && target.closest('button, a, input, select, [role="group"]') !== null
+
 const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
 
 /**
@@ -60,6 +68,7 @@ export function useShareGestures(
   return {
     onPointerDown: (event: PointerEvent<HTMLElement>) => {
       if (event.pointerType === 'mouse' && event.button !== 0) return
+      if (onControl(event.target)) return
       pointers.current.set(event.pointerId, toTile(event.clientX, event.clientY))
       if (drawing) return
       // Held even at 100%: released outside the tile, the release must still reach us
@@ -93,7 +102,7 @@ export function useShareGestures(
     onPointerUp: (event: PointerEvent<HTMLElement>) => lift(event.pointerId),
     onPointerCancel: (event: PointerEvent<HTMLElement>) => lift(event.pointerId),
     onDoubleClick: (event: MouseEvent<HTMLElement>) => {
-      if (!drawing && onToggleFullscreen) {
+      if (!drawing && onToggleFullscreen && !onControl(event.target)) {
         event.preventDefault()
         onToggleFullscreen()
       }

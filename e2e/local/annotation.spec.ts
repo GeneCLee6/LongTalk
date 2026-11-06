@@ -175,6 +175,28 @@ test('wheel zoom holds the point under the pointer; dragging moves the picture',
   await expectPixel(page, { x: under.x + 60, y: under.y + 40 }, MARK_GREEN)
 })
 
+test('the picker on the tile still gets its clicks, fitted and zoomed', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 800 })
+  await open(page)
+  const carol = tile(page)
+    .getByRole('group', { name: strings.screenShare.picker })
+    .getByRole('button', { name: strings.screenShare.label('Carol') })
+  const picked = () => page.evaluate(() => (window as unknown as { picked: string[] }).picked)
+  await carol.click()
+  await expect.poll(picked).toEqual(['c'])
+  await controls(page).getByRole('button', { name: strings.screenShare.zoomIn }).click()
+  await expect(tile(page)).toHaveAttribute('data-zoom', '1.25')
+  await carol.click()
+  await expect.poll(picked).toEqual(['c', 'c'])
+  // Double-clicking it is two picks, not fullscreen
+  await carol.dblclick()
+  await expect.poll(picked).toEqual(['c', 'c', 'c', 'c'])
+  expect(await page.evaluate(() => document.fullscreenElement)).toBeNull()
+  // The controls' clicks too: the zoom went up and comes back
+  await controls(page).getByRole('button', { name: strings.screenShare.zoomOut }).click()
+  await expect(tile(page)).toHaveAttribute('data-zoom', '1')
+})
+
 test('the keyboard zooms, pans and resets with focus on the tile', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 800 })
   await open(page)

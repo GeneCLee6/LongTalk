@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client'
 import { VideoDemandContext } from '../../../src/components/useVideoDemand.ts'
+import { SharePicker } from '../../../src/components/SharePicker.tsx'
 import { ShareTile } from '../../../src/components/ShareTile.tsx'
 import { VideoDemandStore } from '../../../src/room/videoDemand.ts'
 import { GlobalStyle } from '../../../src/styles/GlobalStyle.ts'
@@ -34,15 +35,27 @@ const demand = new VideoDemandStore()
 declare global {
   interface Window {
     shareDemand: () => unknown
+    picked: string[]
   }
 }
 window.shareDemand = () => demand.get(track)
+window.picked = []
+const shares = [
+  { id: 'b', name: 'Bob' },
+  { id: 'c', name: 'Carol' },
+]
 
 createRoot(document.getElementById('root')!).render(
   <VideoDemandContext.Provider value={demand}>
     <GlobalStyle />
     <div data-theme="dark" style={{ width: '100%', height: '100%' }}>
-      <ShareTile name="Bob" video={track} annotator="me" recording="Gene 正在錄影" />
+      <ShareTile
+        name="Bob"
+        video={track}
+        annotator="me"
+        recording="Gene 正在錄影"
+        picker={<SharePicker shares={shares} main="b" onPick={(id) => window.picked.push(id)} />}
+      />
     </div>
   </VideoDemandContext.Provider>,
 )

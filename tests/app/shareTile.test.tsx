@@ -200,6 +200,33 @@ describe('gestures', () => {
     expect(video().style.transform).toBe(before)
   })
 
+  it('a press on the picker or a control is never captured: the button keeps its click', () => {
+    const onPick = vi.fn()
+    renderTile({
+      picker: (
+        <div role="group" aria-label="picker">
+          <button type="button" onClick={onPick}>
+            Carol
+          </button>
+        </div>
+      ),
+    })
+    const capture = vi.fn()
+    figure().setPointerCapture = capture
+    const press = { pointerId: 1, button: 0, buttons: 1, pointerType: 'mouse', isPrimary: true }
+    for (const zoomed of [false, true]) {
+      if (zoomed) fireEvent.click(button('放大'))
+      for (const target of [screen.getByRole('button', { name: 'Carol' }), button('放大')]) {
+        fireEvent.pointerDown(target, press)
+        fireEvent.pointerUp(target, press)
+      }
+    }
+    expect(capture).not.toHaveBeenCalled()
+    // The picture itself is captured
+    fireEvent.pointerDown(video(), press)
+    expect(capture).toHaveBeenCalledTimes(1)
+  })
+
   it('keys with focus on the tile: + − 0 and arrows, and they stop there', () => {
     renderTile()
     expect(figure()).toHaveAttribute('tabindex', '0')
