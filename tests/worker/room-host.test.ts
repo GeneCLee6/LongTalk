@@ -228,6 +228,8 @@ describe('RoomHost', () => {
       },
       // The chat history follows every welcome (D3), even when there is none yet
       { t: 'chat', messages: [], reset: true },
+      // And the strokes on the shares (J2)
+      { t: 'annotations', share: null, strokes: [], reset: true, done: true },
     ])
     expect(t.host.summary()).toMatchObject({ memberCount: 1 })
   })
@@ -237,12 +239,12 @@ describe('RoomHost', () => {
     const a = t.join('Gene')
     t.tick(5)
     const b = t.join('小潔')
-    expect(a.client.received[2]).toEqual({
+    expect(a.client.received[3]).toEqual({
       t: 'patch',
       rev: 2,
       ops: [{ op: 'set', path: ['members', b.id], value: member(b.id, '小潔', t.now()) }],
     })
-    expect(b.client.received).toHaveLength(2)
+    expect(b.client.received).toHaveLength(3)
     expect(b.client.received[0]).toMatchObject({ t: 'welcome', you: b.id, rev: 2 })
     expect(a.client.view).toEqual(b.client.view)
     expect(t.saved.rev).toBe(2)
@@ -1292,7 +1294,12 @@ describe('RoomHost chat (e5-t01): history, rate limit, storage', () => {
       say(a.conn, `message ${i}`)
     }
     const b = t.join('小潔')
-    expect(b.client.received.map((message) => message.t)).toEqual(['welcome', 'chat', 'chat'])
+    expect(b.client.received.map((message) => message.t)).toEqual([
+      'welcome',
+      'chat',
+      'chat',
+      'annotations',
+    ])
     const [first, second] = chatFrames(b.client)
     expect(first).toMatchObject({ reset: true })
     expect(first.t === 'chat' && first.messages).toHaveLength(CHAT_CHUNK)
@@ -1695,7 +1702,8 @@ describe('RoomHost lock and waiting room (F2, e1-t09, e1-t10)', () => {
     expect(welcome).toMatchObject({ you: c.id, token: c.token, rev: a.client.rev })
     expect(c.client.view!.members[c.id]).toMatchObject({ role: 'participant', joinedAt: t.now() })
     expect(c.client.view!.waiting).toEqual({ [d.id]: expect.objectContaining({ name: '阿華' }) })
-    expect(c.client.received.at(-1)).toMatchObject({ t: 'chat', reset: true })
+    expect(c.client.received.at(-2)).toMatchObject({ t: 'chat', reset: true })
+    expect(c.client.received.at(-1)).toMatchObject({ t: 'annotations', reset: true, done: true })
     expect(b.client.view).toEqual(c.client.view)
     // The next in line moves up
     expect(lastLobby(d.client)).toMatchObject({ position: 1, count: 1 })

@@ -1,7 +1,17 @@
-import { Suspense, lazy, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 import styled, { css } from 'styled-components'
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, videoTransform } from '../../shared/shareGeometry.ts'
 import { canFullscreen } from '../media/capabilities.ts'
+import type { AnnotationStore } from '../room/annotationStore.ts'
 import { strings } from '../strings.ts'
 import { color, fontSize, media, motion, radius, space } from '../styles/tokens.ts'
 import {
@@ -17,8 +27,22 @@ import { useVideoDemand } from './useVideoDemand.ts'
 import { ShareGeometryContext, useShareViewport } from './useShareGeometry.ts'
 import { useShareGestures } from './useShareGestures.ts'
 
-/** Annotation stays out of the room's first load (CLAUDE.md rule 6): loaded on the first press */
-const AnnotationCanvas = lazy(() => import('../annotate/AnnotationCanvas.tsx'))
+/**
+ * Annotation stays out of the room's first load (CLAUDE.md rule 6): loaded on the first press of
+ * 標註, or when there is a mark to show
+ */
+const AnnotationLayer = lazy(() => import('../annotate/AnnotationLayer.tsx'))
+
+/** The marks on this share (J2, e7-t04) */
+export interface ShareAnnotations {
+  store: AnnotationStore
+  /** The sharer: which share's layer */
+  share: string
+  /** Our member id where we may annotate (shared/roles.ts `annotate`); null: no 標註 button */
+  me: string | null
+  /** A member's name for the tag beside what they draw */
+  nameOf: (memberId: string) => string | null
+}
 
 export interface ShareTileProps {
   /** Who shares */
@@ -32,8 +56,8 @@ export interface ShareTileProps {
   onShowMain?: () => void
   /** The main area's picker between several shares (SharePicker), top right */
   picker?: ReactNode
-  /** Our member id where we may annotate (shared/roles.ts `annotate`); null: no 標註 button */
-  annotator?: string | null
+  /** The marks on this share; a tile without it has none, nor a 標註 button */
+  annotations?: ShareAnnotations | null
   /**
    * Who records, in words, while anyone does: fullscreen covers the top bar's red light, so the
    * tile says it itself (CLAUDE.md rule 4)
@@ -65,20 +89,22 @@ function useFullscreen(ref: RefObject<HTMLElement | null>) {
  *
  * The main one can be zoomed, moved and made fullscreen (e3-t11), with controls bottom right,
  * and useShareGeometry tells anything inside it where the picture ended up. The controls also
- * turn on annotation, for now only as a local sketch (e7-t02; J2 syncs it and adds its toolbar).
+ * bring out the annotation tools (J2, e7-t03). The marks on a share show on any tile that shows
+ * it, the strip's too, whether or not the tools are out.
  */
 export function ShareTile({
   name,
   video,
   onShowMain,
   picker,
-  annotator = null,
+  annotations = null,
   recording = null,
 }: ShareTileProps) {
   const videoRef = useTrack<HTMLVideoElement>(video)
   const frameRef = useRef<HTMLElement>(null)
   const interactive = !onShowMain && video !== null
-  const viewport = useShareViewport(frameRef, videoRef, interactive)
+  // Measured with a picture on any tile: marks line up on a strip share too, which has no gestures
+  const viewport = useShareViewport(frameRef, videoRef, video !== null)
   const { geometry } = viewport
   const { zoom } = geometry.view
   const ready = interactive && geometry.rect !== null
@@ -86,7 +112,12 @@ export function ShareTile({
   useVideoDemand(videoRef, video, zoom)
   const fullscreen = useFullscreen(frameRef)
   const fullscreenable = canFullscreen()
+  const annotator = annotations?.me ?? null
   const [annotating, setAnnotating] = useState(false)
+  const marked = useMarked(annotations)
+  // Stays once there has been something to show: nothing flickers as the last mark fades
+  const [hasMarks, setHasMarks] = useState(false)
+  if (marked && !hasMarks) setHasMarks(true)
   const gestures = useShareGestures(frameRef, viewport, {
     enabled: ready,
     drawing: annotating,
@@ -120,9 +151,9 @@ export function ShareTile({
             {strings.screenShare.waiting(name)}
           </Waiting>
         )}
-        {ready && annotating && annotator !== null && (
+        {annotations && geometry.rect !== null && (hasMarks || (ready && annotating)) && (
           <Suspense fallback={null}>
-            <AnnotationCanvas by={annotator} />
+            <AnnotationLayer {...annotations} editing={ready && annotating} />
           </Suspense>
         )}
         <Tag>{strings.screenShare.label(name)}</Tag>
@@ -201,6 +232,18 @@ export function ShareTile({
         )}
       </Frame>
     </ShareGeometryContext.Provider>
+  )
+}
+
+const noMarks = () => () => undefined
+const never = () => false
+
+/** Whether this share has anything to show (the store, not React state: see AnnotationStore) */
+function useMarked(annotations: ShareAnnotations | null): boolean {
+  const { store, share } = annotations ?? {}
+  return useSyncExternalStore(
+    store && share ? (listener) => store.subscribe(share, listener) : noMarks,
+    store && share ? () => store.marked(share) : never,
   )
 }
 

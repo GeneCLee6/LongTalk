@@ -147,6 +147,11 @@ export const annotation = {
     ink: '#0F172A',
   } satisfies Record<AnnotationColor, string>,
   highlighterAlpha: 0.4,
+  /** The laser pointer's halo around its dot (J2) */
+  laserGlowAlpha: 0.3,
+  /** The name beside a stroke being drawn or a laser pointer (J2) */
+  tagBackground: 'rgba(11, 18, 32, 0.85)',
+  tagText: '#FFFFFF',
 } as const
 
 /** The same name always gets the same colour (FNV-1a over the code points) */

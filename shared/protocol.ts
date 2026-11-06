@@ -140,6 +140,18 @@
 //    CloseCode.recordingDeclined and removes them at once (no ban: they may come back and agree).
 //    Declining in the browser is leaving. Someone waiting is told the meeting is being recorded in
 //    `lobby.recording`; the pre-join screen asks for the agreement before 加入.
+// 23. Annotations on a share (J2, e7-t04; shared/annotation.ts): each share has its own layer, keyed
+//    by the sharer's member id. `annotate` carries the ops a browser made since its last frame, at
+//    most one frame every ANNOTATION_SEND_MS; the room decides (worker/roles.ts `annotate`), keeps
+//    the strokes, and sends what it accepted to everyone else in the room as `annotation` (the
+//    sender drew it already: it only hears back about what it should take away). No patch carries
+//    strokes. Right after every `welcome`, also a reconnect's, the room sends the whole set as
+//    `annotations` frames: the first has `reset` (forget everything you have), the last `done`.
+//    Strokes are written to storage in batches (ANNOTATION_FLUSH_MS), so they outlast hibernation
+//    and eviction; a share stopping clears its layer, for everyone and in storage. `laser` ops are
+//    only passed on. Over the limits (shared/annotation-limits.ts) a frame or stroke is refused:
+//    `error` code `annotation_limit`, and a refused stroke comes back as `remove`; past the size
+//    limits the oldest strokes fall out, as `remove` to everyone.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -174,10 +186,13 @@
 // v18 → v19 (I5): `ChatMessage.file`: a shared file, a message the room writes itself when the
 //   upload through the Worker finishes (worker/files.ts). The rest of the flow is HTTP, not this
 //   socket. A v18 browser would show only the name, with no way to open it.
+// v19 → v20 (J2): `annotate`, `annotation`, `annotations`, error code `annotation_limit`. A v19
+//   browser would neither show the strokes nor send its own.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
 // View types are `type` aliases, not interfaces, so they stay assignable to JsonValue.
+import { parseAnnotationOps, type AnnotationOp, type Stroke } from './annotation.ts'
 import { isChatMessage, normalizeChatText, type ChatMessage } from './chat.ts'
 import type { JsonValue, PatchOp } from './patch.ts'
 import { normalizePassword } from './password.ts'
@@ -186,7 +201,7 @@ import type { Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 19
+export const PROTOCOL_VERSION = 20
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -489,8 +504,15 @@ export type PatchMessage = { t: 'patch'; rev: number; ops: PatchOp[] }
  * - `share_full`: `share` while MAX_SHARES members already share (H5, e3-t07)
  * - `audio_only`: `share` in a month that is audio-only (shared/usage.ts)
  * - `rate_limited`: `chat` faster than CHAT_RATE (D3); the message was not kept
+ * - `annotation_limit`: `annotate` faster than the limits (J2); a refused stroke comes back removed
  */
-export type ErrorCode = 'bad_message' | 'forbidden' | 'share_full' | 'audio_only' | 'rate_limited'
+export type ErrorCode =
+  | 'bad_message'
+  | 'forbidden'
+  | 'share_full'
+  | 'audio_only'
+  | 'rate_limited'
+  | 'annotation_limit'
 
 /**
  * What a host (or co-host) did to this member (F1): `muted` (the microphone; `all` when it was
@@ -547,7 +569,33 @@ export type ChatServerMessage = { t: 'chat'; messages: ChatMessage[]; reset?: tr
 /** Someone in the room reacted (G3, e5-t03): `from` is their member id (maybe our own) */
 export type ReactionMessage = { t: 'reaction'; from: string; emoji: Reaction }
 
+/**
+ * What was done to a share's layer (J2, e7-t04): by the member `by`, or by the room itself (null:
+ * strokes that fell out or were refused, the share stopping)
+ */
+export type AnnotationMessage = {
+  t: 'annotation'
+  /** The sharer: which share's layer */
+  share: string
+  by: string | null
+  ops: AnnotationOp[]
+}
+
+/**
+ * The strokes on the shares, after every `welcome` (J2): `reset` on the first frame (forget what you
+ * have), `done` on the last; `share` is null on a frame with no strokes. Oldest first.
+ */
+export type AnnotationsMessage = {
+  t: 'annotations'
+  share: string | null
+  strokes: Stroke[]
+  reset?: true
+  done?: true
+}
+
 export type ServerMessage =
+  | AnnotationMessage
+  | AnnotationsMessage
   | WelcomeMessage
   | SnapshotMessage
   | PatchMessage
@@ -692,7 +740,11 @@ export type HostMessage =
   | { t: 'host'; action: HostAllowRecordAction; memberId: string; on: boolean }
   | { t: 'host'; action: HostHandoverAction; memberId: string }
 
+/** What the member did to a share's layer since its last frame (J2, e7-t03, e7-t04) */
+export type AnnotateMessage = { t: 'annotate'; share: string; ops: AnnotationOp[] }
+
 export type ClientMessage =
+  | AnnotateMessage
   | ChatClientMessage
   | HostMessage
   | JoinMessage
@@ -830,6 +882,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return typeof value.on === 'boolean' ? { t: 'record', on: value.on } : null
     case 'consent':
       return { t: 'consent' }
+    case 'annotate': {
+      const ops = isMemberId(value.share) ? parseAnnotationOps(value.ops) : null
+      return ops === null ? null : { t: 'annotate', share: value.share as string, ops }
+    }
     case 'host': {
       const action = value.action
       if (typeof action !== 'string') return null
@@ -958,6 +1014,12 @@ export function parseServerMessage(raw: string): ServerMessage | null {
       return typeof value.from === 'string' && isReaction(value.emoji)
         ? (value as ReactionMessage)
         : null
+    case 'annotation':
+      return typeof value.share === 'string' && Array.isArray(value.ops)
+        ? (value as AnnotationMessage)
+        : null
+    case 'annotations':
+      return Array.isArray(value.strokes) ? (value as AnnotationsMessage) : null
     default:
       return null
   }

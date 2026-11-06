@@ -73,6 +73,7 @@ import type { PermissionGuideProps } from '../components/PermissionGuide.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
 import { ShortcutsDialog } from '../components/ShortcutsDialog.tsx'
 import { ShareTile } from '../components/ShareTile.tsx'
+import { useAnnotationStore } from '../room/useAnnotationStore.ts'
 import { SharePicker } from '../components/SharePicker.tsx'
 import { SettingsDialog } from '../components/SettingsDialog.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
@@ -705,7 +706,10 @@ function Room({
     sendChat,
     onReaction,
     sendReaction,
+    onAnnotation,
+    isOpen,
   } = useRoomConnection(roomId, choices.name, choices.password)
+  const annotationStore = useAnnotationStore(send, onAnnotation, isOpen)
   const toasts = useToasts()
   const { show } = toasts
   const fileSharing = useFileSharing(roomId, state.token)
@@ -848,6 +852,7 @@ function Room({
     () =>
       onError((code) => {
         if (code === 'rate_limited') show(strings.chat.rateLimited, 'warn')
+        if (code === 'annotation_limit') show(strings.screenShare.annotationLimit, 'warn')
         // A host control the room refused (our role changed meanwhile, F1)
         if (code === 'forbidden') show(strings.participants.forbidden, 'warn')
       }),
@@ -1661,6 +1666,9 @@ function Room({
                 : excluded(sharer.id)
                   ? null
                   : received(sharer.tracks.find((t) => t.kind === 'screen')),
+            // What someone who has not agreed yet drew stays out too (CLAUDE.md rule 4)
+            marks: () =>
+              annotationStore.strokes(sharer.id).filter((stroke) => !excluded(stroke.by)),
           }
         : null,
       layout: stageLayout(view.layout, null, focus) === 'speaker' ? 'speaker' : 'grid',
@@ -1815,12 +1823,18 @@ function Room({
         ? strings.record.byMany(recorders.length)
         : strings.record.byOne(viewMembers?.[otherRecorders[0].memberId]?.name ?? '')
   const mainSharer = otherSharers.find((sharer) => sharer.id === slots.main)
+  const nameOnMarks = (memberId: string) => viewMembers?.[memberId]?.name ?? null
   const shareTile = mainSharer ? (
     <ShareTile
       key={`${mainSharer.id}-share`}
       name={mainSharer.name}
       video={receivedOf(mainSharer, 'screen')}
-      annotator={can(role, 'annotate') ? state.you : null}
+      annotations={{
+        store: annotationStore,
+        share: mainSharer.id,
+        me: can(role, 'annotate') ? state.you : null,
+        nameOf: nameOnMarks,
+      }}
       recording={recorders.length > 0 || weRecord ? recordingLabel : null}
       picker={
         otherSharers.length > 1 ? (
@@ -1841,6 +1855,7 @@ function Room({
         key={`${sharer.id}-share`}
         name={sharer.name}
         video={receivedOf(sharer, 'screen')}
+        annotations={{ store: annotationStore, share: sharer.id, me: null, nameOf: nameOnMarks }}
         onShowMain={() => chooseShare(sharer.id)}
       />
     ))

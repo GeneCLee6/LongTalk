@@ -5,6 +5,8 @@ import { VideoDemandContext } from '../../src/components/useVideoDemand.ts'
 import { chooseLayers, layerForSize, type VideoDemand } from '../../src/media/layers.ts'
 import { VideoDemandStore } from '../../src/room/videoDemand.ts'
 import AnnotationCanvas from '../../src/annotate/AnnotationCanvas.tsx'
+import { AnnotationDrawer } from '../../src/annotate/sync.ts'
+import { AnnotationStore } from '../../src/room/annotationStore.ts'
 import { drawStroke, drawStrokes } from '../../src/annotate/draw.ts'
 import { useShareGeometry, ShareGeometryContext } from '../../src/components/useShareGeometry.ts'
 import { canFullscreen } from '../../src/media/capabilities.ts'
@@ -55,6 +57,14 @@ const video = () => within(figure()).getByLabelText('Bob 分享的畫面', { sel
 const button = (name: string | RegExp) => screen.getByRole('button', { name })
 const zoom = () => Number(figure().getAttribute('data-zoom'))
 
+const newStore = () => new AnnotationStore({ send: () => {}, isOpen: () => true })
+const marks = (me: string | null = 'me') => ({
+  store: newStore(),
+  share: 'bob',
+  me,
+  nameOf: () => null,
+})
+
 function renderTile(props: Partial<Parameters<typeof ShareTile>[0]> = {}) {
   return render(<ShareTile name="Bob" video={track} {...props} />)
 }
@@ -96,7 +106,7 @@ describe('the controls', () => {
   it('stay in English too', async () => {
     const { setLocale } = await import('../../src/strings.ts')
     setLocale('en', false)
-    render(<ShareTile name="Bob" video={track} annotator="me" />)
+    render(<ShareTile name="Bob" video={track} annotations={marks()} />)
     expect(screen.getByRole('button', { name: 'Zoom in' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '100%, reset zoom' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Annotate' })).toBeInTheDocument()
@@ -390,28 +400,75 @@ describe('layer selection when zoomed', () => {
 })
 
 describe('annotation entry', () => {
-  it('no button without permission (a null annotator)', () => {
-    renderTile()
+  it('no button without permission (no annotator)', () => {
+    renderTile({ annotations: marks(null) })
     expect(screen.queryByRole('button', { name: '標註' })).toBeNull()
   })
 
-  it('says it is only yours for now', () => {
-    renderTile({ annotator: 'me' })
-    expect(button('標註')).toHaveAttribute('title', '標註（目前只有你看得到，關掉就會清除）')
+  it('says everyone sees it', () => {
+    renderTile({ annotations: marks() })
+    expect(button('標註')).toHaveAttribute('title', '標註（大家都看得到，分享結束就會清除）')
   })
 
-  it('loads the canvas on the first press, and takes it away on the next', async () => {
-    renderTile({ annotator: 'me' })
+  it('loads the canvas and tools on the first press; the next puts the tools away', async () => {
+    renderTile({ annotations: marks() })
     expect(screen.queryByRole('img', { name: '標註畫布' })).toBeNull()
     fireEvent.click(button('標註'))
     expect(button('標註')).toHaveAttribute('aria-pressed', 'true')
     expect(await screen.findByRole('img', { name: '標註畫布' })).toBeInTheDocument()
+    expect(screen.getByRole('toolbar', { name: '標註工具' })).toBeInTheDocument()
     fireEvent.click(button('標註'))
-    await waitFor(() => expect(screen.queryByRole('img', { name: '標註畫布' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('toolbar')).toBeNull())
+  })
+
+  it('a viewer who never pressed anything still sees the marks', async () => {
+    const annotations = marks(null)
+    renderTile({ annotations })
+    expect(screen.queryByRole('img', { name: '標註畫布' })).toBeNull()
+    act(() =>
+      annotations.store.receive({
+        t: 'annotation',
+        share: 'bob',
+        by: 'carol',
+        ops: [
+          {
+            op: 'add',
+            stroke: {
+              id: 's',
+              by: 'carol',
+              tool: 'pen',
+              color: 'rose',
+              width: 'thin',
+              points: [[0.1, 0.1]],
+            },
+          },
+        ],
+      }),
+    )
+    expect(await screen.findByRole('img', { name: '標註畫布' })).toBeInTheDocument()
+    expect(screen.queryByRole('toolbar')).toBeNull()
+  })
+
+  it('shows them on a strip share too, under its button', async () => {
+    const annotations = marks(null)
+    renderTile({ annotations, onShowMain: () => {} })
+    act(() =>
+      annotations.store.receive({
+        t: 'annotations',
+        share: 'bob',
+        strokes: [
+          { id: 's', by: 'c', tool: 'pen', color: 'rose', width: 'thin', points: [[0.1, 0.1]] },
+        ],
+        reset: true,
+        done: true,
+      }),
+    )
+    expect(await screen.findByRole('img', { name: '標註畫布' })).toBeInTheDocument()
+    expect(button('在主畫面看 Bob 的畫面')).toBeInTheDocument()
   })
 
   it('while drawing, one pointer does not pan the zoomed picture', async () => {
-    renderTile({ annotator: 'me' })
+    renderTile({ annotations: marks() })
     fireEvent.click(button('放大'))
     fireEvent.click(button('放大'))
     fireEvent.click(button('標註'))
@@ -459,6 +516,7 @@ function fakeContext() {
     fill: log('fill'),
     arc: log('arc'),
     clearRect: log('clearRect'),
+    drawImage: log('drawImage'),
     fillText: (text: string, x: number, y: number) => {
       calls.push(`fillText:${text}`)
       points.push(['fillText', x, y])
@@ -603,13 +661,33 @@ describe('AnnotationCanvas', () => {
 
   afterEach(() => vi.unstubAllGlobals())
 
+  function CanvasFor({ store }: { store: AnnotationStore }) {
+    return (
+      <AnnotationCanvas
+        store={store}
+        share="bob"
+        me="me"
+        nameOf={() => null}
+        mode="pen"
+        color="rose"
+        width="medium"
+        drawer={new AnnotationDrawer(store, 'bob', 'me')}
+      />
+    )
+  }
+
   function renderCanvas(pixelRatio = 2) {
+    const store = newStore()
     const view = render(
       <ShareGeometryContext.Provider value={geometry(pixelRatio)}>
-        <AnnotationCanvas by="me" />
+        <CanvasFor store={store} />
       </ShareGeometryContext.Provider>,
     )
-    return { ...view, surface: screen.getByRole('img', { name: '標註畫布' }) as HTMLCanvasElement }
+    return {
+      ...view,
+      store,
+      surface: screen.getByRole('img', { name: '標註畫布' }) as HTMLCanvasElement,
+    }
   }
 
   const strokes = () => fake.calls.filter((call) => call === 'stroke').length
@@ -621,11 +699,11 @@ describe('AnnotationCanvas', () => {
   })
 
   it('a resize or a new pixel ratio resizes it and draws again', () => {
-    const { surface, rerender } = renderCanvas(1)
+    const { surface, rerender, store } = renderCanvas(1)
     expect(surface.width).toBe(1000)
     rerender(
       <ShareGeometryContext.Provider value={geometry(3)}>
-        <AnnotationCanvas by="me" />
+        <CanvasFor store={store} />
       </ShareGeometryContext.Provider>,
     )
     expect(surface.width).toBe(3000)

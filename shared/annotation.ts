@@ -1,14 +1,30 @@
 // Annotations on a share (E7, e7-t01): vector marks in content coordinates (0–1 across the shared
 // picture, x of its width, y of its height), so they line up on every viewer whatever the tile's
 // shape, the zoom or the layer received. Pure functions only: the canvas (src/annotate/) draws
-// these, RoomDO will validate and keep them (J2, e7-t04: `parseStroke`, the list functions) and
-// the toolbar will use the hit test as its eraser (J2, e7-t03).
+// these, RoomDO validates and keeps them (J2, e7-t04: `parseAnnotationOps`,
+// worker/room-annotations.ts) and the toolbar uses the hit test as its eraser (J2, e7-t03). The
+// numbers that bound them are in shared/annotation-limits.ts.
 //
 // A point's x and y have different units when the picture is not square, so anything measuring
 // distance (simplifying, hit-testing) takes the picture's aspect (width / height) and measures in
 // units of the picture's height.
 
+import {
+  LASER_FADE_MS,
+  MAX_ANNOTATION_TEXT_CHARS,
+  MAX_FRAME_OPS,
+  MAX_STROKES,
+  MAX_STROKE_ID_CHARS,
+  MAX_STROKE_POINTS,
+} from './annotation-limits.ts'
 import { normalizeChatText } from './chat.ts'
+
+export {
+  MAX_ANNOTATION_TEXT_CHARS,
+  MAX_STROKES,
+  MAX_STROKE_ID_CHARS,
+  MAX_STROKE_POINTS,
+} from './annotation-limits.ts'
 
 export const ANNOTATION_TOOLS = ['pen', 'highlighter', 'arrow', 'rect', 'text'] as const
 export type AnnotationTool = (typeof ANNOTATION_TOOLS)[number]
@@ -48,17 +64,6 @@ export interface Stroke {
   text?: string
 }
 
-/** PRD E7 risk table: one share keeps at most this many (what happens past it: putStroke) */
-export const MAX_STROKES = 2000
-/**
- * One stroke's points after thinning: a full stroke must fit one client message (J2 sends it
- * whole at the end, MAX_CLIENT_MESSAGE_CHARS), each point being at most `[0.1234,0.5678],`
- */
-export const MAX_STROKE_POINTS = 800
-/** A text mark's length, characters (normalizeChatText's rules otherwise) */
-export const MAX_ANNOTATION_TEXT_CHARS = 500
-/** An id's length: a stroke id is made here, but J2 reads it off the wire */
-export const MAX_STROKE_ID_CHARS = 40
 /** 4 decimals: 0.2 px across a 1080p picture, and short on the wire */
 const PRECISION = 10_000
 /** A new point this close to the last (of the picture's height) adds nothing */
@@ -268,7 +273,7 @@ export function normalizeAnnotationText(raw: unknown): string | null {
 const isOneOf = <T extends string>(list: readonly T[], value: unknown): value is T =>
   list.includes(value as T)
 
-function parsePoint(raw: unknown): NormPoint | null {
+export function parsePoint(raw: unknown): NormPoint | null {
   if (!Array.isArray(raw) || raw.length !== 2) return null
   const [x, y] = raw as unknown[]
   if (typeof x !== 'number' || typeof y !== 'number') return null
@@ -285,8 +290,8 @@ const POINT_COUNT: Readonly<Record<AnnotationTool, (count: number) => boolean>> 
 }
 
 /**
- * A stroke from the wire, or null: the shapes and limits above, nothing else carried along. J2's
- * RoomDO calls this on every `annotation.add`, and stamps `by` itself.
+ * A stroke from the wire, or null: the shapes and limits above, nothing else carried along. RoomDO
+ * gets these from parseAnnotationOps, which leaves `by` empty: the room stamps it itself.
  */
 export function parseStroke(raw: unknown): Stroke | null {
   if (typeof raw !== 'object' || raw === null) return null
@@ -312,8 +317,8 @@ export function parseStroke(raw: unknown): Stroke | null {
 // The list of strokes on a share, oldest first (drawn in order, so the newest is on top)
 
 /**
- * Adds a stroke, or replaces the one with its id (J2's `annotation.update` while it is drawn).
- * Past MAX_STROKES the oldest goes (the PRD's raster merge of old strokes is J2's to decide).
+ * Adds a stroke, or replaces the one with its id. Past MAX_STROKES the oldest goes: the PRD's raster
+ * merge of old strokes was deferred in J2 (docs/PRD/e7-annotation-whiteboard.md says why).
  */
 export function putStroke(strokes: readonly Stroke[], stroke: Stroke): Stroke[] {
   const index = strokes.findIndex((existing) => existing.id === stroke.id)
@@ -338,6 +343,95 @@ export function lastStrokeBy(strokes: readonly Stroke[], by: string): Stroke | n
   }
   return null
 }
+
+/**
+ * A stroke being drawn after an `update`: its points from `at` on replaced by `points`, so appending
+ * (`at` = its length), moving an arrow's head (`at` = 1) and a path thinned at the cap (`at` = 0) are
+ * one op. Null when it does not apply: a gap, or a count the tool does not allow.
+ */
+export function applyStrokeUpdate(
+  stroke: Stroke,
+  at: number,
+  points: readonly NormPoint[],
+): Stroke | null {
+  if (stroke.tool === 'text' || at > stroke.points.length) return null
+  const next = [...stroke.points.slice(0, at), ...points]
+  return POINT_COUNT[stroke.tool](next.length) ? { ...stroke, points: next } : null
+}
+
+/** What a stroke costs to keep and to send, about its length in JSON characters */
+export const strokeCost = (stroke: Stroke): number =>
+  80 + stroke.points.length * 16 + (stroke.text?.length ?? 0) * 2
+
+// ---------------------------------------------------------------------------------------------
+// On the wire (J2, e7-t04; shared/protocol.ts `annotate`, `annotation`)
+
+/**
+ * One thing done to a share's layer. A browser sends these in a frame (`annotate`), the room passes
+ * on what it accepted to the others (`annotation`):
+ * - `add`: a stroke, whole; replaces the one with its id. `live`: it is still being drawn. The final
+ *   one (no `live`) has the simplified path. An undone stroke coming back is an `add` too;
+ * - `update`: a stroke being drawn (applyStrokeUpdate);
+ * - `remove`: undo, the eraser; from the room also a stroke that fell out or was refused;
+ * - `clear`: the sender's own strokes. From the room: `by`'s strokes, or with no `by` the whole
+ *   layer (J3's 清除全部 and 清除某人 fit here);
+ * - `laser`: the pointer is here (null: gone). Never stored.
+ */
+export type AnnotationOp =
+  | { op: 'add'; stroke: Stroke; live?: true }
+  | { op: 'update'; id: string; at: number; points: NormPoint[] }
+  | { op: 'remove'; id: string }
+  | { op: 'clear'; by?: string }
+  | { op: 'laser'; at: NormPoint | null; color: AnnotationColor }
+
+const isStrokeId = (value: unknown): value is string =>
+  typeof value === 'string' && value !== '' && value.length <= MAX_STROKE_ID_CHARS
+
+function parseOp(raw: unknown): AnnotationOp | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const value = raw as Record<string, unknown>
+  switch (value.op) {
+    case 'add': {
+      if (typeof value.stroke !== 'object') return null
+      const stroke = parseStroke({ ...value.stroke, by: '' })
+      if (!stroke) return null
+      return value.live === true ? { op: 'add', stroke, live: true } : { op: 'add', stroke }
+    }
+    case 'update': {
+      const { id, at, points } = value
+      if (!isStrokeId(id) || !Number.isInteger(at) || (at as number) < 0) return null
+      if (!Array.isArray(points) || points.length === 0 || points.length > MAX_STROKE_POINTS) {
+        return null
+      }
+      const parsed = points.map(parsePoint)
+      if (parsed.includes(null)) return null
+      return { op: 'update', id, at: at as number, points: parsed as NormPoint[] }
+    }
+    case 'remove':
+      return isStrokeId(value.id) ? { op: 'remove', id: value.id } : null
+    case 'clear':
+      return { op: 'clear' }
+    case 'laser': {
+      if (!isOneOf(ANNOTATION_COLORS, value.color)) return null
+      if (value.at === null) return { op: 'laser', at: null, color: value.color }
+      const at = parsePoint(value.at)
+      return at ? { op: 'laser', at, color: value.color } : null
+    }
+    default:
+      return null
+  }
+}
+
+/** A frame's ops from the wire, or null when any of them is not one this version understands */
+export function parseAnnotationOps(raw: unknown): AnnotationOp[] | null {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_FRAME_OPS) return null
+  const ops = raw.map(parseOp)
+  return ops.includes(null) ? null : (ops as AnnotationOp[])
+}
+
+/** How visible a laser pointer last heard of at `heardAt` is at `now`: 1 down to 0 */
+export const laserOpacity = (heardAt: number, now: number): number =>
+  Math.max(0, Math.min(1, 1 - (now - heardAt) / LASER_FADE_MS))
 
 // ---------------------------------------------------------------------------------------------
 // Hit-testing (the eraser, J2): how near a point comes to what is drawn

@@ -16,6 +16,8 @@ import { strings } from './helpers.ts'
 
 const ANNOTATION_RED = { r: 244, g: 63, b: 94 } // tokens.ts annotation.colors.rose
 const MARK_GREEN = { r: 0, g: 255, b: 0 }
+const BLUE = { r: 59, g: 130, b: 246 } // tokens.ts annotation.colors.blue
+const BACKGROUND = { r: 0, g: 0, b: 60 } // the harness's picture
 
 let server: PreviewServer
 let origin: string
@@ -54,6 +56,7 @@ test.afterAll(async () => {
 const tile = (page: Page) => page.getByRole('figure', { name: strings.screenShare.region('Bob') })
 const controls = (page: Page) => page.getByRole('group', { name: strings.screenShare.viewControls })
 const canvas = (page: Page) => page.getByRole('img', { name: strings.screenShare.annotationCanvas })
+const toolbar = (page: Page) => page.getByRole('toolbar', { name: strings.annotation.toolbar })
 
 /** The tile with frames arriving, the pointer over it (the controls show) */
 async function open(page: Page, query = '') {
@@ -234,7 +237,7 @@ test('a stroke loads the lazy chunk, lands on the picture, and stays on it throu
 }) => {
   // The canvas's chunk is its own file, fetched on the first press and not before
   const chunks = readdirSync(join(outDir, 'assets')).filter((file) =>
-    file.startsWith('AnnotationCanvas'),
+    file.startsWith('AnnotationLayer'),
   )
   expect(chunks).toHaveLength(1)
   const fetched: string[] = []
@@ -242,12 +245,12 @@ test('a stroke loads the lazy chunk, lands on the picture, and stays on it throu
 
   await page.setViewportSize({ width: 1200, height: 800 })
   await open(page)
-  expect(fetched.some((url) => url.includes('AnnotationCanvas'))).toBe(false)
+  expect(fetched.some((url) => url.includes('AnnotationLayer'))).toBe(false)
   const pen = controls(page).getByRole('button', { name: strings.screenShare.annotate })
   await pen.click()
   await expect(pen).toHaveAttribute('aria-pressed', 'true')
   await expect(canvas(page)).toBeVisible()
-  expect(fetched.some((url) => url.includes('AnnotationCanvas'))).toBe(true)
+  expect(fetched.some((url) => url.includes('AnnotationLayer'))).toBe(true)
 
   // Across the picture, from the first mark's level, through content (0.25, 0.5)–(0.75, 0.5)
   const y = 0.5
@@ -279,15 +282,221 @@ test('a stroke loads the lazy chunk, lands on the picture, and stays on it throu
   await expect(tile(page)).toHaveAttribute('data-zoom', '1.25')
   await expectStroke({ zoom: 1.25, cx: 0.5, cy: 0.5 })
 
-  // Turning it off clears the sketch and gives the pointer back
+  // Turning it off puts the tools away; the mark stays, and the pointer is the tile's again
   await tile(page).hover()
   await pen.click()
-  await expect(canvas(page)).toHaveCount(0)
-  await expectPixel(
+  await expect(toolbar(page)).toHaveCount(0)
+  await expectStroke({ zoom: 1.25, cx: 0.5, cy: 0.5 })
+  const before = await page.locator('video').evaluate((video) => video.style.transform)
+  const mid = await expectedAt(page, { x: 0.5, y: 0.8 }, WIDE, { zoom: 1.25, cx: 0.5, cy: 0.5 })
+  await drag(page, mid, { x: mid.x, y: mid.y - 40 })
+  await expect
+    .poll(() => page.locator('video').evaluate((video) => video.style.transform))
+    .not.toBe(before)
+})
+
+test('the tools on the picture: colour, undo, redo, clear, highlighter, rectangle, text', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1200, height: 800 })
+  await open(page)
+  await controls(page).getByRole('button', { name: strings.screenShare.annotate }).click()
+  await expect(toolbar(page)).toBeVisible()
+  const tool = (name: string) => toolbar(page).getByRole('button', { name, exact: true })
+
+  // A blue line
+  await tool(strings.annotation.colors.blue).click()
+  const y = 0.5
+  await drag(
     page,
-    await expectedAt(page, { x: 0.5, y }, WIDE, { zoom: 1.25, cx: 0.5, cy: 0.5 }),
-    { r: 0, g: 0, b: 60 },
+    await expectedAt(page, { x: 0.3, y }, WIDE),
+    await expectedAt(page, { x: 0.7, y }, WIDE),
   )
+  const middle = await expectedAt(page, { x: 0.5, y }, WIDE)
+  await expectPixel(page, middle, BLUE)
+  // Undo, redo, from the bar and from the keyboard
+  await tool(strings.annotation.undo).click()
+  await expectPixel(page, middle, BACKGROUND)
+  await tool(strings.annotation.redo).click()
+  await expectPixel(page, middle, BLUE)
+  await page.keyboard.press('Control+z')
+  await expectPixel(page, middle, BACKGROUND)
+  await page.keyboard.press('Control+y')
+  await expectPixel(page, middle, BLUE)
+
+  // The eraser takes it
+  await tool(strings.annotation.modes.eraser).click()
+  await page.mouse.move(middle.x, middle.y)
+  await page.mouse.down()
+  await page.mouse.up()
+  await expectPixel(page, middle, BACKGROUND)
+  await page.keyboard.press('Control+z')
+  await expectPixel(page, middle, BLUE)
+
+  // A rectangle's outline: on it, and not inside it
+  await tool(strings.annotation.modes.rect).click()
+  await drag(
+    page,
+    await expectedAt(page, { x: 0.1, y: 0.6 }, WIDE),
+    await expectedAt(page, { x: 0.3, y: 0.9 }, WIDE),
+  )
+  await expectPixel(page, await expectedAt(page, { x: 0.2, y: 0.6 }, WIDE), BLUE)
+  await expectPixel(page, await expectedAt(page, { x: 0.2, y: 0.75 }, WIDE), BACKGROUND)
+
+  // The highlighter lets the picture through
+  await tool(strings.annotation.modes.highlighter).click()
+  const mark = { x: 0.75, y: 0.75 }
+  await drag(
+    page,
+    await expectedAt(page, { x: 0.65, y: mark.y }, WIDE),
+    await expectedAt(page, { x: 0.85, y: mark.y }, WIDE),
+  )
+  await expect
+    .poll(async () => {
+      const { r, g, b } = await pixel(page, await expectedAt(page, mark, WIDE))
+      // Green below, blue over it at 0.4: both still in there
+      return g > 150 && b > 60 && r < 70
+    })
+    .toBe(true)
+
+  // Text: a click, typing, Enter
+  await tool(strings.annotation.modes.text).click()
+  const place = await expectedAt(page, { x: 0.6, y: 0.1 }, WIDE)
+  await page.mouse.click(place.x, place.y)
+  const box = page.getByRole('textbox', { name: strings.annotation.textLabel })
+  await expect(box).toBeFocused()
+  await box.fill('WWWW')
+  await page.keyboard.press('Enter')
+  await expect(box).toHaveCount(0)
+  // Its ink on the canvas, right where the click was
+  const tileBox = (await tile(page).boundingBox())!
+  await expect
+    .poll(() =>
+      canvas(page).evaluate(
+        (element: HTMLCanvasElement, { x, y }) =>
+          element
+            .getContext('2d')!
+            .getImageData(x, y, 80, 30)
+            .data.some((value) => value !== 0),
+        { x: Math.round(place.x - tileBox.x), y: Math.round(place.y - tileBox.y) },
+      ),
+    )
+    .toBe(true)
+
+  // Enter kept that one exactly once (taking the box away also blurs it), and Esc keeps nothing
+  const adds = () =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            annotateFrames: { ops: { op: string; stroke?: { tool: string } }[] }[]
+          }
+        ).annotateFrames
+          .flatMap((frame) => frame.ops)
+          .filter((op) => op.op === 'add' && op.stroke?.tool === 'text').length,
+    )
+  await expect.poll(adds).toBe(1)
+  await page.mouse.click(place.x, place.y + 40)
+  await box.fill('no')
+  await page.keyboard.press('Escape')
+  await expect(box).toHaveCount(0)
+  await page.waitForTimeout(300)
+  expect(await adds()).toBe(1)
+
+  // What went out: frames in the shape the room takes, ending in the text mark
+  const frames = await page.evaluate(
+    () => (window as unknown as { annotateFrames: { t: string; share: string }[] }).annotateFrames,
+  )
+  expect(frames.length).toBeGreaterThan(5)
+  expect(frames.every((frame) => frame.t === 'annotate' && frame.share === 'b')).toBe(true)
+
+  // Clear takes all of ours, and the line again
+  await tool(strings.annotation.clear).click()
+  await expectPixel(page, middle, BACKGROUND)
+  await expect(tool(strings.annotation.undo)).toBeDisabled()
+})
+
+test('the laser pointer shows, leaves nothing, and fades within three seconds', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 800 })
+  await open(page)
+  await controls(page).getByRole('button', { name: strings.screenShare.annotate }).click()
+  await toolbar(page)
+    .getByRole('button', { name: strings.annotation.modes.laser, exact: true })
+    .click()
+  const at = await expectedAt(page, { x: 0.5, y: 0.5 }, WIDE)
+  await page.mouse.move(at.x, at.y)
+  await expectPixel(page, at, ANNOTATION_RED)
+  const started = Date.now()
+  await expect.poll(async () => near(await pixel(page, at), BACKGROUND, 8), { timeout: 6_000 }).toBe(true)
+  expect(Date.now() - started).toBeLessThan(4_500)
+})
+
+test('the toolbar works in fullscreen, and by keyboard alone', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 700 })
+  await open(page)
+  await controls(page).getByRole('button', { name: strings.screenShare.annotate }).click()
+  await expect(toolbar(page)).toBeVisible()
+  await controls(page).getByRole('button', { name: strings.screenShare.fullscreen }).click()
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.tagName)).toBe('FIGURE')
+  await expect(toolbar(page)).toBeVisible()
+
+  // Tab to the text tool: its box opens in the middle, typing and Enter make a mark
+  const text = toolbar(page).getByRole('button', { name: strings.annotation.modes.text, exact: true })
+  await text.focus()
+  await page.keyboard.press('Enter')
+  const box = page.getByRole('textbox', { name: strings.annotation.textLabel })
+  await expect(box).toBeFocused()
+  await page.keyboard.type('OK')
+  await page.keyboard.press('Enter')
+  await expect(box).toHaveCount(0)
+  // Undo from the bar, by keyboard too: the arrow keys and Enter
+  const undo = toolbar(page).getByRole('button', { name: strings.annotation.undo })
+  await expect(undo).toBeEnabled()
+  await undo.focus()
+  await page.keyboard.press('Enter')
+  await expect(undo).toBeDisabled()
+  // Folded and back
+  const fold = toolbar(page).getByRole('button', { name: strings.annotation.fold })
+  await fold.focus()
+  await page.keyboard.press('Enter')
+  await expect(text).toHaveCount(0)
+  await toolbar(page).getByRole('button', { name: strings.annotation.unfold }).click()
+  await expect(text).toBeVisible()
+  await controls(page).getByRole('button', { name: strings.screenShare.exitFullscreen }).click()
+})
+
+test('on a phone-sized tile the toolbar stays inside it, and its parts are big enough', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 500 },
+    hasTouch: true,
+    isMobile: true,
+    locale: 'zh-TW',
+  })
+  const page = await context.newPage()
+  await page.goto(`${origin}/`)
+  await expect(controls(page)).toBeAttached()
+  await controls(page).getByRole('button', { name: strings.screenShare.annotate }).tap()
+  await expect(toolbar(page)).toBeVisible()
+  const bar = (await toolbar(page).boundingBox())!
+  const frame = (await tile(page).boundingBox())!
+  expect(bar.x).toBeGreaterThanOrEqual(frame.x)
+  expect(bar.x + bar.width).toBeLessThanOrEqual(frame.x + frame.width)
+  const pen = (await toolbar(page)
+    .getByRole('button', { name: strings.annotation.modes.pen, exact: true })
+    .boundingBox())!
+  expect(Math.round(pen.width)).toBeGreaterThanOrEqual(44)
+  // Colours are behind one button here
+  await toolbar(page).getByRole('button', { name: strings.annotation.style }).tap()
+  await expect(
+    toolbar(page).getByRole('button', { name: strings.annotation.colors.teal, exact: true }),
+  ).toBeVisible()
+  // It folds out of the way
+  await toolbar(page).getByRole('button', { name: strings.annotation.fold }).tap()
+  const folded = (await toolbar(page).boundingBox())!
+  expect(folded.height).toBeLessThan(bar.height + 1)
+  await context.close()
 })
 
 test('the overlay is sharp and lined up at a high pixel ratio', async ({ browser }) => {
@@ -338,6 +547,13 @@ test('the tile and its controls have no axe violations', async ({ page }) => {
   await open(page)
   await controls(page).getByRole('button', { name: strings.screenShare.annotate }).click()
   await expect(canvas(page)).toBeVisible()
+  await expect(toolbar(page)).toBeVisible()
+  // The text box and the compact toolbar's colours are checked too
+  await toolbar(page)
+    .getByRole('button', { name: strings.annotation.modes.text, exact: true })
+    .focus()
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('textbox', { name: strings.annotation.textLabel })).toBeVisible()
   const results = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
     // The harness page itself has no landmarks or heading: the room does

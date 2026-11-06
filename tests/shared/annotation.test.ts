@@ -1,19 +1,23 @@
 import { describe, expect, it } from 'vitest'
+import { ANNOTATION_FRAME_CHARS, LASER_FADE_MS } from '../../shared/annotation-limits.ts'
 import {
   ANNOTATION_COLORS,
   MAX_ANNOTATION_TEXT_CHARS,
   MAX_STROKES,
   MAX_STROKE_ID_CHARS,
   MAX_STROKE_POINTS,
+  applyStrokeUpdate,
   beginStroke,
   clearStrokes,
   extendStroke,
   finishStroke,
+  laserOpacity,
   lastStrokeBy,
   lineWidthRatio,
   newStrokeId,
   normalizeAnnotationText,
   normalizePoint,
+  parseAnnotationOps,
   parseStroke,
   putStroke,
   removeStroke,
@@ -24,7 +28,7 @@ import {
   type NormPoint,
   type Stroke,
 } from '../../shared/annotation.ts'
-import { MAX_CLIENT_MESSAGE_CHARS } from '../../shared/protocol.ts'
+import { MAX_CLIENT_MESSAGE_CHARS, parseClientMessage } from '../../shared/protocol.ts'
 import { annotation } from '../../src/styles/tokens.ts'
 
 const WIDE = 16 / 9
@@ -409,5 +413,96 @@ describe('the palette', () => {
 
   it('has a dark and a light choice, for white documents and dark terminals', () => {
     expect(annotation.colors.ink).not.toBe(annotation.colors.white)
+  })
+})
+
+describe('the wire (J2)', () => {
+  const pen = {
+    id: 's',
+    by: 'forged',
+    tool: 'pen',
+    color: 'rose',
+    width: 'thin',
+    points: [[0.1, 0.1]],
+  }
+
+  it('parses each op, leaving `by` for the room to stamp', () => {
+    expect(
+      parseAnnotationOps([
+        { op: 'add', stroke: pen, live: true, extra: 1 },
+        { op: 'update', id: 's', at: 1, points: [[0.2, 0.2]] },
+        { op: 'remove', id: 's' },
+        { op: 'clear', by: 'someone' },
+        { op: 'laser', at: [0.5, 0.5], color: 'amber' },
+        { op: 'laser', at: null, color: 'amber' },
+      ]),
+    ).toEqual([
+      { op: 'add', stroke: { ...pen, by: '' }, live: true },
+      { op: 'update', id: 's', at: 1, points: [[0.2, 0.2]] },
+      { op: 'remove', id: 's' },
+      // Clearing someone else's is J3's: what a browser asks for is only ever its own
+      { op: 'clear' },
+      { op: 'laser', at: [0.5, 0.5], color: 'amber' },
+      { op: 'laser', at: null, color: 'amber' },
+    ])
+  })
+
+  it('refuses anything else, whole', () => {
+    for (const ops of [
+      null,
+      'x',
+      [],
+      [{ op: 'nope' }],
+      [{ op: 'add' }],
+      [{ op: 'add', stroke: null }],
+      [{ op: 'add', stroke: { ...pen, id: 'x'.repeat(MAX_STROKE_ID_CHARS + 1) } }],
+      [{ op: 'update', id: '', at: 0, points: [[0, 0]] }],
+      [{ op: 'update', id: 's', at: 0.5, points: [[0, 0]] }],
+      [{ op: 'update', id: 's', at: 0, points: [] }],
+      [{ op: 'update', id: 's', at: 0, points: [[2, 0]] }],
+      [{ op: 'remove' }],
+      [{ op: 'laser', at: [0.5, 0.5], color: 'pink' }],
+      [{ op: 'clear' }, 7],
+      Array.from({ length: 33 }, () => ({ op: 'clear' })),
+    ]) {
+      expect(parseAnnotationOps(ops)).toBeNull()
+    }
+  })
+
+  it('applies an update: appended, a head moved, or thinned from the start', () => {
+    const stroke = parseStroke({ ...pen, points: [[0.1, 0.1], [0.2, 0.2]] })!
+    expect(applyStrokeUpdate(stroke, 2, [[0.3, 0.3]])?.points).toEqual([
+      [0.1, 0.1],
+      [0.2, 0.2],
+      [0.3, 0.3],
+    ])
+    expect(applyStrokeUpdate(stroke, 0, [[0.9, 0.9]])?.points).toEqual([[0.9, 0.9]])
+    expect(applyStrokeUpdate(stroke, 3, [[0.3, 0.3]])).toBeNull()
+    const arrow = { ...stroke, tool: 'arrow' as const }
+    expect(applyStrokeUpdate(arrow, 1, [[0.5, 0.5]])?.points).toEqual([
+      [0.1, 0.1],
+      [0.5, 0.5],
+    ])
+    expect(applyStrokeUpdate(arrow, 2, [[0.5, 0.5]])).toBeNull()
+    expect(applyStrokeUpdate({ ...stroke, tool: 'text', text: 'x' }, 0, [[0.5, 0.5]])).toBeNull()
+  })
+
+  it('a whole stroke at the point limit fits one client frame', () => {
+    const points = Array.from({ length: MAX_STROKE_POINTS }, () => [0.1234, 0.5678])
+    const frame = JSON.stringify({
+      t: 'annotate',
+      share: 'x'.repeat(36),
+      ops: [{ op: 'add', stroke: { ...pen, id: 'x'.repeat(MAX_STROKE_ID_CHARS), points } }],
+    })
+    expect(frame.length).toBeLessThan(ANNOTATION_FRAME_CHARS)
+    expect(ANNOTATION_FRAME_CHARS).toBeLessThan(MAX_CLIENT_MESSAGE_CHARS)
+    expect(parseClientMessage(frame)).not.toBeNull()
+  })
+
+  it('a laser fades from 1 to 0 over LASER_FADE_MS', () => {
+    expect(laserOpacity(1000, 1000)).toBe(1)
+    expect(laserOpacity(1000, 1000 + LASER_FADE_MS / 2)).toBeCloseTo(0.5)
+    expect(laserOpacity(1000, 1000 + LASER_FADE_MS)).toBe(0)
+    expect(laserOpacity(1000, 1000 + LASER_FADE_MS * 2)).toBe(0)
   })
 })

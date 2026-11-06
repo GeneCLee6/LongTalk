@@ -3,6 +3,7 @@ import {
   arrowHeadRatio,
   lineWidthRatio,
   textSizeRatio,
+  type AnnotationColor,
   type NormPoint,
   type Stroke,
 } from '../../shared/annotation.ts'
@@ -98,6 +99,56 @@ export function drawStroke(
     }
     ctx.stroke()
   }
+  ctx.restore()
+}
+
+const LASER_CSS_RADIUS = 6
+
+/** The laser pointer (e7-t03): a glowing dot, the same size on every picture */
+export function drawLaser(
+  ctx: CanvasRenderingContext2D,
+  at: NormPoint,
+  color: AnnotationColor,
+  opacity: number,
+  rect: Rect,
+  ratio: number,
+): void {
+  const { x, y } = toDevice(rect, ratio, at)
+  const radius = LASER_CSS_RADIUS * ratio
+  ctx.save()
+  ctx.globalAlpha = opacity * annotation.laserGlowAlpha
+  ctx.fillStyle = annotation.colors[color]
+  ctx.beginPath()
+  ctx.arc(x, y, radius * 2, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.globalAlpha = opacity
+  ctx.beginPath()
+  ctx.arc(x, y, radius, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
+
+/** Who is drawing or pointing (PRD E7: 名字標籤): a small tag beside the tip */
+export function drawNameTag(
+  ctx: CanvasRenderingContext2D,
+  name: string,
+  at: NormPoint,
+  rect: Rect,
+  ratio: number,
+): void {
+  const { x, y } = toDevice(rect, ratio, at)
+  const size = 12 * ratio
+  const pad = 4 * ratio
+  const offset = 10 * ratio
+  ctx.save()
+  ctx.font = `600 ${size}px ${font.ui}`
+  ctx.textBaseline = 'middle'
+  const width = (ctx.measureText?.(name).width ?? 0) + pad * 2
+  const height = size + pad * 2
+  ctx.fillStyle = annotation.tagBackground
+  ctx.fillRect(x + offset, y + offset, width, height)
+  ctx.fillStyle = annotation.tagText
+  ctx.fillText(name, x + offset + pad, y + offset + height / 2)
   ctx.restore()
 }
 

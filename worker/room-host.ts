@@ -1,3 +1,9 @@
+import type { AnnotationOp, Stroke } from '../shared/annotation.ts'
+import {
+  ANNOTATION_FLUSH_MS,
+  ANNOTATION_FRAME_RATE,
+  ANNOTATION_STROKE_RATE,
+} from '../shared/annotation-limits.ts'
 import { CHAT_CHUNK, CHAT_HISTORY, ChatRateLimit, type ChatMessage } from '../shared/chat.ts'
 import type { ChatFile } from '../shared/files.ts'
 import {
@@ -69,6 +75,7 @@ import {
   type PasswordRecord,
 } from './password.ts'
 import { authorize, type Action } from './roles.ts'
+import { RoomAnnotations, type AnnotationSegment, type AnnotationWrite } from './room-annotations.ts'
 import { Scheduler, type Schedule } from './scheduler.ts'
 import type { PersistentRoomInfo } from '../shared/account.ts'
 
@@ -214,6 +221,8 @@ export type RestoreExtras = {
   persistent?: PersistentRecord | null
   /** Files shared in the chat and uploads under way (I5) */
   files?: FilesState | null
+  /** The strokes on the shares, as stored (J2) */
+  annotations?: readonly AnnotationSegment[]
 }
 
 /** What survives the object being evicted */
@@ -244,6 +253,8 @@ export interface RoomStorage {
   savePersistent?(record: PersistentRecord | null): void
   /** Files shared in the chat and uploads under way (I5), saved whenever they change */
   saveFiles?(state: FilesState): void
+  /** Segments of strokes that changed (J2, worker/room-annotations.ts); optional like the above */
+  saveAnnotations?(writes: AnnotationWrite[]): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -306,6 +317,12 @@ export interface RoomHostDeps {
    * effort: whatever is missed goes with the hourly sweep (worker/sweep.ts).
    */
   filesGone?: (gone: FilesGone) => void
+  /**
+   * Runs `work` after `ms`, keeping the object awake until then (J2: the adapter's setTimeout; a
+   * pending timer holds off hibernation, so strokes reach storage before memory goes). Without it
+   * strokes are stored by the next alarm. An eviction before it fires loses at most that long.
+   */
+  later?: (ms: number, work: () => void) => void
 }
 
 export type Admission = { ok: true } | { ok: false; code: number; reason: string }
@@ -403,6 +420,13 @@ export class RoomHost {
    * after an eviction everyone counts from the restore
    */
   private readonly cameIn = new Map<string, number>()
+  /** The strokes on the shares (J2, e7-t04) */
+  private annotations = new RoomAnnotations()
+  /** A storage write of the strokes is on its way (`later`) */
+  private annotationsFlushing = false
+  /** `annotate` frames and new strokes per member (J2), in memory like the chat's */
+  private readonly annotationFrames = new ChatRateLimit(ANNOTATION_FRAME_RATE)
+  private readonly annotationStrokes = new ChatRateLimit(ANNOTATION_STROKE_RATE)
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -457,6 +481,8 @@ export class RoomHost {
     this.chat = [...chat].sort((a, b) => a.id - b.id).slice(-CHAT_HISTORY)
     this.chatId = this.chat.at(-1)?.id ?? 0
     this.files = new RoomFiles(info ? extras.files : null)
+    this.annotationFrames.clear()
+    this.annotationStrokes.clear()
     this.reported = 0
     this.usage = usage?.state ?? 'normal'
     this.usageAt = usage?.at ?? this.deps.now()
@@ -522,6 +548,13 @@ export class RoomHost {
     if (JSON.stringify(recording) !== JSON.stringify(recordings)) {
       this.info = { ...this.info!, recordings: recording }
     }
+    // Strokes of a share that ended before they left storage go now (J2)
+    const sharing = this.info?.shares ?? {}
+    this.annotations = new RoomAnnotations(
+      info ? (extras.annotations ?? []) : [],
+      (share) => sharing[share] !== undefined,
+    )
+    this.flushAnnotations()
     const restoredAt = this.deps.now()
     for (const id of this.members.keys()) this.cameIn.set(id, restoredAt)
     this.sent = info ? this.view() : null
@@ -677,6 +710,7 @@ export class RoomHost {
    */
   alarm(): AlarmResult {
     const result: AlarmResult = { swept: false, closed: false }
+    this.flushAnnotations()
     for (const job of this.schedule.take(this.deps.now())) {
       if (job === 'sweep') {
         this.sweep()
@@ -774,6 +808,8 @@ export class RoomHost {
     if (!conn) return
     this.conns.delete(connId)
     this.socketRate.forget(connId)
+    // The last socket gone: nothing keeps the object awake, so the strokes are stored now (J2)
+    if (this.conns.size === 0) this.flushAnnotations()
     if (conn.member === null) {
       this.reschedule()
       return
@@ -875,7 +911,146 @@ export class RoomHost {
       case 'consent':
         this.consent(conn.member!)
         return
+      case 'annotate':
+        this.annotate(connId, conn.member!, message.share, message.ops)
+        return
     }
+  }
+
+  /**
+   * Who may mark a share (J2, e7-t04). Today the table's row alone; J3's three-state policy
+   * (`annotationPolicy`) belongs here, with the sharer known
+   */
+  private mayAnnotate(memberId: string, _share: string): boolean {
+    return this.allowed(memberId, 'annotate')
+  }
+
+  /**
+   * `annotate` (J2, e7-t03, e7-t04): one frame of what a member did to a share's layer. Decided here
+   * (CLAUDE.md rule 1): the member may annotate, the share exists, a stroke they change or take
+   * away is theirs (J3 adds clearing others'), and they are within the limits
+   * (shared/annotation-limits.ts). What is accepted goes to everyone else in the room as one frame;
+   * the sender hears only about what it must take back. A share that just stopped is not an error:
+   * the sender is told the layer is gone.
+   */
+  private annotate(connId: string, memberId: string, share: string, ops: AnnotationOp[]): void {
+    const now = this.deps.now()
+    const added = ops.flatMap((op) => (op.op === 'add' ? [op.stroke.id] : []))
+    const refuse = (code: 'forbidden' | 'annotation_limit', ids: readonly string[]) => {
+      this.deps.sockets.send(connId, { t: 'error', code })
+      if (ids.length === 0) return
+      this.sendLayer([connId], share, null, ids.map((id) => ({ op: 'remove', id })))
+    }
+    if (!this.mayAnnotate(memberId, share)) {
+      refuse('forbidden', added)
+      return
+    }
+    if (!this.info?.shares[share]) {
+      this.sendLayer([connId], share, null, [{ op: 'clear' }])
+      return
+    }
+    if (!this.annotationFrames.take(memberId, now)) {
+      refuse('annotation_limit', added)
+      return
+    }
+    const onward: AnnotationOp[] = []
+    const back: AnnotationOp[] = []
+    const fellOut = (ids: readonly string[]) => {
+      for (const id of ids) {
+        onward.push({ op: 'remove', id })
+        back.push({ op: 'remove', id })
+      }
+    }
+    let limited = false
+    for (const op of ops) {
+      switch (op.op) {
+        case 'add': {
+          const { id } = op.stroke
+          if (!this.annotations.has(share, id) && !this.annotationStrokes.take(memberId, now)) {
+            limited = true
+            back.push({ op: 'remove', id })
+            break
+          }
+          const stroke: Stroke = { ...op.stroke, by: memberId }
+          const put = this.annotations.put(share, stroke)
+          // Someone else's id: never a stroke of ours to replace
+          if (!put) {
+            back.push({ op: 'remove', id })
+            break
+          }
+          onward.push(op.live ? { op: 'add', stroke, live: true } : { op: 'add', stroke })
+          fellOut(put.evicted)
+          break
+        }
+        case 'update': {
+          const put = this.annotations.update(share, memberId, op.id, op.at, op.points)
+          if (put) {
+            onward.push(op)
+            fellOut(put.evicted)
+          }
+          break
+        }
+        case 'remove':
+          if (this.annotations.remove(share, memberId, op.id)) onward.push(op)
+          break
+        case 'clear':
+          this.annotations.clearBy(share, memberId)
+          onward.push({ op: 'clear', by: memberId })
+          break
+        case 'laser':
+          onward.push(op)
+          break
+      }
+    }
+    if (limited) this.deps.sockets.send(connId, { t: 'error', code: 'annotation_limit' })
+    if (back.length > 0) this.sendLayer([connId], share, null, back)
+    if (onward.length > 0) {
+      const others = [...this.conns]
+        .filter(([id, conn]) => id !== connId && this.inRoom(conn))
+        .map(([id]) => id)
+      this.sendLayer(others, share, memberId, onward)
+    }
+    this.flushAnnotationsLater()
+  }
+
+  private sendLayer(
+    conns: readonly string[],
+    share: string,
+    by: string | null,
+    ops: AnnotationOp[],
+  ): void {
+    if (conns.length === 0) return
+    const frame: ServerMessage = { t: 'annotation', share, by, ops }
+    for (const id of conns) this.deps.sockets.send(id, frame)
+  }
+
+  /** Writes the changed segments of strokes, at most every ANNOTATION_FLUSH_MS (J2) */
+  private flushAnnotationsLater(): void {
+    if (this.annotationsFlushing || !this.annotations.hasWrites || !this.deps.later) return
+    this.annotationsFlushing = true
+    this.deps.later(ANNOTATION_FLUSH_MS, () => {
+      this.annotationsFlushing = false
+      this.flushAnnotations()
+    })
+  }
+
+  /** Writes the changed segments of strokes now */
+  private flushAnnotations(): void {
+    if (!this.annotations.hasWrites) return
+    this.deps.storage.saveAnnotations?.(this.annotations.takeWrites())
+  }
+
+  /** A share stopped (or its member left): its layer goes, for everyone and in storage at once */
+  private clearShareAnnotations(share: string): void {
+    if (!this.annotations.clearShare(share)) return
+    this.flushAnnotations()
+    const conns = [...this.conns].filter(([, conn]) => this.inRoom(conn)).map(([id]) => id)
+    this.sendLayer(conns, share, null, [{ op: 'clear' }])
+  }
+
+  /** The strokes on a share, oldest first (for tests and the recorder's side of the room) */
+  annotationsOf(share: string): readonly Stroke[] {
+    return this.annotations.strokes(share)
   }
 
   /**
@@ -1615,6 +1790,7 @@ export class RoomHost {
     const { [memberId]: _ended, ...rest } = shares
     this.info = { ...this.info!, shares: rest }
     this.deps.storage.saveRoom(this.info)
+    this.clearShareAnnotations(memberId)
     this.publish()
   }
 
@@ -2029,6 +2205,8 @@ export class RoomHost {
       state: this.sent ?? this.view(),
     })
     this.sendChatHistory(connId)
+    // The strokes on the shares (J2): for someone late, and to catch up after a reconnect
+    for (const frame of this.annotations.snapshot()) this.deps.sockets.send(connId, frame)
   }
 
   /** A connection whose member is in the room (not waiting, F2): it gets patches and chat */
@@ -2054,6 +2232,7 @@ export class RoomHost {
       const { [memberId]: _left, ...rest } = this.info.shares
       this.info = { ...this.info, shares: rest }
       this.deps.storage.saveRoom(this.info)
+      this.clearShareAnnotations(memberId)
     }
     // So does someone spotlighted (G2)
     if (this.info?.spotlight === memberId) {
@@ -2071,6 +2250,8 @@ export class RoomHost {
     this.chatRate.forget(memberId)
     this.reactionRate.forget(memberId)
     this.signalRate.forget(memberId)
+    this.annotationFrames.forget(memberId)
+    this.annotationStrokes.forget(memberId)
     this.lobbies.delete(memberId)
     this.cameIn.delete(memberId)
   }
@@ -2219,6 +2400,10 @@ export class RoomHost {
     this.chatRate.clear()
     this.reactionRate.clear()
     this.signalRate.clear()
+    // Whatever is stored goes with `storage.clear` below
+    this.annotations.reset()
+    this.annotationFrames.clear()
+    this.annotationStrokes.clear()
     this.bans.clear()
     this.cameIn.clear()
     this.lobbies.clear()

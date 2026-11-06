@@ -9,6 +9,7 @@ import {
   recordingFileName,
   VIDEO_TYPES,
 } from '../../src/record/format.ts'
+import type { Stroke } from '../../shared/annotation.ts'
 import {
   Composer,
   type Context2D,
@@ -289,6 +290,55 @@ describe('the composer (e8-t01)', () => {
     expect(calls).toContain('fillText:Sam 的分享畫面')
     composer.dispose()
     expect(opened.size).toBe(0)
+  })
+})
+
+describe('marks on the share in the recording (J2)', () => {
+  const stroke = {
+    id: 's',
+    by: 'b',
+    tool: 'pen',
+    color: 'rose',
+    width: 'medium',
+    points: [
+      [0.1, 0.1],
+      [0.9, 0.9],
+    ],
+  } as const
+
+  it('are drawn over the share, clipped to the picture, read anew each frame', () => {
+    const { ctx, calls } = fakeContext2D()
+    const { factory } = fakeVideos()
+    const composer = new Composer(ctx, 1280, 720, factory)
+    let marks: readonly Stroke[] = []
+    const scene: Scene = {
+      ...EMPTY_SCENE,
+      share: { id: 's', name: 'Sam', video: track('scr'), marks: () => marks },
+    }
+    composer.draw(scene)
+    expect(calls).not.toContain('stroke')
+    marks = [{ ...stroke, points: [...stroke.points] }]
+    composer.draw(scene)
+    expect(calls).toContain('clip')
+    expect(calls.filter((call) => call === 'stroke')).toHaveLength(1)
+    composer.dispose()
+  })
+
+  it('need the picture: none while the share is left out or has no frames', () => {
+    const { ctx, calls } = fakeContext2D()
+    const { factory } = fakeVideos()
+    const composer = new Composer(ctx, 1280, 720, factory)
+    composer.draw({
+      ...EMPTY_SCENE,
+      share: {
+        id: 's',
+        name: 'Sam',
+        video: null,
+        marks: () => [{ ...stroke, points: [...stroke.points] }],
+      },
+    })
+    expect(calls).not.toContain('stroke')
+    composer.dispose()
   })
 })
 

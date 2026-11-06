@@ -3,9 +3,17 @@
 // (styles/tokens.ts: the room is always dark), the nameplates like the tiles'. One canvas and
 // one off-screen <video> per track for the whole recording: a video element is made when a track
 // appears and let go when it leaves, nothing is made per frame.
+import { drawStroke } from '../annotate/draw.ts'
 import { strings } from '../strings.ts'
 import { avatar, avatarColor, font, palette } from '../styles/tokens.ts'
-import { fitVideo, placeScene, type Placement, type Rect, type Scene } from './scene.ts'
+import {
+  fitVideo,
+  placeScene,
+  type Placement,
+  type Rect,
+  type Scene,
+  type SceneShare,
+} from './scene.ts'
 
 const colors = palette.dark
 
@@ -139,8 +147,28 @@ export class Composer {
     ctx.fillStyle = colors.tileTo
     ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
     const source = this.frame(share.video)
-    if (source) this.drawVideo(source, rect, 'contain')
+    if (source) {
+      this.drawVideo(source, rect, 'contain')
+      this.drawMarks(source, rect, share)
+    }
     this.nameplate(rect, strings.record.shareLabel(share.name), false)
+  }
+
+  /** The marks on the share (J2), on the picture where the video went (`contain`) */
+  private drawMarks(source: FrameSource, rect: Rect, share: SceneShare): void {
+    const strokes = share.marks?.() ?? []
+    const fitted = fitVideo(source.videoWidth, source.videoHeight, rect, 'contain')
+    if (strokes.length === 0 || !fitted) return
+    const { ctx } = this
+    const { x, y, width, height } = fitted.target
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x, y, width, height)
+    ctx.clip()
+    // A real context whenever there are marks: the tests' fake draws no shares with any
+    const canvas = ctx as CanvasRenderingContext2D
+    for (const stroke of strokes) drawStroke(canvas, stroke, fitted.target, 1)
+    ctx.restore()
   }
 
   private drawTile(placement: Extract<Placement, { kind: 'tile' }>): void {
