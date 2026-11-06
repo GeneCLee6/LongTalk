@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from '@playwright/test'
+import { expect, type Browser, type Page } from '@playwright/test'
 import { zhTW as strings } from '../src/i18n/zh-TW.ts'
 
 // L1 (e2-t18, e10-t01, AC-10.1) through the real Realtime SFU: a member on a phone-sized screen
@@ -70,18 +70,11 @@ const pageHasPictures = (page: Page, expected: number) =>
     )
     .toBeGreaterThanOrEqual(expected)
 
-test('receives only the cameras in view, and the others when they come into view', async ({
-  browser,
-}) => {
-  test.setTimeout(180_000)
-  const opener = await browser.newContext({ locale: 'zh-TW' })
-  const home = await opener.newPage()
-  await home.goto('/')
-  await home.getByRole('button', { name: strings.home.createRoom }).click()
-  await home.waitForURL(/\/r\/[1-9A-HJ-NP-Za-km-z]{10}$/)
-  const url = home.url()
-  await opener.close()
-
+/**
+ * Run from a test that already has a room (`url`), left empty: every room made on a preview counts
+ * against I1's limit for the network, and the e2e suite is at it (shared/abuse.ts ROOM_CREATE_LIMITS)
+ */
+export async function receivesOnlyWhatIsInView(browser: Browser, url: string): Promise<void> {
   const phone = await join(browser, url, 'Zoe', {
     hidden: false,
     viewport: { width: 390, height: 844 },
@@ -111,4 +104,4 @@ test('receives only the cameras in view, and the others when they come into view
   await phone.getByRole('button', { name: strings.stage.page(1, 2) }).click()
   await pageHasPictures(phone, 4)
   await Promise.all(members.map((member) => member.context().close()))
-})
+}

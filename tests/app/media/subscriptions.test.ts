@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   CameraSight,
   cameraWanted,
+  GRACE_BATCH_MS,
   HIDDEN_GRACE_MS,
   MAX_SUBSCRIBE_BATCH,
   SIGHT_SETTLE_MS,
@@ -56,8 +57,8 @@ describe('CameraSight', () => {
     sight.update(new Set(), 1000)
     expect(sight.wanted('a', 1000 + UNSEEN_GRACE_MS - 1, true)).toBe(true)
     expect(sight.wanted('a', 1000 + UNSEEN_GRACE_MS, true)).toBe(false)
-    expect(sight.nextChange(2000)).toBe(1000 + UNSEEN_GRACE_MS)
-    expect(sight.nextChange(1000 + UNSEEN_GRACE_MS)).toBeNull()
+    expect(sight.nextChange(2000)).toBe(1000 + UNSEEN_GRACE_MS + GRACE_BATCH_MS)
+    expect(sight.nextChange(1000 + UNSEEN_GRACE_MS + GRACE_BATCH_MS)).toBeNull()
     // With the tab in the background the grace is longer
     expect(sight.wanted('a', 1000 + UNSEEN_GRACE_MS, true, HIDDEN_GRACE_MS)).toBe(true)
   })

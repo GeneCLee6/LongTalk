@@ -392,6 +392,8 @@ export class RoomMedia {
   private readonly sight: CameraSight | null
   /** Looking at `sight` again when an answer changes by itself */
   private sightTimer: Timer | null = null
+  /** The clock reading of the look under way; null: read the clock */
+  private sightClock: number | null = null
   /** The cameras a recording made here draws (L1, setVideoNeeded), by trackKey */
   private needed: ReadonlySet<string> = new Set()
   private readonly pollIntervalMs: number
@@ -679,7 +681,7 @@ export class RoomMedia {
     if (!this.sight) return true
     const held = key in this.state.received || this.pending.has(key)
     return cameraWanted({
-      seen: this.sight.wanted(key, this.now(), held, this.sightGrace()),
+      seen: this.sight.wanted(key, this.sightClock ?? this.now(), held, this.sightGrace()),
       kept: this.kept.includes(key),
       needed: this.needed.has(key),
       hidden: this.demand?.pageHidden ?? false,
@@ -696,19 +698,27 @@ export class RoomMedia {
     if (this.sight.update(this.demand.inSight(), this.now())) this.lookAgain()
   }
 
-  /** Reconciles when an answer of the sight rules changes next */
-  private lookAgain(): void {
+  /**
+   * Reconciles when an answer of the sight rules changes next. One clock reading for a look and
+   * the next timer: an answer that changes in the ms between the two is not lost.
+   */
+  private lookAgain(from = this.now()): void {
     if (this.sightTimer !== null) clearTimeout(this.sightTimer)
     this.sightTimer = null
     if (this.closed || !this.sight) return
-    const now = this.now()
-    const at = this.sight.nextChange(now, this.sightGrace())
+    const at = this.sight.nextChange(from, this.sightGrace())
     if (at === null) return
-    this.sightTimer = setTimeout(() => {
-      this.sightTimer = null
-      this.reconcile()
-      this.lookAgain()
-    }, at - now)
+    this.sightTimer = setTimeout(
+      () => {
+        this.sightTimer = null
+        const now = this.now()
+        this.sightClock = now
+        this.reconcile()
+        this.sightClock = null
+        this.lookAgain(now)
+      },
+      Math.max(0, at - this.now()),
+    )
   }
 
   /** Subscribes to what is desired and missing, unsubscribes what is received and not desired */

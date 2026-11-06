@@ -28,6 +28,11 @@ export const SIGHT_SETTLE_MS = 150
 export const UNSEEN_GRACE_MS = 10_000
 /** The same with the tab in the background */
 export const HIDDEN_GRACE_MS = 30_000
+/**
+ * Looking again this long after a grace ends: a page's tiles report one by one, a few ms apart,
+ * and they should all go in one batch, one SDP exchange
+ */
+export const GRACE_BATCH_MS = 100
 /** Subscriptions in one SDP exchange; worker/sfu.ts refuses more */
 export const MAX_SUBSCRIBE_BATCH = 16
 
@@ -77,7 +82,9 @@ export class CameraSight {
     }
     for (const sighting of this.#sightings.values()) {
       if (sighting.since !== null) consider(sighting.since + SIGHT_SETTLE_MS)
-      else if (sighting.leftAt !== null) consider(sighting.leftAt + graceMs)
+      else if (sighting.leftAt !== null && now - sighting.leftAt < graceMs + GRACE_BATCH_MS) {
+        consider(sighting.leftAt + graceMs + GRACE_BATCH_MS)
+      }
     }
     return next
   }

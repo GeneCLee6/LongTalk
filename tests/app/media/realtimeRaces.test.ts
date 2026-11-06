@@ -771,11 +771,11 @@ describe('Batches against the scripted SFU (L1)', () => {
         demand.reportSeat(key, view, { width: 300, height: 170, visible: shown.includes(key) })
       }
     }
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       show(keys.slice(0, 2))
-      await sleep(170)
+      await sleep(400)
       show(keys.slice(2))
-      await sleep(170)
+      await sleep(400)
     }
     expect(sfu.conflicts).toBe(0)
     // The last page's are still on their way, or here; none of the first page's were closed

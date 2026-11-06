@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 // The browsers run in zh-TW (playwright.config.ts)
 import { zhTW as strings } from '../src/i18n/zh-TW.ts'
+import { receivesOnlyWhatIsInView } from './subscribeScenario.ts'
 
 // G4 (e4-t12, e4-t13): light checks on the deployed preview. The service worker registers and
 // takes control, precaches the shell, never answers /api/* (nor keeps any /api answer), and the
@@ -59,6 +60,7 @@ test('the service worker keeps the shell, opens it offline, and never touches /a
 })
 
 test('M mutes and unmutes, and Space held while muted talks', async ({ browser }) => {
+  test.setTimeout(240_000)
   const context = await browser.newContext({
     locale: 'zh-TW',
     permissions: ['camera', 'microphone'],
@@ -93,4 +95,8 @@ test('M mutes and unmutes, and Space held while muted talks', async ({ browser }
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog', { name: strings.shortcuts.title })).toHaveCount(0)
   await context.close()
+  // L1 (e2-t18, e10-t01): the same room, as a large one seen on a phone
+  const url = page.url()
+  await page.context().close()
+  await receivesOnlyWhatIsInView(browser, url)
 })

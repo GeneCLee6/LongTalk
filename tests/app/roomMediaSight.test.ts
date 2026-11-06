@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ClientMessage, MemberTrack } from '../../shared/protocol.ts'
 import { FakeSfu, type FakeTransport } from '../../src/media/FakeTransport.ts'
-import { HIDDEN_GRACE_MS, SIGHT_SETTLE_MS, UNSEEN_GRACE_MS } from '../../src/media/subscriptions.ts'
+import {
+  GRACE_BATCH_MS,
+  HIDDEN_GRACE_MS,
+  SIGHT_SETTLE_MS,
+  UNSEEN_GRACE_MS,
+} from '../../src/media/subscriptions.ts'
 import { LAYER_DEBOUNCE_MS, RoomMedia } from '../../src/room/RoomMedia.ts'
 import { VideoDemandStore } from '../../src/room/videoDemand.ts'
 
@@ -141,13 +146,26 @@ describe('RoomMedia: only what is in sight (L1)', () => {
     for (const key of cams) seat(key, false)
     await vi.advanceTimersByTimeAsync(UNSEEN_GRACE_MS - 1)
     expect(transport.unsubscribeBatches).toEqual([])
-    await past(1)
+    await past(GRACE_BATCH_MS)
     expect(transport.unsubscribeBatches).toEqual([3])
     expect(received()).toEqual([...mics].sort())
     expect(bob.getState().unseenVideos).toHaveLength(3)
     seat(cams[1], true)
     await past(SIGHT_SETTLE_MS)
     expect(received()).toContain(cams[1])
+  })
+
+  it('tiles leaving a few ms apart all go, in one batch', async () => {
+    const { transport, cams, seat, received, mics } = await room(4)
+    for (const key of cams) seat(key, true)
+    await past(SIGHT_SETTLE_MS)
+    for (const key of cams) {
+      seat(key, false)
+      await vi.advanceTimersByTimeAsync(3)
+    }
+    await past(UNSEEN_GRACE_MS + GRACE_BATCH_MS)
+    expect(transport.unsubscribeBatches).toEqual([4])
+    expect(received()).toEqual([...mics].sort())
   })
 
   it('subscribes ahead for the pointer on the pager, at the lowest layer', async () => {
@@ -188,7 +206,7 @@ describe('RoomMedia: only what is in sight (L1)', () => {
     demand.setPageHidden(true)
     await vi.advanceTimersByTimeAsync(UNSEEN_GRACE_MS + 1)
     expect(received()).toContain(cams[0])
-    await past(HIDDEN_GRACE_MS - UNSEEN_GRACE_MS)
+    await past(HIDDEN_GRACE_MS - UNSEEN_GRACE_MS + GRACE_BATCH_MS)
     expect(received()).toEqual([...mics].sort())
     demand.setPageHidden(false)
     await past(SIGHT_SETTLE_MS)
