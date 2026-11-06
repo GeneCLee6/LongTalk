@@ -308,21 +308,22 @@ async function meet(a: Member, b: Member, testInfo: TestInfo) {
     [a, b],
   ] as const) {
     await test.step(`${sharer.engine} shares: ${viewer.engine} sees the screen`, async () => {
-      // Playwright's Linux WebKit cannot run two video encoders side by side: with its camera on,
-      // the camera's encoder starts sending the screen's picture, and the screen's encoder often
-      // ignores every keyframe request, so a viewer never decodes it (14 of 31 runs, 0 of 7 with
-      // the camera off; ADR-001 「WebKit 同時送鏡頭與分享」). Neither LongTalk nor the SFU can put
-      // that right, so here the share is tested alone. Whether Safari itself does this is not
-      // known: DEPLOY.md §5 checks a camera and a share together on a real Mac.
-      const cameraOff = sharer.engine === 'webkit'
-      if (cameraOff) {
-        await toolbarButton(sharer, strings.toolbar.camOn).click()
-        await expect(tile(viewer, sharer)).toContainText(strings.room.camOff)
-      }
+      // Pressed with the camera on, as people do. Playwright's Linux WebKit cannot run two video
+      // encoders side by side (14 of 31 runs lost the share, 0 of 7 with the camera off; ADR-001
+      // 「WebKit 同時送鏡頭與分享」), so the app turns the camera off first there
+      // (`shareStopsCamera`) and brings it back after; Chromium and Firefox send both.
+      const guarded = sharer.engine === 'webkit'
       await toolbarButton(sharer, strings.toolbar.share).click()
       await expect(
         sharer.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
       ).toBeVisible()
+      if (guarded) {
+        await expect(sharer.page.getByText(strings.screenShare.cameraOffForShare)).toBeVisible()
+        await expect(toolbarButton(sharer, strings.toolbar.camOff)).toBeDisabled()
+        await expect(tile(viewer, sharer)).toContainText(strings.room.camOff)
+      } else {
+        await expect(toolbarButton(sharer, strings.toolbar.camOn)).toBeEnabled()
+      }
       await expectSeesShare(viewer, sharer)
       await sharer.page
         .getByRole('region', { name: strings.screenShare.youAreSharing })
@@ -331,7 +332,11 @@ async function meet(a: Member, b: Member, testInfo: TestInfo) {
       await expect(
         viewer.page.getByRole('figure', { name: strings.screenShare.region(sharer.name) }),
       ).toHaveCount(0)
-      if (cameraOff) await toolbarButton(sharer, strings.toolbar.camOff).click()
+      if (guarded) {
+        // Back by itself, and viewers get it again
+        await expect(toolbarButton(sharer, strings.toolbar.camOn)).toBeEnabled()
+        await expectReceiving(viewer, sharer)
+      }
     })
   }
 }

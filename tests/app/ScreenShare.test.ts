@@ -383,3 +383,123 @@ describe("ScreenShare: the share's sound (e3-t04)", () => {
     expect(t.sent.filter((m) => m.t === 'unshare')).toHaveLength(0)
   })
 })
+
+describe('ScreenShare with `prepare` (the camera guard, ShareCameraGuard.ts)', () => {
+  function prepared() {
+    const sent: ClientMessage[] = []
+    const notices: ShareNotice[] = []
+    const track = new ScreenTrack()
+    let finish = () => {}
+    const prepare = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+    const released = vi.fn()
+    const capture = vi.fn(async (): Promise<CaptureResult> => ({
+      ok: true,
+      track: track as unknown as MediaStreamTrack,
+      audio: null,
+    }))
+    const controller = new ScreenShare({
+      capture,
+      send: (message) => sent.push(message),
+      notify: (notice) => notices.push(notice),
+      prepare,
+      released,
+    })
+    controller.setRoom({}, YOU)
+    return { controller, sent, notices, track, capture, prepare, released, finish: () => finish() }
+  }
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('asks the room only after `prepare` is done', async () => {
+    const s = prepared()
+    const running = s.controller.request()
+    await tick()
+    expect(s.controller.getState()).toMatchObject({ phase: 'preparing' })
+    expect(s.sent).toEqual([])
+    s.finish()
+    await running
+    expect(s.controller.getState().phase).toBe('claiming')
+    expect(s.sent).toEqual([{ t: 'share' }])
+    expect(s.released).not.toHaveBeenCalled()
+  })
+
+  it('does not prepare or release when the picker is closed', async () => {
+    const s = prepared()
+    s.capture.mockResolvedValueOnce({ ok: false, problem: 'cancelled' })
+    await s.controller.request()
+    expect(s.prepare).not.toHaveBeenCalled()
+    expect(s.released).not.toHaveBeenCalled()
+    expect(s.controller.getState().phase).toBe('idle')
+  })
+
+  it('stopping while preparing never asks the room', async () => {
+    const s = prepared()
+    const running = s.controller.request()
+    await tick()
+    s.track.end() // The browser's own stop button
+    expect(s.controller.getState().phase).toBe('idle')
+    expect(s.released).toHaveBeenCalledTimes(1)
+    s.finish()
+    await running
+    expect(s.controller.getState().phase).toBe('idle')
+    expect(s.sent).toEqual([])
+  })
+
+  async function sharing() {
+    const s = prepared()
+    const running = s.controller.request()
+    await tick()
+    s.finish()
+    await running
+    s.controller.setRoom(shares(YOU), YOU)
+    expect(s.controller.getState().phase).toBe('sharing')
+    return s
+  }
+
+  it('releases on every way a share ends', async () => {
+    const bar = await sharing()
+    bar.controller.stop()
+    expect(bar.released).toHaveBeenCalledTimes(1)
+
+    const browser = await sharing()
+    browser.track.end()
+    expect(browser.released).toHaveBeenCalledTimes(1)
+
+    const host = await sharing()
+    host.controller.setRoom({}, YOU)
+    expect(host.released).toHaveBeenCalledTimes(1)
+    expect(host.notices).toEqual([{ type: 'stopped' }])
+  })
+
+  it('releases when the room refuses the share', async () => {
+    const s = prepared()
+    const running = s.controller.request()
+    await tick()
+    s.finish()
+    await running
+    s.controller.refused('share_full')
+    expect(s.released).toHaveBeenCalledTimes(1)
+    expect(s.notices).toEqual([{ type: 'full' }])
+  })
+
+  it('does not release on leaving the room, nor for a new screen picked during the share', async () => {
+    const repicked = await sharing()
+    repicked.capture.mockResolvedValueOnce({
+      ok: true,
+      track: new ScreenTrack() as unknown as MediaStreamTrack,
+      audio: null,
+    })
+    await repicked.controller.repick()
+    expect(repicked.controller.getState().phase).toBe('sharing')
+    expect(repicked.released).not.toHaveBeenCalled()
+    expect(repicked.prepare).toHaveBeenCalledTimes(1)
+
+    const left = await sharing()
+    left.controller.close()
+    expect(left.released).not.toHaveBeenCalled()
+  })
+})

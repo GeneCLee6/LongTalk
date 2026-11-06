@@ -4,6 +4,7 @@ import { canShareAudio } from '../media/capabilities.ts'
 import { captureScreen } from '../media/share.ts'
 import type { ShareMode } from '../media/shareMode.ts'
 import { idleShare, ScreenShare, type ScreenShareState, type ShareNotice } from './ScreenShare.ts'
+import type { ShareCameraGuard } from './ShareCameraGuard.ts'
 
 export interface UseScreenShareOptions {
   /** Who shares now (the room view's `room.shares`) */
@@ -15,6 +16,8 @@ export interface UseScreenShareOptions {
   /** How many times the room welcomed us: a new welcome re-sends a pending claim */
   welcomes: number
   notify: (notice: ShareNotice) => void
+  /** The camera goes off first in this browser (ShareCameraGuard.ts); null elsewhere */
+  guard?: Pick<ShareCameraGuard, 'prepare' | 'release'> | null
 }
 
 export interface ScreenShareHandle extends ScreenShareState {
@@ -42,7 +45,7 @@ const idle = () => idleShare
  * one
  */
 export function useScreenShare(options: UseScreenShareOptions): ScreenShareHandle {
-  const { shares, you, onError, welcomes } = options
+  const { shares, you, onError, welcomes, guard } = options
   const latest = useRef(options)
   useEffect(() => {
     latest.current = options
@@ -55,13 +58,15 @@ export function useScreenShare(options: UseScreenShareOptions): ScreenShareHandl
       capture: () => captureScreen(undefined, audio),
       send: (message) => latest.current.send(message),
       notify: (notice) => latest.current.notify(notice),
+      prepare: guard?.prepare,
+      released: guard?.release,
     })
     setController(run)
     return () => {
       run.close()
       setController((current) => (current === run ? null : current))
     }
-  }, [])
+  }, [guard])
   useEffect(() => {
     controller?.setRoom(shares, you)
   }, [controller, shares, you])

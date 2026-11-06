@@ -16,6 +16,8 @@ export interface MediaControlsProps {
   /** A device is opening: its button waits */
   micBusy?: boolean
   camBusy?: boolean
+  /** Why the camera's button is disabled, when it is for more than a moment: its tooltip */
+  camBusyHint?: string
   onToggleMic: () => void
   onToggleCam: () => void
   devices: DeviceLists
@@ -93,6 +95,7 @@ export function MediaControls(props: MediaControlsProps) {
           pressed={props.camOn}
           shortcut={props.shortcuts ? shortcutKey('cam') : undefined}
           disabled={props.camBusy}
+          {...(props.camBusyHint ? { title: props.camBusyHint } : {})}
           onClick={props.onToggleCam}
         />
         {camItems.length > 0 && (

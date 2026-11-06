@@ -327,9 +327,15 @@ interface MediaTransport {
 
 **結論**：問題在這個瀏覽器引擎同時跑兩個視訊編碼器的時候，不在 LongTalk 的選層或 SFU。這是由上面的證據推論，**沒有直接證明**：不經 LongTalk 與 SFU 的 loopback（同一頁兩條 PeerConnection）裡，WebKit 的接收端根本沒有畫面（`videoWidth` 0），分不出顏色，只看到第二個 sender 加入後，鏡頭編碼器從每秒約 28 幀掉到約 7 幀（Chromium 對照組維持約 20 幀）；也沒有讀 WebKit 的程式碼，不知道確切機制。
 
-**沒有修產品**：卡住之後試過的都不可靠：`setParameters`（原樣、改 `scaleResolutionDownBy`、`active` 關開）、`replaceTrack`、接收端換層、分享中才關鏡頭（0／4 救回來）。少數幾次救回來和隔一陣子自己好分不開。看 user agent 替 Safari 關鏡頭違反規則，也沒有證據 Safari 需要。所以 `e2e/crossbrowser.spec.ts` 在 WebKit 分享時先關鏡頭，**這一步因此不再測 WebKit「鏡頭＋分享」**。
+**卡住之後救不回來**：試過的都不可靠：`setParameters`（原樣、改 `scaleResolutionDownBy`、`active` 關開）、`replaceTrack`、接收端換層、分享中才關鏡頭（0／4 救回來）。少數幾次救回來和隔一陣子自己好分不開。所以只能在分享**之前**避開，#42 當時只讓測試先關鏡頭，產品沒動。
 
-**沒有驗證的**：真的 Safari 會不會這樣。CI 的是 Playwright 的 Linux WebKit，不是 Safari；真的出現就是嚴重的產品問題（別人看不到分享、鏡頭格子變成分享的畫面），所以要實機確認（`DEPLOY.md` §5「Mac」）。如果 Safari 也中，再回來做：發送端看 `pliCount` 漲而 `keyFramesEncoded` 不動（能力偵測，不看 user agent）的處理。
+**決定（擁有者，2026-11-06）：WebKit 分享時先關鏡頭。** 沒有 Mac，測不到真的 Safari，但真的中了就是嚴重問題（別人看不到分享、鏡頭格子變成分享的畫面），先保護；Safari 其實沒事的代價只是分享時沒有鏡頭。
+
+- 能力是 `capabilities.ts` 的 `shareStopsCamera`：能分享（`getDisplayMedia`），而且 `navigator.vendor` 是 `Apple Computer, Inc.`。Chrome、Edge、Firefox 完全不受影響（Firefox 那次 `decodes Fiona's screen` 症狀不同，也沒有這個問題的證據，不在保護範圍內）。為什麼不是 user agent、有人測過真的 Safari 之後怎麼拿掉，在 `BROWSER-SUPPORT.md` §3。
+- 順序（`src/room/ShareCameraGuard.ts`，`ScreenShare` 的 `preparing`）：按分享 → 選擇器（要在點擊裡開；這時還沒動鏡頭，關掉選擇器什麼都沒變）→ 關鏡頭、toast → 等 `RoomMedia` 回報鏡頭不再送了（`replaceTrack(null)` 做完，最多等 3 秒；裝置已經停了，`RoomMedia` 的佇列也一定先處理鏡頭）→ 才向房間要分享、發布。
+- 分享中鏡頭鈕是灰的（提示條與 tooltip 寫原因，快捷鍵 V 跳 toast）；裝置插回來之類自己打開的鏡頭會再被關掉。停止的每一條路（提示條、工具列、瀏覽器原生、主持人、房間拒絕）都會恢復**這個機制關掉的**鏡頭；本來就關著的不動，主持人關的也不動。純音訊模式中分享結束：鏡頭等模式結束才回來；分享中模式結束：鏡頭等分享結束才回來。本月只剩音訊時不恢復。session 重建不影響（裝置還是關的，`RoomMedia` 只重新發布分享）。
+
+**沒有驗證的**：真的 Safari 會不會這樣。CI 的是 Playwright 的 Linux WebKit，不是 Safari。`e2e/crossbrowser.spec.ts` 現在按分享時鏡頭開著，靠上面這個機制，所以測到的是「使用者開著鏡頭按分享」這條路，但不是「兩個編碼器一起跑」：app 不會那樣送。要知道 Safari 需不需要這個機制，要實機（`DEPLOY.md` §5「Mac」）。如果將來要讓 Safari 同時送兩個，再回來做：發送端看 `pliCount` 漲而 `keyFramesEncoded` 不動（能力偵測，不看 user agent）的處理。
 
 ## 後果
 
