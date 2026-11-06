@@ -102,6 +102,9 @@ describe('event validation (e11-t03)', () => {
       ),
     ).toBe('Failed <url> for <email> id <n>')
     expect(scrubErrorText('at /r/k7pq2x9m4a')).toBe('at /r/<room>')
+    // A persistent room's address is a chosen name, and a scheduled meeting's page has an id
+    expect(scrubErrorText('at /r/gene-weekly')).toBe('at /r/<room>')
+    expect(scrubErrorText('at /m/Ab3_x-9')).toBe('at /m/<meeting>')
     expect(scrubErrorText('x'.repeat(500))).toHaveLength(160)
     const parsed = parseEvent({ ...error('see https://evil.example/a'), type: 'error' })
     expect(parsed).toMatchObject({ message: 'see <url>' })

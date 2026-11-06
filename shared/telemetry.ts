@@ -14,6 +14,13 @@ import type { AbuseSummary } from './abuse.ts'
 import type { FilesStatus } from './files.ts'
 import type { UsageStatus } from './usage.ts'
 
+/** Daily counters are kept this long (the retention table on /privacy reads this) */
+export const TELEMETRY_DAYS = 90
+/** Hourly counters are kept this long (enough for the last 24 hours and the error alert) */
+export const TELEMETRY_HOURS = 48
+/** Distinct client errors kept for /admin */
+export const MAX_ERROR_SAMPLES = 20
+
 /** At most this many events per request */
 export const MAX_EVENTS_PER_BATCH = 20
 /** Request bodies larger than this (bytes) are refused unread */
@@ -84,7 +91,10 @@ export function scrubErrorText(text: string, max: number = MAX_ERROR_MESSAGE_CHA
     // A room password from a link (F3), should one ever end up in an error's text
     .replace(/\bpwd=[^\s&'"]*/gi, 'pwd=<password>')
     .replace(/\d{6,}/g, '<n>')
-    .replace(/\/r\/[1-9A-HJ-NP-Za-km-z]{10}\b/g, '/r/<room>')
+    // Any room or meeting address: a persistent room's is a chosen name (/r/gene), not only the
+    // random ten characters. /privacy says telemetry holds no room ids
+    .replace(/\/r\/[A-Za-z0-9_-]+/g, '/r/<room>')
+    .replace(/\/m\/[A-Za-z0-9_-]+/g, '/m/<meeting>')
     .replace(/\p{Cc}/gu, ' ')
     .trim()
   return [...scrubbed].slice(0, max).join('')

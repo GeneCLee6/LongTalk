@@ -7,6 +7,7 @@ import {
   type PersistentRoomInfo,
   type SessionInfo,
 } from '../../shared/account.ts'
+import { BACKUP_RETENTION_DAYS } from '../../shared/file-limits.ts'
 import { MAX_NAME_CHARS, MAX_ROOM_NAME_CHARS, normalizeName } from '../../shared/protocol.ts'
 import { normalizePassword } from '../../shared/password.ts'
 import { normalizeSlug, slugProblem, SLUG_MAX_CHARS } from '../../shared/slug.ts'
@@ -148,6 +149,9 @@ export default function MePage() {
         {phase.at === 'signedIn' && (
           <SignedIn me={phase.me} run={run} onSignedOut={() => setPhase({ at: 'signedOut' })} />
         )}
+        <Small>
+          <Link to="/privacy">{strings.privacy.link}</Link>
+        </Small>
       </Content>
     </Page>
   )
@@ -269,7 +273,7 @@ function SignedIn({ me, run, onSignedOut }: { me: MeResponse; run: Run; onSigned
       <SessionsCard sessions={me.sessions} run={run} />
       <Card aria-labelledby="delete-account">
         <h2 id="delete-account">{strings.account.deleteTitle}</h2>
-        <Muted>{strings.account.deleteBody}</Muted>
+        <Muted>{strings.account.deleteBody(BACKUP_RETENTION_DAYS)}</Muted>
         <div>
           <Button
             variant="danger"

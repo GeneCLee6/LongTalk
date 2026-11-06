@@ -30,8 +30,8 @@ depends_on: []
 - 瀏覽器支援：`docs/BROWSER-SUPPORT.md` 每功能 × 瀏覽器矩陣；`src/media/capabilities.ts` 統一能力偵測。
 - 濫用防護：建房每 IP 每小時 10 間、Turnstile 於建房、WebSocket 訊息速率、上傳配額；黑名單 IP。
 - 安全：CSP、HSTS、Permissions-Policy（camera、microphone、display-capture 只給自己）、COOP；依賴稽核；secrets 只在 Worker。
-- 法遵：錄影同意、隱私權政策頁、資料保留表（聊天 24 小時、錄影 7–30 天、遙測 90 天）、個資法檢查清單、刪除請求流程。
-- 清除與備份：R2 到期刪除排程（cron trigger）；D1 每日匯出到 R2（30 天）。
+- 法遵：錄影同意、隱私權政策頁、資料保留表（聊天 24 小時、錄影 7–30 天、遙測 90 天）、個資法檢查清單、刪除請求流程。（I6 定案：`/privacy` 照程式寫，聊天是「會議關閉時刪除」、不是 24 小時；只有本機錄影；不宣稱符合任何法律，法律問題列給擁有者找律師，見 `NEXT.md`。）
+- 清除與備份：R2 到期刪除排程（cron trigger）；D1 每日匯出到 R2（I5 定案 7 天，不是 30 天）。
 - 成本儀表板（M3）：Realtime、TURN、R2、Workers 用量 API 或估算；月預算；超額自動降級順序（關雲端錄影→限 HD→降最高層→限人數）；告警 Email。
 - E2EE 研究（M2）：Insertable Streams／SFrame 可行性、對錄影與標註的影響；輸出 ADR。
 - 多租戶（M3）：帳號配額、方案（免費／贊助）、擁有者後台。
@@ -69,7 +69,7 @@ depends_on: []
 - [x] AC-11.5 — 建房速率限制與 Turnstile、訊息速率、上傳配額、IP 黑名單；濫用測試。（I1 #36 做了上傳配額以外的全部；I5 補上上傳配額：每位成員、每間房、每個網路、全站 2 GB，`scripts/abuse.ts` 加了上傳的檢查。正式站的 Turnstile 程式已經在，只等擁有者設定 key，`DEPLOY.md` §11）
 - [x] AC-11.6 — `BROWSER-SUPPORT.md` 完整且與 `capabilities.ts` 一致。（H6 #35：18 項能力 × 6 個瀏覽器全部有記號與退路；一致性兩道檢查：`tests/app/media/capabilities.test.ts` 比對列、順序、欄位與記號，`e2e/local/browsers.spec.ts` 在 Chromium、Firefox、WebKit 裡跑 app 自己的偵測和 Chrome、Firefox、Safari 欄比對。實機的 ● 是 AC-2.8 的事）
 - [x] AC-11.7 — CSP、HSTS、Permissions-Policy、COOP；`npm audit` 無高風險；secrets 不進前端（lint 擋）。（I1 #36：`public/_headers`＝`shared/security-headers.ts`；CI 的 `npm audit --omit=dev --audit-level=high`；`scripts/secrets.ts` 在 lint 與 budget）
-- [ ] AC-11.8 — 隱私權政策頁、資料保留表、錄影同意清單、刪除請求流程；R2 到期刪除與 D1 備份有排程測試。（I5 #40 做完後半句：R2 到期刪除、D1 備份、還原演練都有假時鐘的排程測試，資料保留表補上檔案與備份。前半句是 `e11-t07`，I6，所以還不勾）
+- [x] AC-11.8 — 隱私權政策頁、資料保留表、錄影同意清單、刪除請求流程；R2 到期刪除與 D1 備份有排程測試。（I5 #40 做完後半句：R2 到期刪除、D1 備份、還原演練都有假時鐘的排程測試。I6 #43 做完前半句：`/privacy` 繁中與英文，保留表的數字直接讀常數、常數變了測試失敗；同意清單在頁面與 `e8` 文件；刪除請求：登入者在 `/me`，其他人照 `shared/privacy.ts` 的 `PRIVACY_CONTACT`，擁有者的步驟在 `DEPLOY.md` §13。這條勾的是「這些東西都有」，**不代表**法律上已經審過：律師要看的問題在 `NEXT.md`）
 - [ ] AC-11.9 — E2EE 可行性 ADR。
 - [ ] AC-11.10 — 多租戶：帳號配額、方案、擁有者後台。
 - [x] AC-11.11 — **只用免費額度**：Realtime（SFU＋TURN）每月流出有計數；達 800 GB 新連線預設低畫質、達 950 GB 不再建立新的視訊 session（只留音訊）、每月 1 日歸零；門檻可設定、有測試、`/api/usage` 可查。
@@ -88,7 +88,7 @@ depends_on: []
 
 - [x] `e11-t05` 濫用防護：建房速率、Turnstile、訊息速率、IP 黑名單（全站一個 `GuardDO`：每個網路（IPv4、IPv6 /64，只存雜湊，可選 `IP_HASH_PEPPER`）建房 10 分鐘 10 間、一天 60 間；Turnstile 在兩把 key 都設了才開，Worker 打 siteverify；封鎖名單有到期、`/admin` 管理，`/api/rooms/*` 一律 403；RoomDO 每房每網路每分鐘 60 次升級、每連線 10 秒 120 個訊息，超過 4420，超大訊息 1009；協定 v16；`scripts/abuse.ts` 在每個 PR 預覽跑） · AC-11.5 · #36
 - [x] `e11-t06` 安全標頭、CSP、Permissions-Policy、secrets lint、依賴稽核進 CI（CSP 回報進遙測；`e2e/local/security.spec.ts` 確認 RNNoise、service worker、喇叭測試、`/admin` 在 CSP 下都正常） · AC-11.7 · #36
-- [ ] `e11-t07` 法遵：隱私權政策頁、資料保留表、錄影同意清單、刪除請求 · AC-11.8 · S · ← e8-t02
+- [x] `e11-t07` 法遵：隱私權政策頁、資料保留表、錄影同意清單、刪除請求（`/privacy` lazy，文字每種語言一個 lazy 模組；`src/privacy/facts.ts` 讀常數；`DEPLOY.md` §13；`e8` 的同意清單）· AC-11.8 · S · ← e8-t02 · I6 #43
 - [x] `e11-t08` R2 到期刪除 cron、D1 每日備份到 R2、還原演練（Cron 每小時一次，正式站才有；`FileLedgerDO` 記帳與校正；gzip 的 JSON lines、保留 7 天、不含 session；`scripts/restore-backup.ts` 與 `DEPLOY.md` §12 的還原步驟；演練在 `tests/worker/backup.test.ts`，每次提交都跑）· AC-11.8 · S · ← e11-t02 · I5
 
 ### M2

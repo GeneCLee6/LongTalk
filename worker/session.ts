@@ -1,5 +1,6 @@
 import { toBase64url } from '../shared/base64url.ts'
 import {
+  SESSION_COOKIE,
   SESSION_IDLE_MS,
   SESSION_MAX_MS,
   SESSION_ROTATE_GRACE_MS,
@@ -15,7 +16,7 @@ import type { AccountDb, AccountRow, NewSession, SessionRow } from './account-db
 // requests already on their way); a session ends after SESSION_IDLE_MS unused or SESSION_MAX_MS
 // after signing in.
 
-export const SESSION_COOKIE = '__Host-lt_session'
+export { SESSION_COOKIE }
 
 /** The header the Worker hands a room's WebSocket upgrade the signed-in account in (never trusted from a browser) */
 export const ACCOUNT_HEADER = 'x-longtalk-account'

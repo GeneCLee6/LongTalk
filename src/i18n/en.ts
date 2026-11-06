@@ -618,6 +618,11 @@ export const en: Strings = {
       },
     },
   },
+  privacy: {
+    link: 'Privacy policy',
+    linkNewTab: 'Privacy policy (opens in a new tab)',
+    loading: 'Loading…',
+  },
   account: {
     title: 'My account',
     homeLink: 'Sign in',
@@ -704,8 +709,8 @@ export const en: Strings = {
     signedOutOthers: (count: number) =>
       `Signed out ${count} ${plural(count, 'browser', 'browsers')}`,
     deleteTitle: 'Delete account',
-    deleteBody:
-      'Your account, passkeys, sign-ins, all your rooms and scheduled meetings are deleted at once, for good. Delete the passkey on your devices yourself.',
+    deleteBody: (backupDays: number) =>
+      `Your account, passkeys, sign-ins, all your rooms and scheduled meetings are deleted at once, and you can’t undo it. Daily backups keep a copy for up to ${backupDays} days, after which nothing is left. Delete the passkey on your devices yourself.`,
     deleteAccount: 'Delete account',
     deleteConfirmTitle: 'Delete the account and all its data?',
     deleteConfirmBody: 'Your rooms’ addresses and your meetings’ invitation pages stop working at once.',

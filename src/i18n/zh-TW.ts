@@ -615,6 +615,13 @@ export const zhTW = {
     },
   },
   // The owner's dashboard (e11-t03): /admin
+  // The link to /privacy and its loading line. The policy's own text is not here: src/privacy/
+  // policy.*.ts, lazily loaded per language (RULES.md §1), so it stays out of the home page's JS
+  privacy: {
+    link: '隱私權政策',
+    linkNewTab: '隱私權政策（在新分頁開啟）',
+    loading: '載入中…',
+  },
   account: {
     title: '我的帳號',
     homeLink: '登入',
@@ -697,8 +704,8 @@ export const zhTW = {
     signOutOthers: '登出其他所有瀏覽器',
     signedOutOthers: (count: number) => `已登出 ${count} 個瀏覽器`,
     deleteTitle: '刪除帳號',
-    deleteBody:
-      '帳號、通行密鑰、登入紀錄、所有固定會議室與預定會議都會立刻刪除，無法復原。裝置裡的通行密鑰請自己刪掉。',
+    deleteBody: (backupDays: number) =>
+      `帳號、通行密鑰、登入紀錄、所有固定會議室與預定會議都會立刻刪除，無法自己復原；每日備份裡還會留最多 ${backupDays} 天，之後才完全不存在。裝置裡的通行密鑰請自己刪掉。`,
     deleteAccount: '刪除帳號',
     deleteConfirmTitle: '刪除帳號與所有資料？',
     deleteConfirmBody: '固定會議室的網址與預定會議的邀請頁會立刻失效。',

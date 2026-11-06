@@ -22,7 +22,7 @@
 | `src/strings.ts` | 介面文字的唯一入口：目前語言的字典、`setLocale`、`Intl` 日期時間；字典本身在 `src/i18n/zh-TW.ts`、`en.ts` | 在模組層級存字典的一部分（`const text = strings.room` 會凍結成開頁時的語言） |
 
 - **伺服器把關**：權限、房間狀態、錄影與同意，只在 RoomDO 判斷；前端只是按鈕。
-- **DRY**：顏色只在 `styles/tokens.ts`；介面文字只在 `strings.ts`。`npm run lint` 會擋（G5，`scripts/literals.ts`）：`src/` 的程式碼（註解不算）裡有中文字或全形標點、顏色字面值（`#rgb`、`rgb()`、`hsl()`）、JSX 標籤之間的文字、`aria-label`／`title`／`placeholder`／`alt`／`label` 的字面文字就失敗；字典、`tokens.ts`、`brand.ts` 除外，真的需要的那一行在行尾寫 `// literal-ok: <理由>`。
+- **DRY**：顏色只在 `styles/tokens.ts`；介面文字只在 `strings.ts`。`npm run lint` 會擋（G5，`scripts/literals.ts`）：`src/` 的程式碼（註解不算）裡有中文字或全形標點、顏色字面值（`#rgb`、`rgb()`、`hsl()`）、JSX 標籤之間的文字、`aria-label`／`title`／`placeholder`／`alt`／`label` 的字面文字就失敗；字典、`tokens.ts`、`brand.ts`、隱私權政策的文字（`src/privacy/policy.*`）除外，真的需要的那一行在行尾寫 `// literal-ok: <理由>`。
 - **lazy**：會議室頁是獨立 chunk；白板、背景模糊、錄影、標註都要 `lazy()`，不能進首頁或會議室的初始 JS。
 - **secrets 不進前端**（I1）：`src/`、`public/` 不能出現 Worker secret 的名字（`ADMIN_TOKEN`、`TURNSTILE_SECRET_KEY`…，連介面文字也不行）或像 secret 的值；`npm run lint` 掃原始碼、`npm run budget` 掃 `dist/client`（`scripts/secrets.ts`，`DEPLOY.md` §11）。真的需要的那一行在行尾寫 `// secret-ok: <理由>`。新的 secret 要加進 `scripts/secretScan.ts` 的 `SECRET_NAMES`。
 - **安全標頭**（I1）：頁面的標頭改 `shared/security-headers.ts` 再同步 `public/_headers`（測試比對）；要從別的網域載入任何東西（script、iframe、fetch）都要先改 CSP，並在 `DEPLOY.md` §11 寫理由。
@@ -35,6 +35,8 @@
 - 日期時間用 `strings.ts` 的 `formatClock`、`formatDateTime`、`formatDay`（`Intl`），不要 `toLocaleString('zh-TW')` 寫死。
 - 測試預設繁中（`tests/setupLocale.ts` 把 jsdom 的瀏覽器語言設成 zh-TW，`tests/setup.ts` 每個測試前 `setLocale('zh-TW', false)`）；要測英文就在測試裡 `setLocale('en', false)`。
 - 靜態的 `index.html`、manifest、OG 圖只用中文字典（`src/brand.ts`）。
+
+- **例外：隱私權政策的文字**（I6）不在兩本字典裡：它很長，放進字典就進了首頁的 JS（預算 150 kB）。每種語言一個 lazy 模組（`src/privacy/policy.zh-TW.ts`、`policy.en.ts`，型別 `src/privacy/types.ts`，缺一個語言或一個 key 是型別錯誤），字典裡只有連結的文字。數字一律從 `src/privacy/facts.ts` 讀常數，不要打在句子裡；**改了保留時間、儲存的東西、cookie、localStorage 的 key，要同時改這兩個模組與 `shared/privacy.ts` 的日期**，`tests/app/privacy.test.tsx`、`tests/worker/privacyFacts.test.ts` 會失敗提醒。
 
 ### 無障礙（G5，`e4-t14`）
 

@@ -7,13 +7,15 @@
 //   - text between JSX tags, and literal text in aria-label / title / placeholder / alt / label.
 //
 // A line that really needs one says why with `// literal-ok: <reason>` on the same line.
-// The dictionaries, the tokens and the brand file (src/brand.ts: the PWA's fixed colours) are
-// where these belong and are not checked.
+// The dictionaries (also the privacy policy's, src/privacy/policy.*), the tokens and the brand file
+// (src/brand.ts: the PWA's fixed colours) are where these belong and are not checked.
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
 const ROOT = 'src'
-const ALLOWED = ['src/i18n/', 'src/styles/tokens.ts', 'src/brand.ts']
+// src/privacy/policy.*: the privacy page's text, a dictionary of its own per language (lazy, so
+// it stays out of the home page's JS budget; RULES.md §1)
+const ALLOWED = ['src/i18n/', 'src/styles/tokens.ts', 'src/brand.ts', 'src/privacy/policy.']
 
 const checks: { name: string; pattern: RegExp }[] = [
   { name: 'Chinese text', pattern: /[　-〿㐀-鿿＀-￯]/u },

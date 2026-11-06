@@ -9,6 +9,8 @@ export const MAX_PASSWORD_CHARS = 12
 export const PASSWORD_MAX_FAILS = 3
 /** How long to wait after PASSWORD_MAX_FAILS wrong guesses */
 export const PASSWORD_WAIT_MS = 30_000
+/** Wrong guesses older than this no longer count (the retention table on /privacy reads this) */
+export const GUESS_MEMORY_MS = 10 * 60_000
 /** The link's query parameter that carries the password (stripped from the address bar at once) */
 export const PASSWORD_PARAM = 'pwd'
 
