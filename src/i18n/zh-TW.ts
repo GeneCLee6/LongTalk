@@ -508,6 +508,16 @@ export const zhTW = {
     full: (max: number) => `已經有 ${max} 個人在分享畫面，等其中一人停止後再試一次。`,
     picker: '選擇主畫面要看誰的分享',
     showMain: (name: string) => `在主畫面看 ${name} 的畫面`,
+    // Zoom and fullscreen on the main share (e3-t11), and the local sketch until J2 syncs it
+    viewControls: '分享畫面的檢視',
+    zoomIn: '放大',
+    zoomOut: '縮小',
+    zoomReset: (percent: number) => `${percent}%，重設縮放`,
+    fullscreen: '全螢幕',
+    exitFullscreen: '離開全螢幕',
+    annotate: '標註',
+    annotateHint: '標註（目前只有你看得到，關掉就會清除）',
+    annotationCanvas: '標註畫布',
     // 文字／動態 (e3-t06): the sharing bar's switch and the hint for moving content
     mode: '分享模式',
     modeText: '文字',

@@ -544,6 +544,43 @@ interop(
       },
     )
 
+    await interop.step("Alice zooms Bob's share and sketches on it (J1)", async () => {
+      const share = alice.page.getByRole('figure', {
+        name: strings.screenShare.region(bob.name),
+      })
+      const canvas = share.getByRole('img', { name: strings.screenShare.annotationCanvas })
+      await share.hover()
+      await share.getByRole('button', { name: strings.screenShare.zoomIn }).click()
+      await expect(share).toHaveAttribute('data-zoom', '1.25')
+      await expect
+        .poll(() => shareFramesPerSecond(alice, bob))
+        .toBeGreaterThanOrEqual(SHARE_FRAMES_PER_SECOND)
+      const annotate = share.getByRole('button', { name: strings.screenShare.annotate })
+      await annotate.click()
+      await expect(canvas).toBeVisible()
+      const box = (await share.boundingBox())!
+      await alice.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await alice.page.mouse.down()
+      await alice.page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2 + 40, {
+        steps: 4,
+      })
+      await alice.page.mouse.up()
+      // The sketch is painted (local for now: J2 syncs it)
+      await expect
+        .poll(() =>
+          canvas.evaluate((element: HTMLCanvasElement) => {
+            const { width, height } = element
+            const { data } = element.getContext('2d')!.getImageData(0, 0, width, height)
+            return data.some((value) => value !== 0)
+          }),
+        )
+        .toBe(true)
+      await annotate.click()
+      await expect(canvas).toHaveCount(0)
+      await share.getByRole('button', { name: strings.screenShare.zoomReset(125) }).click()
+      await expect(share).toHaveAttribute('data-zoom', '1')
+    })
+
     await interop.step(
       "Bob turns the share's sound off from the bar: silence, the screen goes on (D2)",
       async () => {

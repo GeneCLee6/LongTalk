@@ -3,6 +3,8 @@
 // scheme. Pages follow the system, the room is dark (DESIGN.md §1.2): any element with
 // data-theme="light" | "dark" switches its subtree.
 
+import type { AnnotationColor } from '../../shared/annotation.ts'
+
 export type Scheme = 'light' | 'dark'
 
 const light = {
@@ -126,6 +128,25 @@ export const avatar = {
     '#047857',
     '#9333EA',
   ],
+} as const
+
+/**
+ * Marks on a share (E7): eight fixed colours, not CSS variables (a canvas needs real values, and
+ * what is under them is someone's screen in either scheme). Light and dark ones both: a shared
+ * document is usually white, a shared terminal usually black.
+ */
+export const annotation = {
+  colors: {
+    rose: '#F43F5E',
+    amber: '#FBBF24',
+    green: '#22C55E',
+    teal: '#2DD4BF',
+    blue: '#3B82F6',
+    violet: '#A855F7',
+    white: '#FFFFFF',
+    ink: '#0F172A',
+  } satisfies Record<AnnotationColor, string>,
+  highlighterAlpha: 0.4,
 } as const
 
 /** The same name always gets the same colour (FNV-1a over the code points) */

@@ -22,6 +22,6 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "shared", "tests"],
+  "include": ["src", "shared", "tests", "e2e/local/harness"],
   "exclude": ["tests/worker"]
 }
