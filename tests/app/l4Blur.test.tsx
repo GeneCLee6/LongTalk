@@ -446,6 +446,35 @@ describe('useBackgroundBlur', () => {
     expect(pipeline.closed).toBe(false)
   })
 
+  it('the camera turned off for a share and restored after it (ShareCameraGuard): blurred, never plain', async () => {
+    const { result, rerender, pipeline } = setup({ camera, on: true })
+    await waitFor(() => expect(pipeline.inputs).toEqual([camera]))
+    act(() => pipeline.becomeReady())
+    // The guard stops the device: nothing goes out and the pipeline stays, idle
+    rerender({ camera: null, on: true })
+    expect(result.current.send).toBeNull()
+    expect(pipeline.inputs.at(-1)).toBeNull()
+    expect(pipeline.closed).toBe(false)
+    // The share is over: a new track from the device goes straight through the pipeline
+    const restored = track('restored')
+    rerender({ camera: restored, on: true })
+    expect(result.current.send).toBe(pipeline.track)
+    expect(pipeline.inputs.at(-1)).toBe(restored)
+  })
+
+  it('the camera turned off for a share while the model loads: it comes back held, not plain', async () => {
+    const { result, rerender, pipeline } = setup({ camera, on: false })
+    rerender({ camera, on: true })
+    expect(result.current.send).toBe(camera)
+    rerender({ camera: null, on: true })
+    const restored = track('restored')
+    rerender({ camera: restored, on: true })
+    expect(result.current.send).toBeNull()
+    await waitFor(() => expect(pipeline.inputs.at(-1)).toBe(restored))
+    act(() => pipeline.becomeReady())
+    expect(result.current.send).toBe(pipeline.track)
+  })
+
   it('stops after seconds over budget, with the reason', async () => {
     const { onStop, pipeline } = setup({ camera, on: true })
     await waitFor(() => expect(pipeline.inputs).toEqual([camera]))

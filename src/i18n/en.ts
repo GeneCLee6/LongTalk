@@ -593,6 +593,10 @@ export const enRoom: RoomStrings = {
     label: (name: string) => `${name}’s screen`,
     region: (name: string) => `Screen shared by ${name}`,
     waiting: (name: string) => `${name} started sharing; it’s on its way…`,
+    cameraOffForShare:
+      'Your camera is off for this share: in this browser, sending both can leave others unable to see your share. It comes back on when you stop sharing, and you can turn it on or off as usual then.',
+    cameraLocked:
+      'The camera can’t be on while you share: in this browser, sending both can leave others unable to see your share. You can turn it on after you stop sharing.',
     stopped: 'Your share was stopped.',
     started: (name: string) => `${name} started sharing their screen`,
     full: (max: number) => `${max} people are already sharing. Try again once one of them stops.`,

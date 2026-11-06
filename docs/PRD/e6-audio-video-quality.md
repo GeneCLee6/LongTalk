@@ -96,6 +96,7 @@ E2 讓媒體送到；E6 讓它好聽好看。Zoom 的「背景雜音抑制」「
 - **省電模式與流量**：省電模式開著時暫停（選擇保留，關掉就回來）；本月過了低畫質門檻（`usage` 不是 `normal`）也暫停，因為省流量靠的是鏡頭本身降到低解析度（`applyConstraints` 對輸出的軌沒有用）。HD 只改 sender 的層，兩者無關。
 - **在哪裡顯示**：設定「視訊」頁（預先加入頁也有），`capabilities.ts` `backgroundBlur`（worker、OffscreenCanvas、SIMD、兩條路之一）沒有就不顯示；**觸控為主的裝置（手機、平板）也不顯示**（useMediaSettings），PRD 沒寫，是這批的決定：11 MB 的 wasm、CPU 與手機的視訊管線都沒驗證過。
 - **本機錄影**：錄到的自己是模糊後的畫面（`videoOf`）。
+- **Safari 分享時先關鏡頭**（#46，`ShareCameraGuard`）：它關的是裝置，對模糊來說就是鏡頭關了：什麼都不送，管線留著閒置；分享結束鏡頭回來時直接進管線，**不會有沒模糊的畫面**（`tests/app/l4Blur.test.tsx`）。
 - **鏡像**（`e6-t07`）：設定「鏡像顯示我的畫面」，預設開，只影響自己的格子與預先加入預覽（CSS `scaleX(-1)`），送出的軌永遠不動。
 - **自拍格**（`e6-t07`，`src/components/SelfView.tsx`、`src/room/selfView.ts`）：設定「自拍格」，**預設關**（版面不變）；開著時自己的格子浮在舞台上、不占版面（其他版面照舊少一格），一開始在右下角。滑鼠或手指拖曳；鍵盤焦點到把手用方向鍵（24 px，Shift 96 px）。位置存成舞台剩餘空間的比例（0–1），用 CSS container 單位算，**怎麼縮放都不會跑出舞台**。只有自己一個人、自己被釘選或聚光燈時回到版面；「隱藏自己」時不顯示。PRD 沒有排除手機，所以手機也有（把手在手機不顯示，用手指拖）。
 - **每人音量**（`e6-t08`，`src/media/memberVolume.ts`、`MemberAudio`）：PRD 的 0–200%。0–100% 只改 `<audio>.volume`，不碰 Web Audio；100% 以上用 GainNode，輸出是一條 stream、由**同一個 `<audio>`** 播，所以 `setSinkId` 照常、版面切換不影響。Web Audio 的 context 還沒在跑時（重新整理後沒有手勢）維持 100%，下一次點擊才放大：**寧可小聲，不會沒聲音**。音量存 sessionStorage（`longtalk:volumes:<room>`，這個分頁的這場會議）；分享的聲音有自己的滑桿。

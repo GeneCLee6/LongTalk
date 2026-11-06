@@ -1,6 +1,6 @@
 # BROWSER-SUPPORT — 瀏覽器支援
 
-最後更新 2026-11-06（L4 加了 `backgroundBlur`、`memberVolume`；J1 加了 `fullscreen`；2026-11-04 I4 加了 `localRecording`；2026-11-03 H6 完整版，`e2-t16`；B4 初版 `e11-t04`，之後 C2、D2、G4、H4、H5 各加了幾列）。這份是相容矩陣（AC-2.8、AC-11.6）：每個 `capabilities.ts` 偵測的能力 × 六個目標瀏覽器、沒有時怎麼做、哪些在 CI 跑過、哪些等實機。實機的測法在 [`DEPLOY.md`](../DEPLOY.md) §5「實機測試計畫」。
+最後更新 2026-11-06（L4 加了 `backgroundBlur`、`memberVolume`；加了 `shareStopsCamera`；J1 加了 `fullscreen`；2026-11-04 I4 加了 `localRecording`；2026-11-03 H6 完整版，`e2-t16`；B4 初版 `e11-t04`，之後 C2、D2、G4、H4、H5 各加了幾列）。這份是相容矩陣（AC-2.8、AC-11.6）：每個 `capabilities.ts` 偵測的能力 × 六個目標瀏覽器、沒有時怎麼做、哪些在 CI 跑過、哪些等實機。實機的測法在 [`DEPLOY.md`](../DEPLOY.md) §5「實機測試計畫」。
 
 目標瀏覽器（`PRD/00-prd.md` §9）：Chrome／Edge 最近兩版、Firefox 最近兩版、Safari 17+（macOS）、iOS Safari 17+、Android Chrome。
 
@@ -46,13 +46,14 @@
 | 分享畫面全螢幕（`document.fullscreenEnabled`） | `fullscreen` | ○ | ○ | ○ | ○ | ✕ | ○ | 分享格的控制列沒有全螢幕鈕、雙擊與 F 不作用；縮放與平移照常（`e3-t11`）。iPhone 的 Safari 只有 `<video>` 自己的全螢幕（iPad 有），標註疊不上去，所以不用。實機確認在 `DEPLOY.md` §5 第 29 步 |
 | 背景模糊（`Worker`、`OffscreenCanvas`、WebAssembly SIMD，加上 `MediaStreamTrackProcessor`＋`MediaStreamTrackGenerator`＋`VideoFrame` 或 `canvas.captureStream`） | `backgroundBlur` | ● CI | ○ | ● CI | ○ | ✕ | ✕ | 設定的「視訊」頁不顯示「背景模糊」（`e6-t06`）。**手機與平板**即使偵測到也不顯示（觸控為主的裝置，`useMediaSettings`）：大檔案與手機的 CPU 沒驗證過。Chromium 走 Insertable Streams（背景分頁也持續）；Firefox、Safari 走 canvas，背景分頁可能停格。CI：`e2e/local/blur.spec.ts`、`browsers.spec.ts` 實際載入並跑過（Firefox 走 canvas）；Playwright 的 Linux WebKit 只有 `browsers.spec.ts` 那一步，Safari 本身要實機（`DEPLOY.md` §5 第 33 步）。真的筆電的 CPU 與輪廓都要實機看 |
 | 每人接收音量（`<audio>.volume` 能改） | `memberVolume` | ● CI | ○ | ○ | ○ | ✕ | ○ | 參與者面板不顯示音量滑桿，說明請用裝置的音量鍵；音量條照常（`e6-t08`）。iPhone、iPad 的 `volume` 唯讀（WebKit 的桌面版可以改）。超過 100% 走 Web Audio，同一個 `<audio>` 播放，`setSinkId` 照常。CI：headless Chromium 經真的 PeerConnection 量到 40% 與 200%（`e2e/local/blur.spec.ts`） |
+| 分享時先關鏡頭（預防措施，不是能力；`getDisplayMedia` 加上 `navigator.vendor` 是 `Apple Computer, Inc.`） | `shareStopsCamera` | ✕ | ✕ | ✕ | ● CI | ✕ | ✕ | 這一列的 ✕ 是「不需要」：照常分享，鏡頭和分享一起送。有的瀏覽器（實際上就是 Mac 的 Safari）按分享、選好畫面後先關鏡頭，確定不再送了才發布分享，用 toast 說明原因；分享時鏡頭鈕是灰的並說明；停止分享時，是這個機制關的鏡頭就打開，本來就關著的不動。依據與怎麼拿掉在 §3。CI：Playwright 的 Linux WebKit（`e2e/crossbrowser.spec.ts`）；真的 Safari 未驗證 |
 
 **CI 每次跑什麼**（都不是必過的檢查，`DEPLOY.md` §7）：
 
 | CI job | 瀏覽器 | 測什麼 |
 | --- | --- | --- |
 | `Preview / e2e` | Chromium × 3 | 經 SFU 互看互聽、開關、分享（替身）與分享音訊、simulcast 選層、聊天、主持人控制、等候室、進階噪音抑制、純音訊（`e2e/interop.spec.ts`） |
-| `Preview / e2e-firefox` | Firefox ＋ Chromium；WebKit ＋ Chromium | 不同引擎經 SFU 互看互聽、靜音、互相看分享（替身；WebKit 分享時鏡頭先關，§3），並記下各自送出幾層 simulcast（`e2e/crossbrowser.spec.ts`） |
+| `Preview / e2e-firefox` | Firefox ＋ Chromium；WebKit ＋ Chromium | 不同引擎經 SFU 互看互聽、靜音、互相看分享（替身；WebKit 靠 `shareStopsCamera` 先關鏡頭，停止後鏡頭要回來，§3），並記下各自送出幾層 simulcast（`e2e/crossbrowser.spec.ts`） |
 | `UI checks / browsers` | Chromium、Firefox、WebKit | 偵測結果對這張表、首頁、預先加入（假裝置、拒絕權限、沒有裝置）、兩人進房與聊天、參與者面板、手機大小的視窗（`e2e/local/browsers.spec.ts`；不需要部署、沒有 SFU） |
 | `UI checks / a11y`、`visual` | Chromium | axe、鍵盤、Lighthouse、進階噪音抑制、背景模糊與每人音量（`blur.spec.ts`）、視覺回歸 |
 
@@ -65,7 +66,9 @@ CI 不能代替實機的：真的鏡頭與麥克風、螢幕選擇器與分頁�
 - **Firefox 的聊天輸入框把送出鈕擠出面板**（H6 修正）：聊天欄的表單是一欄的 grid，Firefox 依 textarea 預設 20 欄的寬度撐開那一欄，送出鈕跑到視窗外。改成 `grid-template-columns: minmax(0, 1fr)`（`src/components/ChatPanel.tsx`），`browsers.spec.ts` 檢查送出鈕整個在畫面內。
 - **Firefox simulcast**：送出 `f`／`h`／`q` 三層 VP8，和 Chromium 一樣；Chromium 看 Firefox、Firefox 看 Chromium 都順（每秒約 20–30 幀）。
 - **WebKit（Safari 的引擎）simulcast**：三層都協商成功、沒有退回單層，但剛加入時只有 `f` 有畫面（`h`、`q` 還是 0×0）；Chromium 照樣收得到 WebKit 的畫面與聲音。真的 Safari 會不會一直只送一層、別人選小格時拿到什麼，要實機確認（`DEPLOY.md` §5「Mac」那段）；風險表（`PRD/e2-media-core-webrtc-sfu.md`）的退路「Safari 退化為單層」仍成立，別人一定看得到。
-- **WebKit 同時送鏡頭與分享會出事**（2026-11-06，#42；Playwright 的 Linux WebKit，真的 Safari 還不知道）：鏡頭開著時，別人鏡頭格子看到的是分享的畫面（每次都這樣），分享本身約四成多解不出來（14／31；發送端不理 PLI，沒有新的關鍵幀，SFU 有照送）；先關鏡頭 0／7。不是選層也不是 simulcast（只送一層照樣發生）。`e2e/crossbrowser.spec.ts` 因此在 WebKit 分享時先關鏡頭，**CI 不測 WebKit「鏡頭＋分享」**。細節在 ADR-001「WebKit 同時送鏡頭與分享」；要實機確認（`DEPLOY.md` §5「Mac」）。
+- **WebKit 同時送鏡頭與分享會出事**（2026-11-06，#42；Playwright 的 Linux WebKit，真的 Safari 還不知道）：鏡頭開著時，別人鏡頭格子看到的是分享的畫面（每次都這樣），分享本身約四成多解不出來（14／31；發送端不理 PLI，沒有新的關鍵幀，SFU 有照送）；先關鏡頭 0／7。不是選層也不是 simulcast（只送一層照樣發生）。細節在 ADR-001「WebKit 同時送鏡頭與分享」。
+  - **所以 LongTalk 在 WebKit 分享時會關鏡頭**（`shareStopsCamera`，擁有者 2026-11-06 決定）：**這是預防措施**，證據只來自 CI 的 WebKit，**真的 Safari 沒驗證過**（擁有者沒有 Mac），Safari 可能根本沒事，只是多關了鏡頭。偵測用 `navigator.vendor`：沒有 API 問得出「兩個編碼器會互相干擾」，只能問引擎；它不是 user agent，HTML 標準把它固定成三個值之一，只有 WebKit 回這個。CI 不測 WebKit「鏡頭＋分享一起送」（app 不會那樣送）。
+  - **有人在真的 Safari 測過、確定沒事，就拿掉**：開一個分支把 `shareStopsCamera` 改成一律 `false`，在 PR 預覽照 `DEPLOY.md` §5「Mac」那段「鏡頭開著分享」測 5 次；都通過就刪掉 `capabilities.ts` 的這個 key、§2 這一列、`src/room/ShareCameraGuard.ts` 與它在 `RoomPage.tsx`、`useScreenShare.ts` 的接線、`ScreenShare` 的 `prepare`／`released`、兩本字典的 `cameraOffForShare`、`cameraLocked`、`SharingBar` 的 `note`、`MediaControls` 的 `camBusyHint`；`e2e/crossbrowser.spec.ts` 在 WebKit 分享時的鏡頭斷言也要改，並記得 Linux WebKit 還是會失敗（ADR-001），要在那個測試裡手動關鏡頭。
 - **Firefox 的 `getVideoPlaybackQuality()`** 對 MediaStream 的影片一直是 0（不是 LongTalk 的問題），測試改用 `requestVideoFrameCallback` 數幀。Playwright 在 Firefox 的 `fill()` 會觸發輸入法的 composition 事件，緊接著的 Enter 照設計只選字不送出（`chatText.ts` 的 `COMPOSITION_GRACE_MS`），測試改成逐字打。在 WebKit，從 init script 改 `navigator.mediaDevices` 上的方法沒有作用，測試的替身改放在 `MediaDevices.prototype`。
 - **Firefox 的 console 警告**「Using five or more STUN/TURN servers slows down discovery」：Cloudflare TURN 回的 ICE 網址（濾掉 port 53 之後）有 5 個以上。目前不影響連線（CI 互通正常）；要不要少給幾個（例如只留 UDP 3478 與 TLS 443），等實機量過連線時間再決定。
 - **安全標頭（I1，`public/_headers`）**：`UI checks / browsers` 的三個引擎都在這組 CSP（含 `script-src … 'wasm-unsafe-eval'`，RNNoise 的 wasm 要它；Chrome 97+、Firefox 102+、Safari 16+ 認得）、`Permissions-Policy`、`Cross-Origin-Opener-Policy: same-origin` 底下跑，首頁、預先加入、聊天、假裝置都正常，console 沒有警告。`Permissions-Policy` 只有 Chromium 真的照它做；Firefox 不認這個標頭（鏡頭、麥克風、分享照它自己的權限提示），Safari 只認一部分，所以 `camera=(self)` 這類限制在那兩個瀏覽器只是沒效果、不會擋到 LongTalk 自己。Turnstile（`challenges.cloudflare.com` 的 iframe）在 PR 預覽用 Cloudflare 的測試 key；Firefox、WebKit 經首頁開房都通過（`e2e-firefox`）。
@@ -76,7 +79,7 @@ CI 不能代替實機的：真的鏡頭與麥克風、螢幕選擇器與分頁�
 - **iOS Safari**：不能分享螢幕；分頁進背景時鏡頭會停；聲音要在使用者點擊後才能播放（預先加入頁的「加入」按鈕算一次點擊）；不能選喇叭。
 - **Android Chrome**：不能分享螢幕；選喇叭的支援度不確定，app 以偵測結果為準。
 - **Firefox**：116 版起才有 `setSinkId`；分享螢幕不能帶分頁或系統音訊（`shareAudio` 偵測為否，選擇器不要求音訊）；`degradationPreference` 忽略（文字／動態模式只靠 `contentHint` 與各層上限）。
-- **Safari（macOS）**：分享螢幕沒有音訊；`setSinkId` 要實機確認（Playwright 的 WebKit 沒有）。
+- **Safari（macOS）**：分享時鏡頭先關（`shareStopsCamera`，上面）；分享螢幕沒有音訊；`setSinkId` 要實機確認（Playwright 的 WebKit 沒有）。
 - **simulcast**：Chrome、Edge、Firefox 三層；Safari 見上；任何瀏覽器拒絕三層時退回一層（`CloudflareRealtimeTransport.publish`）。
 - **AudioWorklet**（進階噪音抑制）：Chrome、Edge、Firefox、Safari 14.1+ 都有，只在安全環境（HTTPS）。Firefox 的麥克風取樣率不是 48 kHz 時 RNNoise 接不上，提示後關掉。
 - **分享的防鏡像與簡報者縮圖（H5）**：`selfBrowserSurface`、`surfaceSwitching` 只有 Chromium（其他瀏覽器忽略）；認出「分享了別的會議分頁」靠 **Capture Handle**（`setCaptureHandleConfig`／`getCaptureHandle`，只有 Chromium；沒有時不提醒，分享照常）；認出「分享了會議所在的視窗」靠視窗軌的 label 是標題（Firefox；Chrome 的 label 不是標題，認不出來）；整個螢幕靠 `displaySurface`（Chrome、Edge、Firefox、Safari 都有）。縮圖與動態內容提示用 `ImageCapture.grabFrame()`（Chromium，分頁在背景也能取）或 `requestVideoFrameCallback`（Firefox、Safari，分頁在背景時可能不更新）；兩者都沒有就沒有縮圖、也沒有提示，分享照常。`DEPLOY.md` §5 第 24 步實測。

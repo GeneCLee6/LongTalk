@@ -50,6 +50,7 @@ const ENGINE_DIFFERENCES: Record<string, Partial<Record<Capability, string>>> = 
  * which this suite then checks instead
  */
 const NO_WEBRTC_ROWS: Capability[] = [
+  'shareStopsCamera',
   'webrtc',
   'getUserMedia',
   'getDisplayMedia',
