@@ -1,5 +1,6 @@
 import type { SignalLevel } from '../../shared/protocol.ts'
-import type { zhTW } from './zh-TW.ts'
+import type { zhTWHome } from './zh-TW.home.ts'
+import type { zhTWRoom } from './zh-TW.ts'
 
 /**
  * The Chinese dictionary's shape with its literal texts widened to `string`: every dictionary is
@@ -16,7 +17,12 @@ export type Widen<T> = T extends string
         ? { readonly [K in keyof T]: Widen<T[K]> }
         : T
 
-export type Strings = Widen<typeof zhTW>
+/** What the home page reads, in its first load (J4): zh-TW.home.ts, en.home.ts */
+export type HomeStrings = Widen<typeof zhTWHome>
+/** The rest, a chunk per language loaded with the lazy pages (J4): zh-TW.ts, en.ts */
+export type RoomStrings = Widen<typeof zhTWRoom>
+/** A whole dictionary */
+export type Strings = HomeStrings & RoomStrings
 
 /** What a tile says about its member besides the name (G5, e4-t14; `room.tileState`) */
 export interface TileState {

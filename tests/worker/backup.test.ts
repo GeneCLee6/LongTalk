@@ -75,7 +75,8 @@ describe('the hourly sweep, on a fake clock (AC-5.4, AC-11.8 排程測試)', () 
     const result = await sweepUploads(asBucket(bucket), NOW)
     expect(result.deleted.objects).toBe(5)
     expect(result.live.objects).toBe(3)
-    expect(bucket.calls.list).toBe(4)
+    // Three pages of uploads and one of whiteboards (J4), which there are none of here
+    expect(bucket.calls.list).toBe(5)
   })
 
   it('never keeps a file past 25 hours, whenever in its hour it came', async () => {

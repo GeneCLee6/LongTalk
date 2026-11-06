@@ -30,6 +30,7 @@ import {
 import { canFullscreen } from '../media/capabilities.ts'
 import {
   CloseIcon,
+  DownloadIcon,
   FullscreenExitIcon,
   FullscreenIcon,
   GridIcon,
@@ -59,6 +60,7 @@ import { strings } from '../strings.ts'
 import { annotation, color, fontSize, radius, space } from '../styles/tokens.ts'
 import AnnotationLayer from './AnnotationLayer.tsx'
 import ClearMarks from './ClearMarks.tsx'
+import ExportMarks from './ExportMarks.tsx'
 
 export interface WhiteboardProps {
   store: AnnotationStore
@@ -73,6 +75,8 @@ export interface WhiteboardProps {
   recording?: string | null
   /** Takes the board off the stage for everyone; absent for who may not */
   onClose?: () => void
+  /** For an exported file's name (J4, e7-t07) */
+  roomName?: string | null
 }
 
 /** The board's "picture": a square, so the engine's aspect is 1 and x and y share one unit */
@@ -159,8 +163,8 @@ function useBoardViewport(
  * The whiteboard (J3, e7-t06; DESIGN.md §4.3): the annotation engine on a pale, endless sheet instead
  * of over a share. Its own lazy chunk (CLAUDE.md rule 6). It takes the main area the way a share
  * does, and a person who may draw has the pen out from the start: turning it off makes a drag move
- * the sheet. The wheel and two fingers zoom at any time, the arrow keys and + − 0 too. Saving and
- * exporting it are J4 (e7-t07, e7-t08); touch details too (e7-t09).
+ * the sheet. The wheel and two fingers zoom at any time, the arrow keys and + − 0 too. A persistent
+ * room's board is saved by the room (J4, e7-t08); exporting it is ExportMarks (e7-t07).
  */
 export default function Whiteboard({
   store,
@@ -170,6 +174,7 @@ export default function Whiteboard({
   picker,
   recording = null,
   onClose,
+  roomName = null,
 }: WhiteboardProps) {
   const frameRef = useRef<HTMLElement>(null)
   const viewport = useBoardViewport(frameRef, store)
@@ -177,6 +182,7 @@ export default function Whiteboard({
   const { zoom } = geometry.view
   const [penOut, setPenOut] = useState(true)
   const [gridOn, setGridOn] = useState(true)
+  const [exportOpen, setExportOpen] = useState(false)
   const fullscreen = useFullscreen(frameRef)
   const fullscreenable = canFullscreen()
   const marked = useMarked(store, WHITEBOARD_LAYER)
@@ -282,6 +288,15 @@ export default function Whiteboard({
               {fullscreen.active ? <FullscreenExitIcon /> : <FullscreenIcon />}
             </Control>
           )}
+          <Control
+            type="button"
+            aria-label={strings.annotation.exportButton}
+            title={strings.annotation.exportButton}
+            aria-haspopup="dialog"
+            onClick={() => setExportOpen(true)}
+          >
+            <DownloadIcon />
+          </Control>
           {manage && marked && (
             <ClearMarks store={store} layer={WHITEBOARD_LAYER} nameOf={nameOf} />
           )}
@@ -291,6 +306,22 @@ export default function Whiteboard({
             </Control>
           )}
         </Controls>
+        {exportOpen && (
+          <ExportMarks
+            store={store}
+            layer={WHITEBOARD_LAYER}
+            roomName={roomName}
+            source={{
+              kind: 'board',
+              view: geometry.rect && {
+                box: geometry.box,
+                rect: geometry.rect,
+                pixelRatio: geometry.pixelRatio,
+              },
+            }}
+            onClose={() => setExportOpen(false)}
+          />
+        )}
       </Sheet>
     </ShareGeometryContext.Provider>
   )

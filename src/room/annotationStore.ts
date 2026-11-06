@@ -61,6 +61,8 @@ export class AnnotationStore {
   private readonly deps: AnnotationStoreDeps
   /** Numbers Layer.settled across layers: a layer gone and made anew never repeats a value */
   private stamp = 0
+  /** A snapshot's frames are still arriving: a stroke not there yet may just be in a later frame */
+  private replaying = false
 
   constructor(deps: AnnotationStoreDeps) {
     this.deps = deps
@@ -97,6 +99,7 @@ export class AnnotationStore {
 
   private receiveSnapshot({ share, strokes, reset, done }: AnnotationsMessage): void {
     if (reset) {
+      this.replaying = true
       const known = [...this.layers.keys()]
       this.layers.clear()
       for (const id of known) this.notify(id)
@@ -108,7 +111,10 @@ export class AnnotationStore {
       layer.settled = ++this.stamp
       this.notify(share)
     }
-    if (done) for (const listener of this.snapshotListeners) listener()
+    if (done) {
+      this.replaying = false
+      for (const listener of this.snapshotListeners) listener()
+    }
   }
 
   /** Our own op, applied at once: the room only hears about it (it does not send it back) */
@@ -226,6 +232,11 @@ export class AnnotationStore {
 
   has(share: string, id: string): boolean {
     return this.layers.get(share)?.strokes.has(id) ?? false
+  }
+
+  /** A stroke we are drawing is gone: someone cleared the layer, or the room refused it (J4) */
+  lost(share: string, id: string): boolean {
+    return !this.replaying && !this.has(share, id)
   }
 
   /** Who has strokes on a layer and how many, in the order they first drew */

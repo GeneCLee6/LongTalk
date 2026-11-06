@@ -7,6 +7,7 @@ import { strings } from '../strings.ts'
 import { color, fontSize, radius, space } from '../styles/tokens.ts'
 import { Button } from './Button.tsx'
 import {
+  DownloadIcon,
   FullscreenExitIcon,
   FullscreenIcon,
   PenIcon,
@@ -35,6 +36,7 @@ import { useShareGestures } from './useShareGestures.ts'
  */
 const AnnotationLayer = lazy(() => import('../annotate/AnnotationLayer.tsx'))
 const ClearMarks = lazy(() => import('../annotate/ClearMarks.tsx'))
+const ExportMarks = lazy(() => import('../annotate/ExportMarks.tsx'))
 
 /** The marks on this share (J2, e7-t04) */
 export interface ShareAnnotations {
@@ -47,6 +49,8 @@ export interface ShareAnnotations {
   manage?: boolean
   /** A member's name for the tag beside what they draw */
   nameOf: (memberId: string) => string | null
+  /** For an exported file's name (J4, e7-t07) */
+  roomName?: string | null
 }
 
 export interface ShareTileProps {
@@ -113,6 +117,7 @@ export function ShareTile({
   const fullscreenable = canFullscreen()
   const annotator = annotations?.me ?? null
   const [toolsOut, setToolsOut] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   // The room may take the tools away while they are out (J3): the button goes, and so do they
   const annotating = toolsOut && annotator !== null
   const marked = useMarked(annotations?.store, annotations?.share)
@@ -191,6 +196,17 @@ export function ShareTile({
                 />
               </Suspense>
             )}
+            {annotations && (
+              <Control
+                type="button"
+                aria-label={strings.annotation.exportButton}
+                title={strings.annotation.exportButton}
+                aria-haspopup="dialog"
+                onClick={() => setExportOpen(true)}
+              >
+                <DownloadIcon />
+              </Control>
+            )}
             {annotator !== null && (
               <Control
                 type="button"
@@ -248,6 +264,21 @@ export function ShareTile({
               </Control>
             )}
           </Controls>
+        )}
+        {annotations && exportOpen && (
+          <Suspense fallback={null}>
+            <ExportMarks
+              store={annotations.store}
+              layer={annotations.share}
+              roomName={annotations.roomName ?? null}
+              source={{
+                kind: 'share',
+                video: () => videoRef.current,
+                picture: own === null || pictureOn,
+              }}
+              onClose={() => setExportOpen(false)}
+            />
+          </Suspense>
         )}
         {onShowMain && (
           <ShowMain

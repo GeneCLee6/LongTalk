@@ -3,6 +3,7 @@ import { VideoDemandContext } from '../../../src/components/useVideoDemand.ts'
 import { SharePicker } from '../../../src/components/SharePicker.tsx'
 import { ShareTile } from '../../../src/components/ShareTile.tsx'
 import { AnnotationStore } from '../../../src/room/annotationStore.ts'
+import { loadDictionary } from '../../../src/strings.ts'
 import { VideoDemandStore } from '../../../src/room/videoDemand.ts'
 import { GlobalStyle } from '../../../src/styles/GlobalStyle.ts'
 
@@ -55,6 +56,9 @@ const shares = [
   { id: 'c', name: 'Carol' },
 ]
 
+// Not through App: the tile reads what the room's lazy pages read, which they load first (J4)
+await loadDictionary()
+
 createRoot(document.getElementById('root')!).render(
   <VideoDemandContext.Provider value={demand}>
     <GlobalStyle />
@@ -62,7 +66,7 @@ createRoot(document.getElementById('root')!).render(
       <ShareTile
         name="Bob"
         video={track}
-        annotations={{ store, share: 'b', me: 'me', manage: own !== null, nameOf: () => null }}
+        annotations={{ store, share: 'b', me: 'me', manage: own !== null, nameOf: () => null, roomName: '週會' }}
         own={own ? { mirrorRisk: own === 'screen' } : null}
         recording="Gene 正在錄影"
         picker={<SharePicker shares={shares} main="b" onPick={(id) => window.picked.push(id)} />}

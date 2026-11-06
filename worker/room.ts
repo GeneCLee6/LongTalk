@@ -14,6 +14,7 @@ import type { Env } from './app.ts'
 import {
   RoomHost,
   type Ban,
+  type BoardState,
   type OpenSocket,
   type PersistentRecord,
   type RoomSettings,
@@ -33,6 +34,7 @@ import type {
   GrantRequest,
   UploadClaim,
 } from './room-files.ts'
+import { BoardStore, boardKey } from './board-store.ts'
 import { FILE_LEDGER_OBJECT } from './file-ledger.ts'
 import { addressKey, type GuessRecord, type PasswordRecord } from './password.ts'
 import type { Schedule } from './scheduler.ts'
@@ -63,6 +65,8 @@ const ENDED_KEY = 'ended'
 const PERSISTENT_KEY = 'persistent'
 /** Files shared in the chat and uploads under way (I5) */
 const FILES_KEY = 'files'
+/** How a persistent room's meeting stands with its saved whiteboard (J4) */
+const BOARD_KEY = 'board'
 /** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
 const CHAT_PREFIX = 'chat:'
 const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
@@ -98,6 +102,18 @@ export class RoomDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
     const storage = ctx.storage
+    // A persistent room's whiteboard between meetings (J4): R2, counted by FileLedgerDO. A save
+    // keeps the object until it is done: often the room closing is the last thing that happens
+    const boards = env.FILES_BUCKET
+      ? new BoardStore(
+          env.FILES_BUCKET,
+          env.FILE_LEDGER.get(env.FILE_LEDGER.idFromName(FILE_LEDGER_OBJECT)),
+        )
+      : null
+    const keepingAwake = <T,>(work: Promise<T>): Promise<T> => {
+      ctx.waitUntil(work)
+      return work
+    }
     this.host = new RoomHost({
       sockets: {
         send: (connId, message) => this.send(connId, message),
@@ -138,6 +154,7 @@ export class RoomDO extends DurableObject<Env> {
               : storage.put<AnnotationSegment>(key, { share, segment, strokes }))
           }
         },
+        saveBoardState: (state) => void storage.put<BoardState>(BOARD_KEY, state),
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -152,6 +169,14 @@ export class RoomDO extends DurableObject<Env> {
       },
       filesGone: (gone) => ctx.waitUntil(this.deleteFiles(gone)),
       later: (ms, work) => void setTimeout(work, ms),
+      boards: boards
+        ? {
+            load: (record) => boards.load(boardKey(record)),
+            save: (record, strokes) => keepingAwake(boards.save(boardKey(record), strokes)),
+            merge: (record, strokes) => keepingAwake(boards.merge(boardKey(record), strokes)),
+            remove: (record) => keepingAwake(boards.remove(boardKey(record))),
+          }
+        : undefined,
     })
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG))
     void ctx.blockConcurrencyWhile(async () => {
@@ -175,7 +200,14 @@ export class RoomDO extends DurableObject<Env> {
         storage.getAlarm(),
         storage.list<ChatMessage>({ prefix: CHAT_PREFIX }),
         storage.get<Ban[]>(BANS_KEY),
-        storage.get<unknown>([PASSWORD_KEY, GUESSES_KEY, ENDED_KEY, PERSISTENT_KEY, FILES_KEY]),
+        storage.get<unknown>([
+          PASSWORD_KEY,
+          GUESSES_KEY,
+          ENDED_KEY,
+          PERSISTENT_KEY,
+          FILES_KEY,
+          BOARD_KEY,
+        ]),
         storage.list<AnnotationSegment>({ prefix: ANNOTATION_PREFIX }),
       ])
       const sockets = ctx
@@ -199,6 +231,7 @@ export class RoomDO extends DurableObject<Env> {
           persistent: (extras.get(PERSISTENT_KEY) as PersistentRecord | undefined) ?? null,
           files: (extras.get(FILES_KEY) as FilesState | undefined) ?? null,
           annotations: [...annotations.values()],
+          board: (extras.get(BOARD_KEY) as BoardState | undefined) ?? null,
         },
       )
       // A room stored before C2 has no schedule: restore made one
@@ -243,6 +276,8 @@ export class RoomDO extends DurableObject<Env> {
   /** RPC from DELETE /api/account/rooms/<slug> and account deletion (I2): the room is gone */
   async destroy(): Promise<void> {
     this.host.destroy()
+    // The whiteboard's deletion, so the room's owner hears back only when it is done
+    await this.host.boardGone
     await this.ctx.storage.deleteAll()
     await this.ctx.storage.deleteAlarm()
     this.alarmAt = null
@@ -322,6 +357,8 @@ export class RoomDO extends DurableObject<Env> {
     if (this.host.exists && Date.now() - this.usageCheckedAt > USAGE_REFRESH_MS) {
       await this.flushUsage()
     }
+    // A persistent room's whiteboard is back before the welcome (J4)
+    await this.host.prepareBoard()
     const { 0: client, 1: server } = new WebSocketPair()
     // The guess limit (F3) and the upgrade rate (I1) count per network address too: kept as a
     // digest bound to this room

@@ -1,7 +1,14 @@
-import { WHITEBOARD_LAYER, isWhiteboard, type AnnotationOp, type Stroke } from '../shared/annotation.ts'
+import {
+  PAST_AUTHOR,
+  WHITEBOARD_LAYER,
+  isWhiteboard,
+  type AnnotationOp,
+  type Stroke,
+} from '../shared/annotation.ts'
 import { DEFAULT_ANNOTATION_POLICY } from '../shared/roles.ts'
 import {
   ANNOTATION_FLUSH_MS,
+  BOARD_SAVE_MS,
   ANNOTATION_FRAME_RATE,
   ANNOTATION_STROKE_RATE,
 } from '../shared/annotation-limits.ts'
@@ -233,6 +240,26 @@ export type RestoreExtras = {
   files?: FilesState | null
   /** The strokes on the shares, as stored (J2) */
   annotations?: readonly AnnotationSegment[]
+  /** How this meeting stands with the saved whiteboard (J4); absent: it has not read it yet */
+  board?: BoardState | null
+}
+
+/** A persistent room's meeting that has read its saved whiteboard (J4, e7-t08) */
+export type BoardState = {
+  /** It changed since it was last saved */
+  dirty: boolean
+}
+
+/**
+ * Where a persistent room's whiteboard lives between meetings (J4, e7-t08; worker/board-store.ts).
+ * Only `load` rejects: a save that failed resolves false, a deletion that failed is logged
+ */
+export interface RoomBoards {
+  load(record: PersistentRecord): Promise<readonly Stroke[] | null>
+  save(record: PersistentRecord, strokes: readonly Stroke[]): Promise<boolean>
+  /** The meeting never managed to read it: what was saved stays under what this one drew */
+  merge(record: PersistentRecord, strokes: readonly Stroke[]): Promise<boolean>
+  remove(record: PersistentRecord): Promise<void>
 }
 
 /** What survives the object being evicted */
@@ -265,6 +292,8 @@ export interface RoomStorage {
   saveFiles?(state: FilesState): void
   /** Segments of strokes that changed (J2, worker/room-annotations.ts); optional like the above */
   saveAnnotations?(writes: AnnotationWrite[]): void
+  /** How this meeting stands with the saved whiteboard (J4); optional like the above */
+  saveBoardState?(state: BoardState): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -336,6 +365,8 @@ export interface RoomHostDeps {
    * strokes are stored by the next alarm. An eviction before it fires loses at most that long.
    */
   later?: (ms: number, work: () => void) => void
+  /** A persistent room's whiteboard between meetings (J4); absent: it goes with the meeting */
+  boards?: RoomBoards
 }
 
 export type Admission = { ok: true } | { ok: false; code: number; reason: string }
@@ -437,6 +468,12 @@ export class RoomHost {
   private annotations = new RoomAnnotations()
   /** A storage write of the strokes is on its way (`later`) */
   private annotationsFlushing = false
+  /** This meeting has read the saved whiteboard (J4) */
+  private boardLoaded = false
+  /** The whiteboard changed since it was last saved (J4) */
+  private boardDirty = false
+  /** The read under way, so people arriving together wait for one */
+  private boardLoading: Promise<void> | null = null
   /** `annotate` frames and new strokes per member (J2), in memory like the chat's */
   private readonly annotationFrames = new ChatRateLimit(ANNOTATION_FRAME_RATE)
   private readonly annotationStrokes = new ChatRateLimit(ANNOTATION_STROKE_RATE)
@@ -569,6 +606,8 @@ export class RoomHost {
       (share) => share === WHITEBOARD_LAYER || sharing[share] !== undefined,
     )
     this.flushAnnotations()
+    this.boardLoaded = !!info && !!extras.board
+    this.boardDirty = !!info && extras.board?.dirty === true
     const restoredAt = this.deps.now()
     for (const id of this.members.keys()) this.cameIn.set(id, restoredAt)
     this.sent = info ? this.view() : null
@@ -709,9 +748,73 @@ export class RoomHost {
       this.deps.sockets.close(id, CloseCode.ended, 'ended')
     }
     this.conns.clear()
+    const gone = this.persistent
     this.persistent = null
     this.endedUntil = null
+    // Its whiteboard too. After whatever save is under way (worker/board-store.ts)
+    if (this.deps.boards) this.boardGone = this.deps.boards.remove(gone)
     this.close()
+  }
+
+  /** The deletion of a destroyed room's whiteboard, for the adapter to wait for */
+  boardGone: Promise<void> | null = null
+
+  /**
+   * Someone is arriving at a persistent room (J4, e7-t08): the whiteboard saved by its last meeting
+   * comes back before their welcome, so it is in the snapshot they get. Once a meeting. When R2
+   * cannot say, the meeting starts without it and the next arrival or `board` job tries again: what
+   * was saved is not overwritten meanwhile (`saveBoard` waits for it, `close` merges).
+   */
+  prepareBoard(): Promise<void> {
+    const record = this.persistent
+    const { boards } = this.deps
+    if (!record || !boards || this.boardLoaded) return Promise.resolve()
+    this.boardLoading ??= boards
+      .load(record)
+      .then((strokes) => {
+        // Destroyed, or a new meeting, while it was on its way
+        if (this.persistent !== record || !this.info) return
+        this.boardLoaded = true
+        this.deps.storage.saveBoardState?.({ dirty: this.boardDirty })
+        if (!strokes || strokes.length === 0) return
+        this.annotations.seed(WHITEBOARD_LAYER, strokes)
+        this.flushAnnotations()
+        // Only someone already here when an earlier try failed
+        const here = this.roomConns()
+        for (const frame of here.length > 0 ? this.annotations.snapshot() : []) {
+          for (const id of here) this.deps.sockets.send(id, frame)
+        }
+      })
+      .catch((error: unknown) => console.error('reading a saved whiteboard failed', error))
+      .finally(() => {
+        this.boardLoading = null
+      })
+    return this.boardLoading
+  }
+
+  /** The whiteboard changed: a persistent room saves it within BOARD_SAVE_MS (J4) */
+  private boardChanged(): void {
+    if (!this.persistent || !this.deps.boards || this.boardDirty) return
+    this.boardDirty = true
+    if (this.boardLoaded) this.deps.storage.saveBoardState?.({ dirty: true })
+    this.reschedule()
+  }
+
+  /** What changed goes to R2 now, once the meeting has read what was there */
+  private saveBoard(): void {
+    const record = this.persistent
+    const { boards } = this.deps
+    if (!record || !boards || !this.boardDirty) return
+    if (!this.boardLoaded) {
+      void this.prepareBoard()
+      return
+    }
+    this.boardDirty = false
+    this.deps.storage.saveBoardState?.({ dirty: false })
+    void boards.save(record, this.annotations.strokes(WHITEBOARD_LAYER)).then((saved) => {
+      // Tried again at the next job, or when the meeting closes
+      if (!saved && this.persistent === record && this.info?.startedAt) this.boardChanged()
+    })
   }
 
   /** When the alarm should fire next (the earliest job), or null for no alarm */
@@ -742,6 +845,8 @@ export class RoomHost {
         this.expireConsent()
       } else if (job === 'guesses') {
         if (this.guard.prune(this.deps.now())) this.saveGuesses()
+      } else if (job === 'board') {
+        this.saveBoard()
       } else if (job === 'ended' && !this.info) {
         // The ended meeting's tombstone ran out (F3): from now on its id is simply not found
         this.endedUntil = null
@@ -825,7 +930,10 @@ export class RoomHost {
     this.conns.delete(connId)
     this.socketRate.forget(connId)
     // The last socket gone: nothing keeps the object awake, so the strokes are stored now (J2)
-    if (this.conns.size === 0) this.flushAnnotations()
+    if (this.conns.size === 0) {
+      this.flushAnnotations()
+      this.saveBoard()
+    }
     if (conn.member === null) {
       this.reschedule()
       return
@@ -1002,6 +1110,7 @@ export class RoomHost {
     const drawing = this.mayDrawOn(memberId, share)
     let limited = false
     let denied = false
+    const whiteboard = isWhiteboard(share)
     for (const op of ops) {
       if (!drawing && (op.op === 'add' || op.op === 'update' || op.op === 'laser')) {
         denied = true
@@ -1012,6 +1121,11 @@ export class RoomHost {
         case 'add': {
           const { id } = op.stroke
           const stroke: Stroke = { ...op.stroke, by: memberId }
+          // Cleared while it was still being drawn (J4): it does not come back at the end of it
+          if (this.annotations.refusedAsCleared(share, id, op.live === true)) {
+            back.push({ op: 'remove', id })
+            break
+          }
           // Past a board's limits (J3); someone else's id cannot be asked about, `put` refuses it
           if (this.annotations.overflows(share, stroke)) {
             limited = true
@@ -1023,7 +1137,7 @@ export class RoomHost {
             back.push({ op: 'remove', id })
             break
           }
-          const put = this.annotations.put(share, stroke)
+          const put = this.annotations.put(share, stroke, op.live === true)
           // Someone else's id: never a stroke of ours to replace
           if (!put) {
             back.push({ op: 'remove', id })
@@ -1056,6 +1170,7 @@ export class RoomHost {
     if (limited) this.deps.sockets.send(connId, { t: 'error', code: 'annotation_limit' })
     if (denied) this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
     if (back.length > 0) this.sendLayer([connId], share, null, back)
+    if (whiteboard && onward.some((op) => op.op !== 'laser')) this.boardChanged()
     if (onward.length > 0) {
       const others = [...this.conns]
         .filter(([id, conn]) => id !== connId && this.inRoom(conn))
@@ -1103,14 +1218,17 @@ export class RoomHost {
     const affected = new Set(by === null ? authors.keys() : authors.has(by) ? [by] : [])
     // Nothing of theirs there: nothing to do, nobody to tell
     if (affected.size === 0) return
+    this.annotations.noteClearedWhileDrawn(share, by)
     if (by === null) this.annotations.clearShare(share)
     else this.annotations.clearBy(share, by)
     this.flushAnnotations()
+    if (isWhiteboard(share)) this.boardChanged()
     this.sendLayer(this.roomConns(), share, memberId, [
       by === null ? { op: 'clear' } : { op: 'clear', by },
     ])
     if (!isWhiteboard(share)) affected.add(share)
     affected.delete(memberId)
+    affected.delete(PAST_AUTHOR)
     for (const id of affected) {
       this.notify(id, {
         t: 'notice',
@@ -2465,6 +2583,9 @@ export class RoomHost {
     )
     if (away !== null && someoneConnected) this.schedule.set('handoff', away + HOST_HANDOFF_MS)
     else this.schedule.clear('handoff')
+    // A persistent room's changed whiteboard goes to R2 (J4)
+    if (this.boardDirty) this.schedule.ensure('board', now + BOARD_SAVE_MS)
+    else this.schedule.clear('board')
     // The next ban to run out (F1); none left, no job
     let banEnds: number | null = null
     for (const { until } of this.bans.values()) {
@@ -2522,6 +2643,15 @@ export class RoomHost {
       this.persistent && this.info
         ? { persistent: this.persistent, info: this.info, password: this.password }
         : null
+    // What the meeting leaves on the whiteboard stays for the next one (J4, e7-t08): the last save
+    const { boards } = this.deps
+    if (kept && boards) {
+      const strokes = this.annotations.strokes(WHITEBOARD_LAYER)
+      if (this.boardLoaded && this.boardDirty) void boards.save(kept.persistent, strokes)
+      else if (!this.boardLoaded && strokes.length > 0) void boards.merge(kept.persistent, strokes)
+    }
+    this.boardLoaded = false
+    this.boardDirty = false
     this.info = null
     this.rev = 0
     this.sent = null
@@ -2562,8 +2692,7 @@ export class RoomHost {
         spotlight: null,
         // Recordings (I4) are the meeting's, not the room's settings
         recordings: {},
-        // So are who may annotate and the board (J3). Keeping the board's strokes across meetings
-        // is J4 (e7-t08): annotationsOf(WHITEBOARD_LAYER), before `reset` above, is what to keep
+        // So are who may annotate and whether the board is open (J3); its strokes were saved above
         annotationPolicy: DEFAULT_ANNOTATION_POLICY,
         whiteboard: null,
       }

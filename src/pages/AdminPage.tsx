@@ -146,7 +146,7 @@ export default function AdminPage() {
               </tr>
             </thead>
             <tbody>
-              {metricRows.map(({ label, value }) => (
+              {metricRows().map(({ label, value }) => (
                 <tr key={label}>
                   <th scope="row">{label}</th>
                   <td>{value(telemetry.last24h)}</td>
@@ -167,7 +167,7 @@ export default function AdminPage() {
                 <thead>
                   <tr>
                     <th scope="col">{strings.admin.day}</th>
-                    {dayColumns.map(({ label }) => (
+                    {dayColumns().map(({ label }) => (
                       <th key={label} scope="col">
                         {label}
                       </th>
@@ -180,7 +180,7 @@ export default function AdminPage() {
                       <th scope="row">
                         <time dateTime={day.day}>{formatDay(day.day)}</time>
                       </th>
-                      {dayColumns.map(({ label, value }) => (
+                      {dayColumns().map(({ label, value }) => (
                         <td key={label}>{value(day)}</td>
                       ))}
                     </tr>
@@ -332,7 +332,8 @@ const ratingDistribution = (counts: EventCounts) => {
   return parts.length === 0 ? strings.admin.none : parts.join(strings.admin.listSeparator)
 }
 
-const metricRows: { label: string; value: (counts: EventCounts) => string }[] = [
+// Functions, not tables: read where they are used (RULES.md §1), in the language in use
+const metricRows = (): { label: string; value: (counts: EventCounts) => string }[] => [
   { label: strings.admin.metrics.joins, value: (c) => String(c.joinOk + failed(c)) },
   { label: strings.admin.metrics.joinRate, value: (c) => ratio(c.joinOk, c.joinOk + failed(c)) },
   {
@@ -350,7 +351,7 @@ const metricRows: { label: string; value: (counts: EventCounts) => string }[] = 
   { label: strings.admin.metrics.ratingDistribution, value: ratingDistribution },
 ]
 
-const dayColumns: { label: string; value: (counts: EventCounts) => string }[] = [
+const dayColumns = (): { label: string; value: (counts: EventCounts) => string }[] => [
   { label: strings.admin.metrics.joins, value: (c) => String(c.joinOk + failed(c)) },
   {
     label: strings.admin.metrics.joinRate,

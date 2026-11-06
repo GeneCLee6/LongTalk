@@ -102,7 +102,7 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 export function insideWidget(target: EventTarget | null): boolean {
   const element = asElement(target)
   return !!element?.closest(
-    '[role="menu"],[role="menubar"],[role="listbox"],[role="dialog"],[role="alertdialog"],[aria-modal="true"]',
+    '[role="menu"],[role="menubar"],[role="listbox"],[role="dialog"],[role="alertdialog"],[role="application"],[aria-modal="true"]',
   )
 }
 

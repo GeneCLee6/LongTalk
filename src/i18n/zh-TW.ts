@@ -1,34 +1,17 @@
 // The Traditional Chinese (Taiwan) dictionary: the default locale and the shape every other
-// dictionary must match (src/strings.ts derives the `Strings` type from this object, so a key
-// missing from en.ts is a type error). The product name is English only.
+// dictionary must match (src/i18n/types.ts derives the `Strings` type from this object and
+// zh-TW.home.ts, so a key missing from en.ts is a type error). The product name is English only.
+//
+// J4: only what the home page does not use. `zhTWRoom` is a chunk of its own, loaded with the room
+// and the other lazy pages (src/strings.ts). `zhTW` is both parts as one, for what runs outside the
+// browser (tests, e2e, scripts/brand.ts): the app never reads it.
+import { mergeDictionaries } from './merge.ts'
 import type { TileState } from './types.ts'
+import { zhTWHome } from './zh-TW.home.ts'
 
 const zhSignal = { good: '訊號好', fair: '訊號普通', poor: '訊號差' } as const
 
-export const zhTW = {
-  appName: 'LongTalk',
-  tagline: '開著就不會斷的會議室',
-  home: {
-    intro: '貼一個連結，朋友點了就進來。不用裝 App、不用註冊、沒有 40 分鐘限制。',
-    createRoom: '開一間房',
-    creatingRoom: '開房中…',
-    createRoomFailed: '開房失敗，請再試一次。',
-    // Abuse protection (I1): Turnstile, the per-network limit, the blocklist
-    verifying: '確認中…',
-    createRoomVerifyFailed: '沒有通過真人驗證，請再試一次。',
-    createRoomRateLimited: (minutes: number) =>
-      `這個網路開房的次數太多了，請 ${minutes} 分鐘後再試。`,
-    createRoomBlocked: '這個網路目前不能開房或加入會議室。',
-    joinLabel: '會議室連結或代碼',
-    joinPlaceholder: '貼上連結或輸入代碼',
-    join: '加入',
-    joinInvalid: '看不出這是哪一間房，請貼上完整連結或 10 碼代碼。',
-    perks: [
-      { title: '沒有時間限制', body: '聊到天亮也不會被切斷。房間在最後一個人離開後才關。' },
-      { title: '免安裝、免註冊', body: '瀏覽器打開就能用。手機也行。' },
-      { title: '螢幕分享與畫筆', body: '分享整個螢幕、視窗或分頁；之後還能在上面直接畫。' },
-    ],
-  },
+export const zhTWRoom = {
   prejoin: {
     title: '準備加入',
     roomCode: (roomId: string) => `會議室 ${roomId}`,
@@ -130,17 +113,6 @@ export const zhTW = {
     watching: '允許之後，這一頁會自動再試一次。',
     withoutDevices: '也可以先不開麥克風和鏡頭直接加入：你看得到、聽得到大家，之後再打開。',
     retry: '再試一次',
-  },
-  // The language menus (G1, e4-t15): each language is named in itself
-  language: {
-    label: '語言',
-    section: '語言',
-    names: { 'zh-TW': '繁體中文', en: 'English' },
-  },
-  // Light or dark (G5, AC-4.8): pages follow the choice, the room stays dark
-  theme: {
-    label: '外觀',
-    names: { system: '跟隨系統', light: '淺色', dark: '深色' },
   },
   room: {
     title: (roomId: string) => `會議室 ${roomId}`,
@@ -551,6 +523,32 @@ export const zhTW = {
     clearOneTitle: (name: string) => `清除 ${name} 的標註？`,
     clearOneBody: (name: string) => `${name} 畫的都會消失，所有人同時看不到，而且不能復原。`,
     clearConfirm: '清除',
+    // A persistent room's board from an earlier meeting (J4, e7-t08): nobody here drew those
+    earlier: '之前的會議',
+    // Exporting (J4, e7-t07)
+    exportButton: '匯出',
+    exporting: {
+      boardTitle: '匯出白板',
+      shareTitle: '匯出畫面與標註',
+      hint: '檔案在這個瀏覽器裡產生，不會上傳。雷射筆與名字不會出現在檔案裡。',
+      working: '正在產生檔案…',
+      failed: '匯出失敗，請再試一次。',
+      viewPng: '目前畫面（PNG）',
+      wholePng: '全部內容（PNG）',
+      wholePdf: '全部內容（PDF，太大會分成多頁）',
+      framePng: '目前的畫面與標註（PNG）',
+      framePdf: '目前的畫面與標註（PDF）',
+      boardFile: '白板',
+      shareFile: '分享畫面',
+    },
+    // Marks without a pointer (J4, e7-t09): a cursor moved with the arrow keys
+    keyboard: {
+      cursor: '鍵盤畫筆：方向鍵移動，Enter 開始或結束，Esc 離開',
+      up: '方向鍵移動（Shift 走快一點），Enter 開始畫，Esc 離開',
+      down: '正在畫：方向鍵移動，Enter 結束，Esc 取消這一筆',
+      eraser: '方向鍵移動，Enter 擦掉這裡自己的筆跡，Esc 離開',
+      laser: '方向鍵移動雷射筆，Esc 離開',
+    },
   },
   // The room's whiteboard (J3, e7-t06)
   whiteboard: {
@@ -711,18 +709,8 @@ export const zhTW = {
       },
     },
   },
-  // The owner's dashboard (e11-t03): /admin
-  // The link to /privacy and its loading line. The policy's own text is not here: src/privacy/
-  // policy.*.ts, lazily loaded per language (RULES.md §1), so it stays out of the home page's JS
-  privacy: {
-    link: '隱私權政策',
-    linkNewTab: '隱私權政策（在新分頁開啟）',
-    loading: '載入中…',
-  },
   account: {
     title: '我的帳號',
-    homeLink: '登入',
-    homeLinkSignedIn: '我的帳號',
     back: '回首頁',
     loading: '載入中…',
     intro:
@@ -1071,33 +1059,6 @@ export const zhTW = {
     rejoin: '重新加入',
     home: '回首頁',
   },
-  // A part of the app that could not be loaded (e4-t20): a network blip, or a new deployment
-  // replaced the files this page was built with
-  loadFailed: {
-    title: '載入失敗，請重新整理',
-    body: '可能是網路中斷，或 LongTalk 剛更新。重新整理後就能繼續。',
-    reload: '重新整理',
-  },
-  // The app shell (G4, e4-t12): the install offer (home page only), new versions, offline
-  pwa: {
-    installLabel: '安裝 App',
-    installTitle: '安裝 LongTalk',
-    installBody: '裝到電腦或手機，下次從桌面或主畫面一鍵開會。',
-    install: '安裝',
-    installDismiss: '不用了',
-    iosTitle: '把 LongTalk 加到主畫面',
-    iosBody: '在 Safari 點「分享」，再選「加入主畫面」，下次就能像 App 一樣打開。',
-    iosDismiss: '知道了',
-    updateLabel: '新版本',
-    update: '有新版本，重新整理就能使用。',
-    // In a meeting: reloading goes straight back in (the session token, AC-1.2)
-    updateRoom: '有新版本。重新整理後會直接回到這場會議，也可以等會議結束再說。',
-    updateReload: '重新整理',
-    updateLater: '稍後',
-    offlineTitle: '你目前離線',
-    offlineHome: '你目前離線。連上網路後才能開房或加入會議室。',
-    offlineRoom: '進會議室需要網路。連上網路後會自動再試一次。',
-  },
   // Keyboard shortcuts and push-to-talk (G4, e4-t13): the list (?, 更多), tooltips, confirms
   shortcuts: {
     title: '鍵盤快捷鍵',
@@ -1339,11 +1300,6 @@ export const zhTW = {
     waiting: '這場會議正在錄影。進入會議時會請你同意被錄影。',
     prejoinLeave: '不加入，回首頁',
     // A recording left behind (the tab closed or crashed): offered on the next visit
-    leftover: (when: string) => `有一段沒有存好的錄影（${when} 開始）。`,
-    leftoverDownload: '下載上次未完成的錄影',
-    leftoverDelete: '刪除',
-    leftoverDownloaded: '已下載上次未完成的錄影',
-    leftoverDeleted: '已刪除上次未完成的錄影',
     // Drawn on the recording itself
     shareLabel: (name: string) => `${name} 的分享畫面`,
     // The participants panel (the host)
@@ -1364,3 +1320,5 @@ export const zhTW = {
     unknown: '發生未預期的錯誤。',
   },
 } as const
+
+export const zhTW = /*#__PURE__*/ mergeDictionaries(zhTWHome, zhTWRoom)
