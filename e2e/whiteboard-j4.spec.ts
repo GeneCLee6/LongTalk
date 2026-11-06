@@ -261,9 +261,9 @@ test('a phone-sized browser: one finger draws, two zoom and leave no mark, the p
 }) => {
   test.setTimeout(120_000)
   const { context, page } = await phonePage(browser)
-  const response = await page.request.post('/api/rooms')
-  const { id } = (await response.json()) as { id: string }
-  await page.goto(`/r/${id}`)
+  // Through the home page: a deployment with Turnstile refuses a bare POST /api/rooms
+  await page.goto('/')
+  await page.getByRole('button', { name: strings.home.createRoom }).click()
   await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill('Phone')
   await joinFromPreJoin(page)
   await toolbarButton(page, strings.toolbar.more).click()

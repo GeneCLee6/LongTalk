@@ -164,6 +164,16 @@ test('Alice opens the board and draws, Bob sees it, late Carol gets the replay',
     await bob.page.setViewportSize({ width: 900, height: 700 })
     await expectLine(bob, -0.1)
     await bob.page.setViewportSize({ width: 1280, height: 800 })
+    // The stage eases to its new size: drawing during that would miss where it aims
+    let last = ''
+    await expect
+      .poll(async () => {
+        const now = JSON.stringify(await board(bob).boundingBox())
+        const settled = now === last
+        last = now
+        return settled
+      })
+      .toBe(true)
   })
 
   await test.step('Bob draws too, and his own zoom and pan are his alone', async () => {
