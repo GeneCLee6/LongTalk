@@ -475,7 +475,8 @@ export interface ShareSlots {
 
 /**
  * Which share takes the main area (e3-t07, AC-3.5): `sharers` in the order they started
- * (shared/protocol.ts shareOrder), never our own (the presenter view shows it small, e3-t08).
+ * (shared/protocol.ts shareOrder), never our own (the presenter view shows it small, e3-t08) unless
+ * `you` is null, which is how our own comes to the main area when asked for (`chosen`, J3).
  * The viewer's choice while that member still shares; otherwise the latest share, so a new share
  * comes to the front unless the viewer chose one. The rest go in the strip.
  */
@@ -488,4 +489,20 @@ export function shareSlots(
   const main =
     chosen !== null && others.includes(chosen) ? chosen : (others[others.length - 1] ?? null)
   return { main, strip: others.filter((id) => id !== main) }
+}
+
+/**
+ * What can take the main area, oldest first (J3, e7-t06): the shares (shared/protocol.ts shareOrder)
+ * with the whiteboard, `layer`, among them by when it opened. shareSlots treats it as one more
+ * share: the latest comes to the front unless the viewer chose something else.
+ */
+export function stageSources(
+  shares: readonly { memberId: string; since: number }[],
+  board: { layer: string; since: number } | null,
+): string[] {
+  if (!board) return shares.map((share) => share.memberId)
+  const at = shares.findIndex((share) => share.since > board.since)
+  const ids = shares.map((share) => share.memberId)
+  ids.splice(at < 0 ? ids.length : at, 0, board.layer)
+  return ids
 }

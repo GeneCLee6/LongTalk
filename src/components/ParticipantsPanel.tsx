@@ -2,7 +2,15 @@ import { useState } from 'react'
 import styled from 'styled-components'
 import type { HostMemberAction, Member, WaitingEntry } from '../../shared/protocol.ts'
 import { handQueue } from '../../shared/reactions.ts'
-import { RANK, can, canActOn, type Role } from '../../shared/roles.ts'
+import {
+  ANNOTATION_POLICIES,
+  DEFAULT_ANNOTATION_POLICY,
+  RANK,
+  can,
+  canActOn,
+  type AnnotationPolicy,
+  type Role,
+} from '../../shared/roles.ts'
 import { strings } from '../strings.ts'
 import { avatar, avatarColor, color, fontSize, motion, radius, space } from '../styles/tokens.ts'
 import { Button } from './Button.tsx'
@@ -42,6 +50,9 @@ export interface ParticipantsPanelProps {
   /** The room has a password (F3): the host's settings say so and open the password dialog */
   passwordSet?: boolean
   onPassword?: () => void
+  /** Who may annotate (J3, e7-t05): the three states, for who may set them */
+  annotationPolicy?: AnnotationPolicy
+  onAnnotationPolicy?: (policy: AnnotationPolicy) => void
   /** Co-hosts and handing over (F3, e1-t16); handing over asks first */
   onRole?: (change: RoleChange, memberId: string) => void
   /** Who records the meeting now (I4): a 錄影中 tag for everyone */
@@ -102,6 +113,8 @@ export function ParticipantsPanel({
   waiting = [],
   locked = false,
   waitingRoom = false,
+  annotationPolicy = DEFAULT_ANNOTATION_POLICY,
+  onAnnotationPolicy = noop,
   onLock = noop,
   onWaitingRoom = noop,
   onAdmit = noop,
@@ -139,6 +152,7 @@ export function ParticipantsPanel({
   const canWaitingRoom = can(role, 'waitingRoom')
   const canAdmit = can(role, 'admit')
   const canSetPassword = can(role, 'setPassword')
+  const canSetPolicy = can(role, 'annotationPolicy')
   const toggleWaitingRoom = () => {
     if (waitingRoom && waiting.length > 0) setConfirm({ type: 'waitingOff' })
     else onWaitingRoom(!waitingRoom)
@@ -223,7 +237,7 @@ export function ParticipantsPanel({
 
   return (
     <Root>
-      {(canLock || canWaitingRoom || canSetPassword) && (
+      {(canLock || canWaitingRoom || canSetPassword || canSetPolicy) && (
         <Settings aria-label={strings.participants.settings}>
           {canLock && (
             <Switch
@@ -240,6 +254,25 @@ export function ParticipantsPanel({
               on={waitingRoom}
               onToggle={toggleWaitingRoom}
             />
+          )}
+          {canSetPolicy && (
+            <SwitchRow>
+              <SwitchText>
+                <Name id="annotation-policy-label">{strings.annotation.policy.label}</Name>
+                <Hint>{strings.annotation.policy.hint[annotationPolicy]}</Hint>
+              </SwitchText>
+              <PolicySelect
+                aria-labelledby="annotation-policy-label"
+                value={annotationPolicy}
+                onChange={(event) => onAnnotationPolicy(event.target.value as AnnotationPolicy)}
+              >
+                {ANNOTATION_POLICIES.map((policy) => (
+                  <option key={policy} value={policy}>
+                    {strings.annotation.policy.options[policy]}
+                  </option>
+                ))}
+              </PolicySelect>
+            </SwitchRow>
           )}
           {canSetPassword && (
             <SwitchRow>
@@ -306,7 +339,8 @@ export function ParticipantsPanel({
           </WaitingList>
         </Waiting>
       )}
-      <List aria-label={strings.participants.list}>
+      {/* The settings can leave it short enough to scroll, and a row may have nothing to tab to */}
+      <List aria-label={strings.participants.list} tabIndex={0}>
         {sorted.map((member) => {
           const mic = member.tracks.find((t) => t.kind === 'mic')
           const cam = member.tracks.find((t) => t.kind === 'cam')
@@ -595,6 +629,19 @@ const Settings = styled.section`
   gap: ${space(2)};
   padding: ${space(3)} ${space(4)};
   border-bottom: 1px solid ${color.line};
+`
+
+const PolicySelect = styled.select`
+  flex: none;
+  max-width: 45%;
+  min-height: 36px;
+  padding: ${space(1)} ${space(2)};
+  border: 1px solid ${color.line};
+  border-radius: ${radius.button};
+  background: ${color.surface};
+  color: ${color.fg};
+  font: inherit;
+  font-size: ${fontSize.small};
 `
 
 const SwitchRow = styled.div`

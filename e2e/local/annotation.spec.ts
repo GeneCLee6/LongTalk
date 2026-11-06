@@ -562,3 +562,65 @@ test('the tile and its controls have no axe violations', async ({ page }) => {
     .analyze()
   expect(results.violations).toEqual([])
 })
+
+// The sharer's own share (J3): the real tile, a real <video> of the local capture. What a viewer's
+// stroke looks like there, through the real room, is in e2e/annotation.spec.ts.
+test.describe("the sharer's own view", () => {
+  const ownTile = (page: Page) => page.getByRole('figure', { name: strings.screenShare.ownRegion })
+  const ownVideo = (page: Page) => ownTile(page).locator('video')
+
+  const ownCanvas = (page: Page) =>
+    ownTile(page).getByRole('img', { name: strings.screenShare.annotationCanvas })
+
+  test('a window: the picture and the marks, and the limit said in words', async ({ page }) => {
+    await page.goto(`${origin}/?own=window`)
+    await expect(ownTile(page)).toBeVisible()
+    await expect(ownTile(page).getByText(strings.screenShare.ownLimit)).toBeVisible()
+    await expect(ownVideo(page)).toBeVisible()
+    await expect
+      .poll(() => ownVideo(page).evaluate((v: HTMLVideoElement) => v.videoWidth))
+      .toBeGreaterThan(0)
+    // Nothing to choose: no mirror to fear
+    await expect(ownTile(page).getByRole('button', { name: strings.screenShare.ownShowPicture })).toHaveCount(0)
+    const axe = await new AxeBuilder({ page }).include('figure').analyze()
+    expect(axe.violations.map((v) => v.id)).toEqual([])
+  })
+
+  test('a whole screen: no picture until asked, the marks all the same', async ({ page }) => {
+    await page.goto(`${origin}/?own=screen`)
+    await expect(ownTile(page)).toBeVisible()
+    // Playing, so the marks know the picture's shape, and never painted
+    await expect
+      .poll(() => ownVideo(page).evaluate((v: HTMLVideoElement) => v.videoWidth))
+      .toBeGreaterThan(0)
+    await expect(ownVideo(page)).toBeHidden()
+    await expect(ownTile(page).getByText(strings.screenShare.ownHidden)).toBeVisible()
+    const axe = await new AxeBuilder({ page }).include('figure').analyze()
+    expect(axe.violations.map((v) => v.id)).toEqual([])
+
+    // The sharer can draw here too
+    await ownTile(page).hover()
+    await ownTile(page).getByRole('button', { name: strings.screenShare.annotate, exact: true }).click()
+    await expect(toolbar(page)).toBeVisible()
+    const box = (await ownTile(page).boundingBox())!
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.6)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.6, { steps: 8 })
+    await page.mouse.up()
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { annotateFrames: unknown[] }).annotateFrames.length))
+      .toBeGreaterThan(0)
+    const painted = await ownCanvas(page).evaluate((element: HTMLCanvasElement) => {
+      const { width, height } = element
+      const data = element.getContext('2d')!.getImageData(0, Math.round(height * 0.6) - 3, width, 7).data
+      for (let i = 3; i < data.length; i += 4) if (data[i] > 0) return true
+      return false
+    })
+    expect(painted).toBe(true)
+
+    // Showing the picture is the sharer's call (a second screen has no mirror)
+    await ownTile(page).getByRole('button', { name: strings.screenShare.ownShowPicture }).click()
+    await expect(ownVideo(page)).toBeVisible()
+    await expect(ownTile(page).getByText(strings.screenShare.ownHidden)).toHaveCount(0)
+  })
+})

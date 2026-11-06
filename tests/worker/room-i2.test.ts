@@ -218,6 +218,8 @@ describe('a persistent room (e1-t13)', () => {
       memberCount: 0,
       startedAt: null,
       recordings: {},
+      annotationPolicy: 'everyone' as const,
+      whiteboard: null,
     })
     expect(t.host.summary()?.passwordSetAt).not.toBeNull()
     expect(t.stored).toMatchObject({ chat: 0, persistent: { owner: OWNER } })

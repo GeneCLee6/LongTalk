@@ -491,6 +491,10 @@ export const zhTW = {
     recordAllowed: (actor: string) =>
       `${actor} 允許你錄影。從「更多 › 開始錄影」開始，所有人都會看到「錄影中」。`,
     recordRevoked: (actor: string) => `${actor} 取消了你的錄影權限。`,
+    // J3 (e7-t05)
+    annotationPolicy: (actor: string, value: string) => `${actor} 把「誰可以標註」改成：${value}。`,
+    annotationsCleared: (name: string, all: boolean, board: boolean) =>
+      `${name} 清除了${board ? '白板' : '分享畫面'}上${all ? '全部的' : '你的'}標註。`,
   },
   // Screen sharing (D1: e3-t01 – e3-t03, e3-t05)
   annotation: {
@@ -527,6 +531,43 @@ export const zhTW = {
     unfold: '展開工具列',
     textLabel: '標註文字',
     textPlaceholder: '輸入文字，Enter 完成',
+    // Who may annotate, and clearing other people's marks (J3, e7-t05)
+    policy: {
+      label: '誰可以標註',
+      options: { everyone: '所有人', sharer: '主持人與分享者', off: '關閉' },
+      hint: {
+        everyone: '分享畫面與白板，所有人都可以畫',
+        sharer: '只有主持人、共同主持人和分享者（白板是打開它的人）可以畫',
+        off: '沒有人可以畫，已經畫的還在，可以清除',
+      },
+      changed: (value: string) => `誰可以標註：${value}`,
+    },
+    clearOthers: '清除標註…',
+    clearAll: (count: number) => `清除全部（${count} 筆）`,
+    clearOne: (name: string, count: number) => `清除 ${name} 的（${count} 筆）`,
+    departed: '已離開的人',
+    clearAllTitle: '清除全部標註？',
+    clearAllBody: '每個人畫的都會消失，所有人同時看不到，而且不能復原。',
+    clearOneTitle: (name: string) => `清除 ${name} 的標註？`,
+    clearOneBody: (name: string) => `${name} 畫的都會消失，所有人同時看不到，而且不能復原。`,
+    clearConfirm: '清除',
+  },
+  // The room's whiteboard (J3, e7-t06)
+  whiteboard: {
+    section: '白板',
+    open: '打開白板',
+    show: '在主畫面看白板',
+    close: '關閉白板',
+    closeHint: '關閉白板（大家都看不到，內容留著，會議結束才刪除）',
+    label: '白板',
+    region: '白板',
+    opened: (name: string) => `${name} 打開了白板`,
+    viewControls: '白板的檢視',
+    pen: '畫圖',
+    penHint: '畫圖（關掉就可以拖曳移動白板）',
+    grid: '格線',
+    home: (percent: number) => `${percent}%，回到白板中央`,
+    viewOnly: '目前不能在白板上畫，只能看',
   },
   screenShare: {
     stop: '停止分享',
@@ -557,7 +598,17 @@ export const zhTW = {
     annotate: '標註',
     annotateHint: '標註（大家都看得到，分享結束就會清除）',
     annotationCanvas: '標註畫布',
-    annotationLimit: '畫得太快了，有一筆沒有送出',
+    annotationLimit: '有一筆沒有送出：畫得太快，或白板已滿（可以先清除一些）',
+    // The sharer's own share with its marks (J3): from their own capture, never from the SFU
+    ownOpen: '看我的畫面與標註',
+    ownOpenMarked: '有人畫了標註，來看看',
+    ownClose: '收起我的畫面',
+    ownRegion: '你分享的畫面與標註',
+    ownLabel: '你的畫面',
+    ownLimit: '標註只在會議裡看得到。瀏覽器不能畫到你真正的桌面上，所以你自己的螢幕上不會出現。',
+    ownHidden: '分享整個螢幕時先不顯示畫面，以免畫面一直重複；這裡只有標註。',
+    ownShowPicture: '顯示畫面',
+    ownHidePicture: '隱藏畫面',
     // 文字／動態 (e3-t06): the sharing bar's switch and the hint for moving content
     mode: '分享模式',
     modeText: '文字',

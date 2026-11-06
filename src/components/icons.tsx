@@ -430,6 +430,26 @@ export function FullscreenExitIcon() {
   )
 }
 
+/** A grid: the whiteboard's lines (J3) */
+export function GridIcon() {
+  return (
+    <svg {...common}>
+      <rect x="4" y="4" width="16" height="16" rx="1" />
+      <path d="M4 12h16M12 4v16" />
+    </svg>
+  )
+}
+
+/** A sheet on a stand: the whiteboard (J3) */
+export function WhiteboardIcon() {
+  return (
+    <svg {...common}>
+      <rect x="3" y="4" width="18" height="12" rx="1" />
+      <path d="M12 16v3M8 21l4-2 4 2M7 12l3-3 2 2 4-4" />
+    </svg>
+  )
+}
+
 export function PenIcon() {
   return (
     <svg {...common}>
