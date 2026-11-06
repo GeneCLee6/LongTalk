@@ -148,8 +148,21 @@ test('背景模糊 runs where it is offered (e6-t06)', async ({ page }, testInfo
   // ask without a worker of its own: there it must fail the honest way, said aloud and with the
   // camera back. Everywhere else a failure is a failure. Real Safari: DEPLOY.md §5 step 33
   const failed = page.getByText(strings.settings.blurFailed)
-  // A failure to start shows up at the first picture, a moment after it has loaded
-  await page.waitForTimeout(5_000)
+  // A failure to start shows up at the first picture, a moment after it has loaded; its notice
+  // goes after a few seconds, so look as soon as the switch turns itself off
+  await toggle
+    .evaluate(
+      (input: HTMLInputElement) =>
+        new Promise<void>((resolve) => {
+          const end = performance.now() + 5_000
+          const check = () => {
+            if (!input.isConnected || !input.checked || performance.now() > end) resolve()
+            else requestAnimationFrame(check)
+          }
+          check()
+        }),
+    )
+    .catch(() => undefined)
   if (!(await toggle.isChecked())) {
     expect(testInfo.project.name).toBe('webkit')
     await expect(failed).toBeVisible()
