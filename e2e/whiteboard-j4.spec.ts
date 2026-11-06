@@ -141,6 +141,92 @@ function checkPdf(bytes: Uint8Array) {
   return { pages: Number(/\/Count (\d+)/.exec(text)![1]) }
 }
 
+/** Touches through the browser's own input pipeline, so they become real touch pointer events */
+async function touchscreen(context: BrowserContext, page: Page) {
+  const cdp = await context.newCDPSession(page)
+  const send = (type: string, points: { x: number; y: number }[]) =>
+    cdp.send('Input.dispatchTouchEvent', {
+      type: type as 'touchStart',
+      touchPoints: points.map(({ x, y }, id) => ({ x, y, id })),
+    })
+  return send
+}
+
+async function phonePage(browser: Browser) {
+  const context = await browser.newContext({
+    locale: 'zh-TW',
+    permissions: ['camera', 'microphone'],
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  })
+  const page = await context.newPage()
+  return { context, page }
+}
+
+/**
+ * One finger draws, two zoom and leave no mark, the page does not move. In the room the test already
+ * has: the runner's network has used up its rooms by now (I1's limit), and the board is open and empty
+ */
+async function phoneOnTheBoard(browser: Browser, path: string) {
+  const { context, page } = await phonePage(browser)
+  await page.goto(path)
+  await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill('Phone')
+  await joinFromPreJoin(page)
+  await expect(canvas(page)).toBeVisible()
+  // The stage eases into its layout as a member arrives: a finger aimed before that lands elsewhere
+  let last = ''
+  await expect
+    .poll(async () => {
+      const now = JSON.stringify(await board(page).boundingBox())
+      const settled = now === last
+      last = now
+      return settled
+    })
+    .toBe(true)
+  const touch = await touchscreen(context, page)
+  const box = (await board(page).boundingBox())!
+  const at = (fx: number, fy: number) => ({ x: box.x + box.width * fx, y: box.y + box.height * fy })
+
+  // The tools fit: one row, every one within the screen by sliding
+  const tools = page.getByRole('toolbar', { name: strings.annotation.toolbar })
+  const row = (await tools.boundingBox())!
+  expect(row.height).toBeLessThan(90)
+  expect(row.x).toBeGreaterThanOrEqual(0)
+  expect(row.x + row.width).toBeLessThanOrEqual(390)
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  )
+  expect(overflow).toBeLessThanOrEqual(0)
+
+  // One finger draws
+  await touch('touchStart', [at(0.3, 0.35)])
+  for (let i = 1; i <= 8; i += 1) await touch('touchMove', [at(0.3 + i * 0.05, 0.35)])
+  await touch('touchEnd', [])
+  await expect.poll(() => paintedAt(page, 0.5, 0.35)).toBe(true)
+  await expect(board(page)).toHaveAttribute('data-zoom', '1')
+
+  // Two fingers zoom, without a mark and without moving the page
+  await touch('touchStart', [at(0.4, 0.6)])
+  await touch('touchStart', [at(0.4, 0.6), at(0.6, 0.6)])
+  for (let i = 1; i <= 6; i += 1) {
+    await touch('touchMove', [at(0.4 - i * 0.03, 0.6), at(0.6 + i * 0.03, 0.6)])
+  }
+  await touch('touchEnd', [])
+  await expect
+    .poll(async () => Number(await board(page).getAttribute('data-zoom')))
+    .toBeGreaterThan(1.2)
+  const moved = await page.evaluate(() => ({
+    scroll: window.scrollY,
+    scale: window.visualViewport?.scale ?? 1,
+  }))
+  expect(moved).toEqual({ scroll: 0, scale: 1 })
+  expect(await paintedAt(page, 0.5, 0.6)).toBe(false)
+
+  await page.getByRole('button', { name: strings.toolbar.leave, exact: true }).click()
+  await context.close()
+}
+
 test('a persistent room\'s board: draw, export, end, come back, it is there, delete', async ({ browser }) => {
   test.setTimeout(180_000)
   const context = await browser.newContext({
@@ -222,6 +308,10 @@ test('a persistent room\'s board: draw, export, end, come back, it is there, del
     expect(await paintedAt(page, 0.5, 0.5)).toBe(false)
   })
 
+  await test.step('a phone-sized browser draws and pinches with touch', () =>
+    phoneOnTheBoard(browser, `/r/${SLUG}`),
+  )
+
   await test.step('the room and the account go, the board with them', async () => {
     await endMeeting(page)
     await page.goto('/me')
@@ -230,88 +320,5 @@ test('a persistent room\'s board: draw, export, end, come back, it is there, del
     await expect(page.getByRole('button', { name: strings.account.signUp })).toBeVisible()
     expect((await page.request.get(`/api/rooms/${SLUG}`)).status()).toBe(404)
   })
-  await context.close()
-})
-
-/** Touches through the browser's own input pipeline, so they become real touch pointer events */
-async function touchscreen(context: BrowserContext, page: Page) {
-  const cdp = await context.newCDPSession(page)
-  const send = (type: string, points: { x: number; y: number }[]) =>
-    cdp.send('Input.dispatchTouchEvent', {
-      type: type as 'touchStart',
-      touchPoints: points.map(({ x, y }, id) => ({ x, y, id })),
-    })
-  return send
-}
-
-async function phonePage(browser: Browser) {
-  const context = await browser.newContext({
-    locale: 'zh-TW',
-    permissions: ['camera', 'microphone'],
-    viewport: { width: 390, height: 844 },
-    isMobile: true,
-    hasTouch: true,
-  })
-  const page = await context.newPage()
-  return { context, page }
-}
-
-test('a phone-sized browser: one finger draws, two zoom and leave no mark, the page does not move', async ({
-  browser,
-}) => {
-  test.setTimeout(120_000)
-  const { context, page } = await phonePage(browser)
-  // Through the home page: a deployment with Turnstile refuses a bare POST /api/rooms
-  await page.goto('/')
-  await page.getByRole('button', { name: strings.home.createRoom }).click()
-  await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill('Phone')
-  await joinFromPreJoin(page)
-  await toolbarButton(page, strings.toolbar.more).click()
-  await page.getByRole('menuitem', { name: strings.whiteboard.open, exact: true }).click()
-  await expect(canvas(page)).toBeVisible()
-  const touch = await touchscreen(context, page)
-  const box = (await board(page).boundingBox())!
-  const at = (fx: number, fy: number) => ({ x: box.x + box.width * fx, y: box.y + box.height * fy })
-
-  await test.step('the tools fit: one row, every one within the screen by sliding', async () => {
-    const tools = page.getByRole('toolbar', { name: strings.annotation.toolbar })
-    const row = (await tools.boundingBox())!
-    expect(row.height).toBeLessThan(90)
-    expect(row.x).toBeGreaterThanOrEqual(0)
-    expect(row.x + row.width).toBeLessThanOrEqual(390)
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    )
-    expect(overflow).toBeLessThanOrEqual(0)
-  })
-
-  await test.step('one finger draws', async () => {
-    await touch('touchStart', [at(0.3, 0.35)])
-    for (let i = 1; i <= 8; i += 1) await touch('touchMove', [at(0.3 + i * 0.05, 0.35)])
-    await touch('touchEnd', [])
-    await expect.poll(() => paintedAt(page, 0.5, 0.35)).toBe(true)
-    await expect(board(page)).toHaveAttribute('data-zoom', '1')
-  })
-
-  await test.step('two fingers zoom, without a mark and without moving the page', async () => {
-    await page.evaluate(() => window.scrollTo(0, 0))
-    await touch('touchStart', [at(0.4, 0.6)])
-    await touch('touchStart', [at(0.4, 0.6), at(0.6, 0.6)])
-    for (let i = 1; i <= 6; i += 1) {
-      await touch('touchMove', [at(0.4 - i * 0.03, 0.6), at(0.6 + i * 0.03, 0.6)])
-    }
-    await touch('touchEnd', [])
-    await expect
-      .poll(async () => Number(await board(page).getAttribute('data-zoom')))
-      .toBeGreaterThan(1.2)
-    const moved = await page.evaluate(() => ({
-      scroll: window.scrollY,
-      scale: window.visualViewport?.scale ?? 1,
-    }))
-    expect(moved).toEqual({ scroll: 0, scale: 1 })
-    // The stroke from before is the only one: it grew with the zoom, around the pinch's centre
-    expect(await paintedAt(page, 0.5, 0.6)).toBe(false)
-  })
-
   await context.close()
 })
