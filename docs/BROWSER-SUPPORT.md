@@ -1,6 +1,6 @@
 # BROWSER-SUPPORT — 瀏覽器支援
 
-最後更新 2026-11-06（J1 加了 `fullscreen`；2026-11-04 I4 加了 `localRecording`；2026-11-03 H6 完整版，`e2-t16`；B4 初版 `e11-t04`，之後 C2、D2、G4、H4、H5 各加了幾列）。這份是相容矩陣（AC-2.8、AC-11.6）：每個 `capabilities.ts` 偵測的能力 × 六個目標瀏覽器、沒有時怎麼做、哪些在 CI 跑過、哪些等實機。實機的測法在 [`DEPLOY.md`](../DEPLOY.md) §5「實機測試計畫」。
+最後更新 2026-11-06（L4 加了 `backgroundBlur`、`memberVolume`；J1 加了 `fullscreen`；2026-11-04 I4 加了 `localRecording`；2026-11-03 H6 完整版，`e2-t16`；B4 初版 `e11-t04`，之後 C2、D2、G4、H4、H5 各加了幾列）。這份是相容矩陣（AC-2.8、AC-11.6）：每個 `capabilities.ts` 偵測的能力 × 六個目標瀏覽器、沒有時怎麼做、哪些在 CI 跑過、哪些等實機。實機的測法在 [`DEPLOY.md`](../DEPLOY.md) §5「實機測試計畫」。
 
 目標瀏覽器（`PRD/00-prd.md` §9）：Chrome／Edge 最近兩版、Firefox 最近兩版、Safari 17+（macOS）、iOS Safari 17+、Android Chrome。
 
@@ -44,6 +44,8 @@
 | 本機錄影（`MediaRecorder` 能寫 `src/record/format.ts` 的一種格式、`canvas.captureStream`、`createMediaStreamDestination`、`indexedDB`） | `localRecording` | ● CI | ○ | ○ | ○ | ○ | ○ | 「更多 › 開始錄影」是灰的並說明「這個瀏覽器不能錄影…」（`e8-t03`）；別人錄影時照樣看得到紅燈與告知。格式：Chromium、Firefox 寫 WebM（VP9 或 VP8＋Opus），Safari 寫 MP4（H.264＋AAC；Safari 18.4 起也會寫 WebM，照偵測挑第一個）。CI：headless Chromium 實際錄影並下載（`e2e/local/recording.spec.ts`）；Firefox 只比偵測；Playwright 的 Linux WebKit 偵測為否（它的 MediaRecorder 不寫這些格式，`ENGINE_DIFFERENCES` 不比這格）。Safari、iOS 要實機確認下載與播放 |
 | 通行密鑰（WebAuthn：`PublicKeyCredential`、`navigator.credentials.create`／`get`，只在 HTTPS 或 localhost） | `passkeys` | ● CI | ○ | ○ | ○ | ○ | ○ | `/me` 說「這個瀏覽器不能使用通行密鑰」，不能建立帳號或登入；不用帳號的一切照常（I2，`e1-t12`）。CI：headless Chromium 用虛擬驗證器註冊、登出、登入、建立固定會議室、以擁有者身分進房（`e2e/accounts.spec.ts`）。Firefox 只比偵測；Playwright 的 Linux WebKit 沒有 WebAuthn（`ENGINE_DIFFERENCES` 不比這格），Safari 13 起有。用平台驗證器（Face ID、Touch ID、Windows Hello、Android 螢幕鎖）與跨裝置（手機掃 QR code）要實機確認 |
 | 分享畫面全螢幕（`document.fullscreenEnabled`） | `fullscreen` | ○ | ○ | ○ | ○ | ✕ | ○ | 分享格的控制列沒有全螢幕鈕、雙擊與 F 不作用；縮放與平移照常（`e3-t11`）。iPhone 的 Safari 只有 `<video>` 自己的全螢幕（iPad 有），標註疊不上去，所以不用。實機確認在 `DEPLOY.md` §5 第 29 步 |
+| 背景模糊（`Worker`、`OffscreenCanvas`、WebAssembly SIMD，加上 `MediaStreamTrackProcessor`＋`MediaStreamTrackGenerator`＋`VideoFrame` 或 `canvas.captureStream`） | `backgroundBlur` | ● CI | ○ | ● CI | ○ | ✕ | ✕ | 設定的「視訊」頁不顯示「背景模糊」（`e6-t06`）。**手機與平板**即使偵測到也不顯示（觸控為主的裝置，`useMediaSettings`）：大檔案與手機的 CPU 沒驗證過。Chromium 走 Insertable Streams（背景分頁也持續）；Firefox、Safari 走 canvas，背景分頁可能停格。CI：`e2e/local/blur.spec.ts`、`browsers.spec.ts` 實際載入並跑過（Firefox 走 canvas）；Playwright 的 Linux WebKit 只有 `browsers.spec.ts` 那一步，Safari 本身要實機（`DEPLOY.md` §5 第 33 步）。真的筆電的 CPU 與輪廓都要實機看 |
+| 每人接收音量（`<audio>.volume` 能改） | `memberVolume` | ● CI | ○ | ○ | ○ | ✕ | ○ | 參與者面板不顯示音量滑桿，說明請用裝置的音量鍵；音量條照常（`e6-t08`）。iPhone、iPad 的 `volume` 唯讀（WebKit 的桌面版可以改）。超過 100% 走 Web Audio，同一個 `<audio>` 播放，`setSinkId` 照常。CI：headless Chromium 經真的 PeerConnection 量到 40% 與 200%（`e2e/local/blur.spec.ts`） |
 
 **CI 每次跑什麼**（都不是必過的檢查，`DEPLOY.md` §7）：
 
@@ -52,7 +54,7 @@
 | `Preview / e2e` | Chromium × 3 | 經 SFU 互看互聽、開關、分享（替身）與分享音訊、simulcast 選層、聊天、主持人控制、等候室、進階噪音抑制、純音訊（`e2e/interop.spec.ts`） |
 | `Preview / e2e-firefox` | Firefox ＋ Chromium；WebKit ＋ Chromium | 不同引擎經 SFU 互看互聽、靜音、互相看分享（替身；WebKit 分享時鏡頭先關，§3），並記下各自送出幾層 simulcast（`e2e/crossbrowser.spec.ts`） |
 | `UI checks / browsers` | Chromium、Firefox、WebKit | 偵測結果對這張表、首頁、預先加入（假裝置、拒絕權限、沒有裝置）、兩人進房與聊天、參與者面板、手機大小的視窗（`e2e/local/browsers.spec.ts`；不需要部署、沒有 SFU） |
-| `UI checks / a11y`、`visual` | Chromium | axe、鍵盤、Lighthouse、進階噪音抑制、視覺回歸 |
+| `UI checks / a11y`、`visual` | Chromium | axe、鍵盤、Lighthouse、進階噪音抑制、背景模糊與每人音量（`blur.spec.ts`）、視覺回歸 |
 
 CI 不能代替實機的：真的鏡頭與麥克風、螢幕選擇器與分頁／系統音訊、回音、喇叭、權限對話框、手機的網址列與鍵盤、背景分頁、網路變差、螢幕閱讀器。
 
@@ -79,6 +81,7 @@ CI 不能代替實機的：真的鏡頭與麥克風、螢幕選擇器與分頁�
 - **AudioWorklet**（進階噪音抑制）：Chrome、Edge、Firefox、Safari 14.1+ 都有，只在安全環境（HTTPS）。Firefox 的麥克風取樣率不是 48 kHz 時 RNNoise 接不上，提示後關掉。
 - **分享的防鏡像與簡報者縮圖（H5）**：`selfBrowserSurface`、`surfaceSwitching` 只有 Chromium（其他瀏覽器忽略）；認出「分享了別的會議分頁」靠 **Capture Handle**（`setCaptureHandleConfig`／`getCaptureHandle`，只有 Chromium；沒有時不提醒，分享照常）；認出「分享了會議所在的視窗」靠視窗軌的 label 是標題（Firefox；Chrome 的 label 不是標題，認不出來）；整個螢幕靠 `displaySurface`（Chrome、Edge、Firefox、Safari 都有）。縮圖與動態內容提示用 `ImageCapture.grabFrame()`（Chromium，分頁在背景也能取）或 `requestVideoFrameCallback`（Firefox、Safari，分頁在背景時可能不更新）；兩者都沒有就沒有縮圖、也沒有提示，分享照常。`DEPLOY.md` §5 第 24 步實測。
 - **分享音訊（`getDisplayMedia` 的 audio，Chrome／Edge，D2）**：分頁音訊要在選擇器勾「同時分享分頁音訊」（預設勾）；整個螢幕的系統音訊只在 Windows、ChromeOS（macOS 依版本）；分享視窗通常沒有音訊。LongTalk 要求 `restrictOwnAudio`（系統音訊裡不含這個會議分頁自己播的聲音）與 `suppressLocalAudioPlayback: false`（分享者自己仍聽得到分頁）；不支援的瀏覽器會忽略這兩個選項。`DEPLOY.md` §5 第 10 步實測。
+- **背景模糊**（L4）：`MediaStreamTrackProcessor`／`Generator` 在頁面上只有 Chromium；Safari 18 的 `VideoTrackGenerator` 只在 worker，沒有採用。canvas 的路在背景分頁是否持續出幀要實機看：看不到就是對方看到停格，不會露出背景。MediaPipe 內部用 WebGL 轉圖，沒有 WebGL 的瀏覽器會開不起來，提示並關掉。
 - **Battery Status API**：只有 Chromium（Chrome、Edge、Android Chrome）；Firefox、Safari 早就拿掉了，所以只有 Chromium 會出現「電量不多了」提示。
 
 ## 4. 實測紀錄

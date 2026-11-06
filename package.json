@@ -23,6 +23,7 @@
     "lighthouse": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/lighthouse.ts"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.35",
     "@sapphi-red/web-noise-suppressor": "0.4.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

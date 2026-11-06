@@ -59,9 +59,9 @@ E2 讓媒體送到；E6 讓它好聽好看。Zoom 的「背景雜音抑制」「
 
 ### M2
 
-- [ ] `e6-t06` 背景模糊：segmentation 模型 lazy、管線、自動關閉 · M
-- [ ] `e6-t07` 鏡像設定與可拖曳自拍格 · S
-- [ ] `e6-t08` 音量條與每人接收音量 · S
+- [x] `e6-t06` 背景模糊：segmentation 模型 lazy、管線、自動關閉 · M · #PRNUM
+- [x] `e6-t07` 鏡像設定與可拖曳自拍格 · S · #PRNUM
+- [x] `e6-t08` 音量條與每人接收音量 · S · #PRNUM
 
 ## H3 的做法與決定（#32）
 
@@ -86,12 +86,31 @@ E2 讓媒體送到；E6 讓它好聽好看。Zoom 的「背景雜音抑制」「
 - **電量提示**：有 Battery Status API 的瀏覽器（Chromium）電量 ≤ 20 % 且沒在充電時，一場會議提示一次「電量不多了：可以在…開啟省電模式」；**不自動打開**（可能馬上就插電，或比起電量更在意畫面）。其他瀏覽器不提示（`capabilities.ts` `battery`）。
 - **統計面板**多一段「模式」：HD（開／關／暫停（上傳不夠）／關（省電模式））、省電模式、純音訊模式、進階噪音抑制（開・處理器 %・延遲）。
 
+## L4 的做法與決定（#PRNUM）
+
+- **模型與套件**：npm `@mediapipe/tasks-vision` **0.10.35**（Apache-2.0，**鎖定版本**）；wasm 11.15 MB（gzip 3.3 MB）、載入器 322 kB、worker 135 kB（內含套件），模型 `selfie_segmenter.tflite` 250 kB（Apache-2.0，放在 `src/media/models/`），都在我們自己的 `/assets/`。**為什麼不是最新版**：1.0.0 起套件會把使用統計送到 Google（`odml.pa.googleapis.com`，README 的 Privacy Notice 要 app 自己取得同意），和 LongTalk 的隱私權政策與 CSP 都不合；0.10.35 是最後一個沒有這段的版本，`tests/app/l4Blur.test.tsx` 擋升版。沒有 CSP 變更（`'wasm-unsafe-eval'` 本來就有，載入器沒有 `eval`）；只有 SIMD 版（目標瀏覽器都有）。比較過 `@mediapipe/selfie_segmentation`（舊版、2023 後沒更新）。
+- **管線**（`src/media/backgroundBlur.ts`）：模型在 worker（`blurWorker.ts`，CPU delegate），吃 256×256 的小圖，最多每 60 ms 一張、一次一張；每一幀在頁面上用最新的遮罩畫：遮罩 → `source-in` 畫人 → `destination-over` 畫縮到 320 寬再模糊的背景。所以影片維持鏡頭的幀率，模型慢只讓輪廓慢。**第一個遮罩之前不送出任何一幀**。輸出經 `RoomMedia.setLocal` → `replaceTrack`，**不重新協商**，simulcast 三層是 sender 的事（實測三層都帶處理後的軌，`e2e/local/blur.spec.ts`）。換鏡頭、關開鏡頭只換輸入，送出的軌不變。
+- **兩條路**：Chromium 用 `MediaStreamTrackProcessor`／`Generator`（背景分頁也持續）；Firefox、Safari 沒有這一對，用隱藏的 `<video>`＋`canvas.captureStream`，時鐘來自 worker（頁面的計時器在背景分頁會慢到一秒一次；畫面在背景分頁能不能繼續要實機看）。Safari 沒有 canvas `filter`，背景只靠縮小再放大。
+- **載入中送什麼**（`blurLoad.ts` `cameraToSend`）：通話中才打開的，原本就在送鏡頭，繼續送到準備好（別人不會少一刻畫面）；**帶著記住的設定進房、或打開鏡頭時已經開著模糊，準備好之前什麼都不送**（別人看到首字），因為選了模糊的人不該讓背景露出來幾秒。自己的格子一直看得到自己。
+- **自動關閉**（AC-6.5，`blurLoad.ts`）：看管線自己的責任。遮罩每秒 < 5 張（輪廓跟不上人），或影片 < 15 fps 且畫面占頁面時間 ≥ 50 %、或遮罩少於幀數一半，連續 5 秒（開頭 3 秒不算）就關、提示「你的裝置忙不過來…現在別人看得到你的背景」，設定記成關。**鏡頭本身就只有 12 fps（暗處）而管線跟得上時不關**：關了也不會變順，只會把房間露出來；**這點和 AC 的字面不同，請擁有者確認**。頁面隱藏時不判斷。
+- **省電模式與流量**：省電模式開著時暫停（選擇保留，關掉就回來）；本月過了低畫質門檻（`usage` 不是 `normal`）也暫停，因為省流量靠的是鏡頭本身降到低解析度（`applyConstraints` 對輸出的軌沒有用）。HD 只改 sender 的層，兩者無關。
+- **在哪裡顯示**：設定「視訊」頁（預先加入頁也有），`capabilities.ts` `backgroundBlur`（worker、OffscreenCanvas、SIMD、兩條路之一）沒有就不顯示；**觸控為主的裝置（手機、平板）也不顯示**（useMediaSettings），PRD 沒寫，是這批的決定：11 MB 的 wasm、CPU 與手機的視訊管線都沒驗證過。
+- **本機錄影**：錄到的自己是模糊後的畫面（`videoOf`）。
+- **鏡像**（`e6-t07`）：設定「鏡像顯示我的畫面」，預設開，只影響自己的格子與預先加入預覽（CSS `scaleX(-1)`），送出的軌永遠不動。
+- **自拍格**（`e6-t07`，`src/components/SelfView.tsx`、`src/room/selfView.ts`）：設定「自拍格」，**預設關**（版面不變）；開著時自己的格子浮在舞台上、不占版面（其他版面照舊少一格），一開始在右下角。滑鼠或手指拖曳；鍵盤焦點到把手用方向鍵（24 px，Shift 96 px）。位置存成舞台剩餘空間的比例（0–1），用 CSS container 單位算，**怎麼縮放都不會跑出舞台**。只有自己一個人、自己被釘選或聚光燈時回到版面；「隱藏自己」時不顯示。PRD 沒有排除手機，所以手機也有（把手在手機不顯示，用手指拖）。
+- **每人音量**（`e6-t08`，`src/media/memberVolume.ts`、`MemberAudio`）：PRD 的 0–200%。0–100% 只改 `<audio>.volume`，不碰 Web Audio；100% 以上用 GainNode，輸出是一條 stream、由**同一個 `<audio>`** 播，所以 `setSinkId` 照常、版面切換不影響。Web Audio 的 context 還沒在跑時（重新整理後沒有手勢）維持 100%，下一次點擊才放大：**寧可小聲，不會沒聲音**。音量存 sessionStorage（`longtalk:volumes:<room>`，這個分頁的這場會議）；分享的聲音有自己的滑桿。
+- **iPhone、iPad**：`<audio>.volume` 唯讀（`capabilities.ts` `memberVolume`），面板不顯示滑桿並說明請用音量鍵。不改用 Web Audio：在 iOS 上要接管音訊工作階段，出錯就是整場沒聲音，不值得。
+- **音量條**：參與者面板每人一條，讀 `SpeakingMonitor` 既有的分析器與每 100 ms 的計時器（`watchLevel`），直接寫 DOM、不 re-render，面板關著就沒有監聽；頁面隱藏時不讀。PRD 寫在名牌上，放在面板是這批的決定（名牌空間不夠、16 格時太吵）。
+- **風險（要實機聽）**：放大到 100% 以上的聲音走 Web Audio，Chrome 的回音消除可能不把它算進參考訊號；戴耳機沒差，用喇叭時對方可能聽到回音。
+
 ## 風險與對策
 
 | 風險 | 對策 |
 | --- | --- |
 | wasm 噪音抑制在低階筆電吃 CPU | 預設關、門檻自動關、省電模式強制關 |
-| 背景模糊在 Safari 沒有 `MediaStreamTrackProcessor` | Canvas `captureStream` 後備或直接隱藏 |
+| 背景模糊在 Safari 沒有 `MediaStreamTrackProcessor` | Canvas `captureStream` 後備（L4 採用）；不支援就隱藏 |
+| MediaPipe 1.0 起送使用統計給 Google | 鎖定 0.10.35，測試擋升版；CSP 也會擋 |
+| 放大音量走 Web Audio 時回音消除可能失效 | 只有超過 100% 的人才走；`DEPLOY.md` §5 第 33 步實測 |
 
 ## 未決問題
 

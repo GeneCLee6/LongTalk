@@ -136,6 +136,19 @@ describe('service worker routes (e4-t12)', () => {
     expect(list.some((url) => url.startsWith('/api'))).toBe(false)
   })
 
+  it('leaves 背景模糊’s worker and loader out: nobody downloads them until they turn it on', () => {
+    expect(
+      precacheUrls([
+        'assets/blurWorker-X.js',
+        'assets/vision_wasm_internal-Y.js',
+        'assets/vision_wasm_internal-Z.wasm',
+        'assets/backgroundBlur-A.js',
+      ]),
+    ).toContain('/assets/backgroundBlur-A.js')
+    const list = precacheUrls(['assets/blurWorker-X.js', 'assets/vision_wasm_internal-Y.js'])
+    expect(list.some((url) => /blurWorker|vision_wasm/.test(url))).toBe(false)
+  })
+
   it('deletes every shell cache but this version’s and the one before', () => {
     const keys = [
       shellCacheName('v1'),

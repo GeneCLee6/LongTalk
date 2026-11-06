@@ -79,3 +79,20 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## MediaPipe Tasks Vision and the selfie segmentation model (background blur, e6-t06)
+
+The files `/assets/blurWorker-*.js` (bundling `@mediapipe/tasks-vision`),
+`/assets/vision_wasm_internal-*.js` and `/assets/vision_wasm_internal-*.wasm` come from the npm
+package [@mediapipe/tasks-vision](https://github.com/google-ai-edge/mediapipe) 0.10.35, Copyright
+The MediaPipe Authors, under the Apache License 2.0. The file `/assets/selfie_segmenter-*.tflite`
+is Google's MediaPipe selfie segmentation model (`selfie_segmenter.tflite`, float16,
+sha-256 `191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b`), from
+`storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/`, kept in
+this repository under the same project and license. They are served unmodified, from LongTalk's
+own site. The wasm also contains TensorFlow Lite (Apache License 2.0) and other libraries under
+permissive licenses; the Apache License's full text is at
+<https://www.apache.org/licenses/LICENSE-2.0>.
+
+LongTalk stays on 0.10.35 on purpose: from 1.0.0 the package sends usage metrics to Google
+(`odml.pa.googleapis.com`), which LongTalk's privacy policy and Content-Security-Policy do not allow.

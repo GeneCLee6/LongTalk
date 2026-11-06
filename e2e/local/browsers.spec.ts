@@ -117,6 +117,36 @@ test('what LongTalk detects agrees with docs/BROWSER-SUPPORT.md', async ({
   expect(disagreements, `${column} column of docs/BROWSER-SUPPORT.md`).toEqual([])
 })
 
+test('背景模糊 runs where it is offered (e6-t06)', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  test.skip(!(await hasWebRtc(page)), 'this build of the engine has no WebRTC')
+  await joinRoom(page, await newRoom(page), 'Ada')
+  const toolbar = page.getByRole('toolbar', { name: strings.devices.controls })
+  await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
+  await page.getByRole('menuitem', { name: strings.settings.menu }).click()
+  const settings = page.getByRole('dialog', { name: strings.settings.title })
+  await settings.getByRole('tab', { name: strings.settings.video }).click()
+  const toggle = settings.getByRole('switch', { name: strings.settings.blur })
+  await expect(toggle).toBeVisible()
+  const tile = page.getByRole('figure', { name: strings.room.tileYou('Ada') }).locator('video')
+  await expect(tile).toBeVisible()
+  await toggle.check()
+  await expect(settings.getByText(strings.settings.blurLoading)).toHaveCount(0, { timeout: 60_000 })
+  await expect(page.getByText(strings.settings.blurFailed)).toHaveCount(0)
+  await expect(toggle).toBeChecked()
+  await page.keyboard.press('Escape')
+  // The picture moves through it (whichever way this engine takes frames in and out)
+  const moving = await tile.evaluate(async (video: HTMLVideoElement) => {
+    const started = video.currentTime
+    await new Promise((resolve) => setTimeout(resolve, 3_000))
+    return { size: video.videoWidth, advanced: video.currentTime - started }
+  })
+  await report(testInfo, 'blur', { project: testInfo.project.name, ...moving })
+  expect(moving.size).toBeGreaterThan(0)
+  expect(moving.advanced).toBeGreaterThan(1)
+  await expect(page.getByText(strings.settings.blurFailed)).toHaveCount(0)
+})
+
 test('home page, and a room made from it', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: strings.tagline })).toBeVisible()

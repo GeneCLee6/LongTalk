@@ -1,3 +1,4 @@
+import { clampSelfView, SELF_VIEW_START, type SelfViewAt } from './selfView.ts'
 import { isLayoutChoice, type LayoutChoice } from '../../shared/layout.ts'
 import { isClientId, isSessionToken, normalizeName } from '../../shared/protocol.ts'
 import {
@@ -253,6 +254,13 @@ export interface MediaPrefs {
   advancedNoise: boolean
   /** 省電模式 (H4, e6-t05): a choice for this device, kept like HD */
   powerSaving: boolean
+  /** 背景模糊 (L4, e6-t06): off unless turned on */
+  blur: boolean
+  /** Our own picture mirrored for us (L4, e6-t07; PRD: 預設開); what others get never is */
+  mirror: boolean
+  /** Our own tile floats over the stage (L4, e6-t07), and where it was left */
+  selfView: boolean
+  selfViewAt: SelfViewAt
 }
 
 export const DEFAULT_MEDIA: MediaPrefs = {
@@ -260,13 +268,24 @@ export const DEFAULT_MEDIA: MediaPrefs = {
   hd: null,
   advancedNoise: false,
   powerSaving: false,
+  blur: false,
+  mirror: true,
+  selfView: false,
+  selfViewAt: SELF_VIEW_START,
 }
+
+const isSelfViewAt = (value: unknown): value is SelfViewAt =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as SelfViewAt).x === 'number' &&
+  typeof (value as SelfViewAt).y === 'number'
 
 export function loadMediaPrefs(): MediaPrefs {
   try {
     const saved: unknown = JSON.parse(read('localStorage', MEDIA_KEY) ?? 'null')
     if (typeof saved !== 'object' || saved === null) return DEFAULT_MEDIA
-    const { processing, hd, advancedNoise, powerSaving } = saved as Record<string, unknown>
+    const { processing, hd, advancedNoise, powerSaving, blur, mirror, selfView, selfViewAt } =
+      saved as Record<string, unknown>
     const switches = (
       typeof processing === 'object' && processing !== null ? processing : {}
     ) as Record<string, unknown>
@@ -279,6 +298,10 @@ export function loadMediaPrefs(): MediaPrefs {
       hd: typeof hd === 'boolean' ? hd : null,
       advancedNoise: advancedNoise === true,
       powerSaving: powerSaving === true,
+      blur: blur === true,
+      mirror: mirror !== false,
+      selfView: selfView === true,
+      selfViewAt: isSelfViewAt(selfViewAt) ? clampSelfView(selfViewAt) : SELF_VIEW_START,
     }
   } catch {
     return DEFAULT_MEDIA

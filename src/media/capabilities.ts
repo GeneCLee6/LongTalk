@@ -89,6 +89,17 @@ export interface Capabilities {
    * only <video> has its own player; there the fullscreen button is left out (zoom still works)
    */
   fullscreen: boolean
+  /**
+   * 背景模糊 (e6-t06): a worker, OffscreenCanvas and WebAssembly with SIMD for the model, and a way
+   * to take the camera's frames in and send drawn ones out (blurPath). Without it the switch is
+   * not shown.
+   */
+  backgroundBlur: boolean
+  /**
+   * <audio>.volume can be changed (e6-t08): each person's receive volume. Not on iPhone and iPad,
+   * where it is read-only: there the slider is left out and the panel says why
+   */
+  memberVolume: boolean
 }
 
 export type Capability = keyof Capabilities
@@ -116,6 +127,8 @@ export const CAPABILITIES: readonly Capability[] = [
   'localRecording',
   'passkeys',
   'fullscreen',
+  'backgroundBlur',
+  'memberVolume',
 ]
 
 /** Where detection looks: the browser's globals, or a stand-in in tests */
@@ -125,13 +138,21 @@ export interface CapabilityEnv {
   HTMLMediaElement?: { prototype: object }
   AudioContext?: unknown
   AudioWorkletNode?: unknown
-  WebAssembly?: { instantiate?: unknown }
+  WebAssembly?: { instantiate?: unknown; validate?: (bytes: Uint8Array<ArrayBuffer>) => boolean }
   MediaRecorder?: unknown
   HTMLCanvasElement?: { prototype: object }
   indexedDB?: unknown
   PublicKeyCredential?: unknown
   onbeforeinstallprompt?: unknown
-  document?: { fullscreenEnabled?: boolean }
+  Worker?: unknown
+  OffscreenCanvas?: unknown
+  MediaStreamTrackProcessor?: unknown
+  MediaStreamTrackGenerator?: unknown
+  VideoFrame?: unknown
+  document?: {
+    fullscreenEnabled?: boolean
+    createElement?: (tag: 'audio') => { volume: number }
+  }
   navigator?: {
     serviceWorker?: object | null
     standalone?: boolean
@@ -303,6 +324,49 @@ export function canFullscreen(env: CapabilityEnv = browser()): boolean {
   return env.document?.fullscreenEnabled === true
 }
 
+/** How 背景模糊 takes the camera's frames in and sends drawn ones out (media/backgroundBlur.ts) */
+export type BlurPath = 'insertable' | 'canvas'
+
+/** A minimal module using a v128 instruction: valid only where WebAssembly has SIMD */
+const SIMD_PROBE = new Uint8Array([
+  0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15,
+  253, 98, 11,
+])
+
+/** How this browser would run 背景模糊; null where it cannot */
+export function blurPath(env: CapabilityEnv = browser()): BlurPath | null {
+  if (typeof env.Worker !== 'function' || typeof env.OffscreenCanvas !== 'function') return null
+  try {
+    if (env.WebAssembly?.validate?.(SIMD_PROBE) !== true) return null
+  } catch {
+    return null
+  }
+  if (
+    typeof env.MediaStreamTrackProcessor === 'function' &&
+    typeof env.MediaStreamTrackGenerator === 'function' &&
+    typeof env.VideoFrame === 'function'
+  ) {
+    return 'insertable'
+  }
+  return has(env.HTMLCanvasElement?.prototype, 'captureStream') ? 'canvas' : null
+}
+
+export function canBlurBackground(env: CapabilityEnv = browser()): boolean {
+  return blurPath(env) !== null
+}
+
+/** Whether <audio>.volume takes a new value (iOS Safari keeps it at 1, whatever is set) */
+export function canSetMemberVolume(env: CapabilityEnv = browser()): boolean {
+  try {
+    const audio = env.document?.createElement?.('audio')
+    if (!audio) return false
+    audio.volume = 0.5
+    return audio.volume === 0.5
+  } catch {
+    return false
+  }
+}
+
 /** Everything at once (the doc's table, for this browser) */
 export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities {
   const devices = env.navigator?.mediaDevices
@@ -329,5 +393,7 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     localRecording: canRecordLocally(env),
     passkeys: canUsePasskeys(env),
     fullscreen: canFullscreen(env),
+    backgroundBlur: canBlurBackground(env),
+    memberVolume: canSetMemberVolume(env),
   }
 }

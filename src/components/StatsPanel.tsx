@@ -4,6 +4,7 @@ import type { TrackKind } from '../../shared/protocol.ts'
 import type { Layer } from '../media/MediaTransport.ts'
 import type { InboundSample, OutboundSample, StatsSample } from '../media/stats.ts'
 import type { StatsSnapshot, StatsStore } from '../room/statsStore.ts'
+import type { BlurLoadStore, BlurStatus } from '../room/useBackgroundBlur.ts'
 import type { NoiseLoadStore, NoiseStatus } from '../room/useNoiseSuppression.ts'
 import { strings } from '../strings.ts'
 import { color, font, fontSize, radius, space } from '../styles/tokens.ts'
@@ -18,6 +19,8 @@ export interface StatsPanelProps {
   onExported?: () => void
   /** The advanced noise suppression (e6-t02): where it stands, and its load while on */
   noise?: { status: NoiseStatus; load: NoiseLoadStore } | null
+  /** 背景模糊 (e6-t06): where it stands, and its latest second while on */
+  blur?: { status: BlurStatus; load: BlurLoadStore } | null
 }
 
 const noSubscribe = () => () => {}
@@ -32,11 +35,23 @@ const noLoad = () => null
  * Loaded lazily: the room's first JS does not carry it. The page puts it in the desktop side
  * panel or the phone drawer.
  */
-export default function StatsPanel({ store, describe, onExported, noise }: StatsPanelProps) {
+const noBlurLoad = () => null
+
+export default function StatsPanel({
+  store,
+  describe,
+  onExported,
+  noise,
+  blur,
+}: StatsPanelProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.get)
   const noiseLoad = useSyncExternalStore(
     noise?.load.subscribe ?? noSubscribe,
     noise?.load.get ?? noLoad,
+  )
+  const blurLoad = useSyncExternalStore(
+    blur?.load.subscribe ?? noSubscribe,
+    blur?.load.get ?? noBlurLoad,
   )
   const text = strings.stats
   if (!snapshot) {
@@ -121,6 +136,13 @@ export default function StatsPanel({ store, describe, onExported, noise }: Stats
           </Row>
           <Row label={text.powerSaving}>{snapshot.powerSaving ? text.on : text.off}</Row>
           <Row label={text.audioOnly}>{snapshot.audioOnly ? text.on : text.off}</Row>
+          {blur && (
+            <Row label={text.blur}>
+              {blur.status === 'on' && blurLoad
+                ? text.blurLoad(Math.round(blurLoad.fps), ms(blurLoad.maskMs))
+                : text.blurStates[blur.status]}
+            </Row>
+          )}
           {noise && (
             <Row label={text.noise}>
               {noise.status === 'on' && noiseLoad

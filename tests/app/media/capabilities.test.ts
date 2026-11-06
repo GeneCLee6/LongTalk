@@ -52,7 +52,12 @@ function fullBrowser(): CapabilityEnv {
       createMediaStreamDestination() {}
     },
     AudioWorkletNode: class {},
-    WebAssembly: { instantiate() {} },
+    WebAssembly: { instantiate() {}, validate: () => true },
+    Worker: class {},
+    OffscreenCanvas: class {},
+    MediaStreamTrackProcessor: class {},
+    MediaStreamTrackGenerator: class {},
+    VideoFrame: class {},
     MediaRecorder: class {
       static isTypeSupported(type: string) {
         return type.startsWith('video/webm')
@@ -64,7 +69,7 @@ function fullBrowser(): CapabilityEnv {
     indexedDB: {},
     PublicKeyCredential: class {},
     onbeforeinstallprompt: null,
-    document: { fullscreenEnabled: true },
+    document: { fullscreenEnabled: true, createElement: () => ({ volume: 1 }) },
     navigator: {
       serviceWorker: {},
       standalone: false,

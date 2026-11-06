@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import styled from 'styled-components'
 import type { HostMemberAction, Member, WaitingEntry } from '../../shared/protocol.ts'
 import { handQueue } from '../../shared/reactions.ts'
@@ -11,6 +11,9 @@ import {
   type AnnotationPolicy,
   type Role,
 } from '../../shared/roles.ts'
+import { VOLUME_MAX, VOLUME_MIN, VOLUME_STEP } from '../media/memberVolume.ts'
+import { speakingMonitor } from '../media/speaking.ts'
+import { shareVolumeKey } from '../room/memberVolumes.ts'
 import { strings } from '../strings.ts'
 import { avatar, avatarColor, color, fontSize, motion, radius, space } from '../styles/tokens.ts'
 import { Button } from './Button.tsx'
@@ -59,6 +62,21 @@ export interface ParticipantsPanelProps {
   recorderIds?: readonly string[]
   /** The host allows someone to record, takes it back, or stops their recording (I4) */
   onRecordAction?: (action: RecordAction, memberId: string) => void
+  /** Each person's level meter and receive volume (e6-t08); left out where nothing plays */
+  audio?: PanelAudio
+}
+
+/** What the panel shows of each person's sound (e6-t08): local to this browser */
+export interface PanelAudio {
+  /** Their microphone as it plays here (ours as it is sent); null while it sends nothing */
+  levelOf: (memberId: string) => MediaStreamTrack | null
+  /** <audio>.volume can be changed here (capabilities.ts canSetMemberVolume) */
+  volumeSupported: boolean
+  /** Percent, by member id or shareVolumeKey */
+  volumeOf: (id: string) => number
+  onVolume: (id: string, percent: number) => void
+  /** Their share has its own sound right now */
+  sharesSound: (memberId: string) => boolean
 }
 
 /** What the host may do about someone's recording (I4, e8-t02) */
@@ -125,6 +143,7 @@ export function ParticipantsPanel({
   onRole = noop,
   recorderIds = [],
   onRecordAction = noop,
+  audio,
 }: ParticipantsPanelProps) {
   const [confirm, setConfirm] = useState<
     | { type: 'remove'; member: Member }
@@ -340,6 +359,9 @@ export function ParticipantsPanel({
         </Waiting>
       )}
       {/* The settings can leave it short enough to scroll, and a row may have nothing to tab to */}
+      {audio && !audio.volumeSupported && members.length > 1 && (
+        <VolumeNote>{strings.participants.volumeUnsupported}</VolumeNote>
+      )}
       <List aria-label={strings.participants.list} tabIndex={0}>
         {sorted.map((member) => {
           const mic = member.tracks.find((t) => t.kind === 'mic')
@@ -375,6 +397,21 @@ export function ParticipantsPanel({
                   {member.reconnecting && <Tag $warn>{strings.participants.reconnecting}</Tag>}
                   {recorderIds.includes(member.id) && <Tag $danger>{strings.record.tag}</Tag>}
                 </Tags>
+                {audio && <LevelBar track={audio.levelOf(member.id)} />}
+                {audio?.volumeSupported && member.id !== you && (
+                  <VolumeSlider
+                    label={strings.participants.volumeOf(member.name)}
+                    value={audio.volumeOf(member.id)}
+                    onChange={(percent) => audio.onVolume(member.id, percent)}
+                  />
+                )}
+                {audio?.volumeSupported && member.id !== you && audio.sharesSound(member.id) && (
+                  <VolumeSlider
+                    label={strings.participants.shareVolumeOf(member.name)}
+                    value={audio.volumeOf(shareVolumeKey(member.id))}
+                    onChange={(percent) => audio.onVolume(shareVolumeKey(member.id), percent)}
+                  />
+                )}
               </Who>
               <States>
                 {sharerIds.includes(member.id) && (
@@ -484,6 +521,58 @@ export function ParticipantsPanel({
         />
       )}
     </Root>
+  )
+}
+
+/**
+ * How loud someone is now (e6-t08). Read from the speaking monitor (its one analyser per microphone
+ * and one timer), written straight to the element: no re-render, however many people. Not named to
+ * a screen reader, like the speaking outline: a value that changes ten times a second is not
+ * something to hear.
+ */
+function LevelBar({ track }: { track: MediaStreamTrack | null }) {
+  const fill = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    const element = fill.current
+    if (!element) return
+    element.style.transform = 'scaleX(0)'
+    if (!track) return
+    return speakingMonitor().watchLevel(track, (level) => {
+      element.style.transform = `scaleX(${level.toFixed(2)})`
+    })
+  }, [track])
+  return (
+    <LevelTrack aria-hidden="true" data-level-meter="">
+      <LevelFill ref={fill} />
+    </LevelTrack>
+  )
+}
+
+function VolumeSlider({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: number
+  onChange: (percent: number) => void
+}) {
+  const text = strings.participants.volumeValue(value)
+  return (
+    <VolumeRow>
+      <input
+        type="range"
+        min={VOLUME_MIN}
+        max={VOLUME_MAX}
+        step={VOLUME_STEP}
+        value={value}
+        aria-label={label}
+        aria-valuetext={text}
+        title={label}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      <span aria-hidden="true">{text}</span>
+    </VolumeRow>
   )
 }
 
@@ -606,6 +695,56 @@ const HandTag = styled.span`
     width: 12px;
     height: 12px;
   }
+`
+
+const LevelTrack = styled.span`
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: ${radius.pill};
+  background: ${color.surface2};
+`
+
+const LevelFill = styled.span`
+  display: block;
+  height: 100%;
+  background: ${color.speaking};
+  transform: scaleX(0);
+  transform-origin: left;
+`
+
+/** 24 px tall to touch (WCAG 2.5.8) */
+const VolumeRow = styled.span`
+  display: flex;
+  align-items: center;
+  gap: ${space(2)};
+  min-height: 24px;
+  color: ${color.muted};
+  font-size: ${fontSize.badge};
+
+  input {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    margin: 0;
+    accent-color: ${color.primary};
+    cursor: pointer;
+  }
+  input:focus-visible {
+    outline: 2px solid ${color.focus};
+    outline-offset: 2px;
+  }
+  span {
+    flex: none;
+  }
+`
+
+const VolumeNote = styled.p`
+  margin: 0;
+  padding: ${space(2)} ${space(4)};
+  border-bottom: 1px solid ${color.line};
+  color: ${color.muted};
+  font-size: ${fontSize.toolbarLabel};
 `
 
 const States = styled.span`

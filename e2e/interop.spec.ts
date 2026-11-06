@@ -857,6 +857,43 @@ interop(
     )
 
     await interop.step(
+      'Alice turns 背景模糊 on: Bob and Carol go on seeing her, on the same subscription (L4)',
+      async () => {
+        const blurSwitch = async () => {
+          await toolbarButton(alice, strings.toolbar.more).click()
+          await alice.page.getByRole('menuitem', { name: strings.settings.menu }).click()
+          const settings = alice.page.getByRole('dialog', { name: strings.settings.title })
+          await settings.getByRole('tab', { name: strings.settings.video }).click()
+          return { settings, toggle: settings.getByRole('switch', { name: strings.settings.blur }) }
+        }
+        const on = await blurSwitch()
+        await on.toggle.check()
+        await expect(on.settings.getByText(strings.settings.blurLoading)).toHaveCount(0, {
+          timeout: 60_000,
+        })
+        await alice.page.keyboard.press('Escape')
+        await expect(alice.page.getByText(strings.settings.blurFailed)).toHaveCount(0)
+        for (const viewer of [bob, carol]) {
+          await expect
+            .poll(() => framesPerSecond(viewer, alice), {
+              message: `${viewer.name} sees Alice through the blur`,
+              timeout: 30_000,
+            })
+            .toBeGreaterThanOrEqual(5)
+        }
+        const off = await blurSwitch()
+        await off.toggle.uncheck()
+        await alice.page.keyboard.press('Escape')
+        await expect
+          .poll(() => framesPerSecond(bob, alice), {
+            message: 'Bob sees Alice after it is off',
+            timeout: 30_000,
+          })
+          .toBeGreaterThanOrEqual(5)
+      },
+    )
+
+    await interop.step(
       'Alice (the host) mutes Carol from the participants panel: Carol is told and muted (F1)',
       async () => {
         await toolbarButton(alice, strings.toolbar.participantsCount(3)).click()

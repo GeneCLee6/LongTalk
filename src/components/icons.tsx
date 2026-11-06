@@ -207,6 +207,16 @@ export function HourglassIcon() {
   )
 }
 
+/** Four arrows out from the middle (e6-t07: move the self-view tile) */
+export function MoveIcon() {
+  return (
+    <svg {...common}>
+      <path d="M12 3v18M3 12h18" />
+      <path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3" />
+    </svg>
+  )
+}
+
 /** A push pin (G2: pin a tile for yourself) */
 export function PinIcon() {
   return (
