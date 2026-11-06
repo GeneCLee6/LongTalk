@@ -1063,8 +1063,10 @@ export class RoomMedia {
       if (track.kind !== 'cam' && track.kind !== 'screen') continue
       first.set(key, INITIAL_LAYER[track.kind])
       const seat = this.demand?.seatDemand(key) ?? null
-      // In sight mode a camera without a seat is one that is kept: no tile draws it, lowest
-      if (seat || this.sight) newInputs.push({ key, kind: track.kind, demand: seat, current: null })
+      // In sight mode a camera without a seat is one that is kept: no tile draws it, lowest. A
+      // screen has no seats: it starts high, its tile reports soon
+      const kept = this.sight !== null && track.kind === 'cam'
+      if (seat || kept) newInputs.push({ key, kind: track.kind, demand: seat, current: null })
     }
     if (newInputs.length === 0) return first
     const chosen = chooseLayers([...this.receivedInputs(), ...newInputs], this.layerBudget())

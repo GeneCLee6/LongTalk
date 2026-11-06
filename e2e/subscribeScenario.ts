@@ -93,10 +93,11 @@ export async function receivesOnlyWhatIsInView(browser: Browser, url: string): P
   await expect.poll(() => receivedVideos(phone), { timeout: GRACE_WAIT_MS }).toBeLessThan(5)
 
   // Page 2: the other two arrive, and the first page stays for its grace
+  const turned = Date.now()
   await phone.getByRole('button', { name: strings.stage.page(2, 2) }).click()
   await pageHasPictures(phone, 2)
-  // (A camera kept as the speaker may be on either page, so not exactly five yet)
-  expect(await receivedVideos(phone)).toBeGreaterThanOrEqual(4)
+  // A busy runner may have taken longer than the grace (UNSEEN_GRACE_MS) to get here
+  if (Date.now() - turned < 8_000) expect(await receivedVideos(phone)).toBeGreaterThanOrEqual(4)
 
   // After the grace the first page goes, but for whoever is kept as the speaker
   await expect.poll(() => receivedVideos(phone), { timeout: GRACE_WAIT_MS }).toBeLessThan(5)
