@@ -58,8 +58,8 @@ depends_on: [E3, E4]
 
 - [x] AC-7.1 — 畫筆、螢光筆、箭頭、矩形、文字、橡皮、清除、顏色與寬度、復原；雷射筆；高 DPI 清晰。（J2 #45：`e2e/local/annotation.spec.ts` 在真的瀏覽器裡讀畫面像素，高 DPI 是 `deviceScaleFactor: 2`；橡皮與清除目前只動自己的，清除他人屬於 AC-7.3；手機手指的細節是 `e7-t09`）
 - [ ] AC-7.2 — 多人同時畫互相即時可見（< 300 ms）；筆跡對齊分享畫面且在任何格子尺寸下對齊；新進者重播全部筆跡；分享停止後清空。（J2 #45：`e2e/annotation.spec.ts` 在 PR 預覽經真的 RoomDO 與 SFU 都驗過，延遲量測見 #45；**不勾**：媒體相關要兩台不同裝置實測（CLAUDE.md 規則 7），`DEPLOY.md` §5 第 30 步）
-- [x] AC-7.3 — 權限三態；分享者與主持人可清除全部或某人；被禁止時工具列不出現。（J3 #46：伺服器的判斷在 `tests/worker/room-j3.test.ts` 逐格測過；`e2e/annotation.spec.ts` 在 PR 預覽經真的 RoomDO 與 SFU 驗過工具列消失、偽造筆跡被拒、分享者清除並通知；權限不涉及媒體品質，實機外觀在 `DEPLOY.md` §5 第 31 步）
-- [ ] AC-7.4 — 白板分頁：無限畫布、平移縮放、格線、多人同步；持久房間跨場保留。（J3 #46：前四項做完，`e2e/local/whiteboard.spec.ts` 讀真的像素、`e2e/annotation.spec.ts` 在 PR 預覽驗過；**不勾**：持久房間跨場保留是 J4 `e7-t08`）
+- [x] AC-7.3 — 權限三態；分享者與主持人可清除全部或某人；被禁止時工具列不出現。（J3 #47：伺服器的判斷在 `tests/worker/room-j3.test.ts` 逐格測過；`e2e/annotation.spec.ts` 在 PR 預覽經真的 RoomDO 與 SFU 驗過工具列消失、偽造筆跡被拒、分享者清除並通知；權限不涉及媒體品質，實機外觀在 `DEPLOY.md` §5 第 31 步）
+- [ ] AC-7.4 — 白板分頁：無限畫布、平移縮放、格線、多人同步；持久房間跨場保留。（J3 #47：前四項做完，`e2e/local/whiteboard.spec.ts` 讀真的像素、`e2e/annotation.spec.ts` 在 PR 預覽驗過；**不勾**：持久房間跨場保留是 J4 `e7-t08`）
 - [ ] AC-7.5 — 匯出 PNG（目前視窗／全部）與多頁 PDF；檔名含房名與日期。
 
 ## Task 拆分（M2；動工前再細拆）
@@ -68,8 +68,8 @@ depends_on: [E3, E4]
 - [x] `e7-t02` 標註畫布疊在分享格、座標映射、高 DPI、平滑 · AC-7.1, AC-7.2 · #44（`src/annotate/`，lazy；只有本機，入口是控制列的「標註」鈕，關掉就清除；平滑用中點二次曲線，沒有加 perfect-freehand；AC 等 J2）
 - [x] `e7-t03` 工具列（工具、顏色、寬度、復原、清除）、雷射筆 · AC-7.1 · #45（`src/annotate/Toolbar.tsx`、`AnnotationLayer.tsx`、`sync.ts`）
 - [x] `e7-t04` RoomDO 同步：節流、增量、快照重播、分享停止清空 · AC-7.2 · #45（`worker/room-annotations.ts`、`src/room/annotationStore.ts`、協定 v20）
-- [x] `e7-t05` 權限三態與清除他人 · AC-7.3 · #46（`shared/roles.ts`、`RoomHost.annotate`／`clearAnnotations`、協定 v21；另外補上 J2 的缺口：分享者看得到筆跡，`ShareTile` 的 `own`）
-- [x] `e7-t06` 白板分頁：無限畫布、平移縮放、格線、同步 · AC-7.4 · #46（`src/annotate/Whiteboard.tsx`、`shared/boardGeometry.ts`）
+- [x] `e7-t05` 權限三態與清除他人 · AC-7.3 · #47（`shared/roles.ts`、`RoomHost.annotate`／`clearAnnotations`、協定 v21；另外補上 J2 的缺口：分享者看得到筆跡，`ShareTile` 的 `own`）
+- [x] `e7-t06` 白板分頁：無限畫布、平移縮放、格線、同步 · AC-7.4 · #47（`src/annotate/Whiteboard.tsx`、`shared/boardGeometry.ts`）
 - [ ] `e7-t07` 匯出 PNG／PDF · AC-7.5 · S · ← e7-t06
 - [ ] `e7-t08` 持久房間白板保留（R2 JSON） · AC-7.4 · S · ← e7-t06, e1-t13
 - [ ] `e7-t09` 標註與白板的無障礙與觸控（手機手指畫、雙指平移） · AC-7.1 · S · ← e7-t06
