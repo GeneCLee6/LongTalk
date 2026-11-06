@@ -177,6 +177,7 @@ PR 預覽的 Worker 每個 PR 都是新的：在 GitHub 也設定同名的 `REAL
 **Mac：Safari 與 Firefox**
 - Safari、Firefox 各跑一次短版 1–7：記下 Safari 有沒有喇叭選單（`setSinkId`）、Firefox 有。
 - 分享：Safari、Firefox 的選擇器沒有音訊選項、提示條沒有音訊按鈕；關掉「螢幕與系統錄音」權限時的說明（AC-3.1、AC-3.2，第 9、10 步）。
+- **Safari 鏡頭開著分享**（CI 測不到，BROWSER-SUPPORT §3）：另一台裝置要 10 秒內看到分享的畫面會動，**而且 Safari 那個人的鏡頭格子還是他的鏡頭**，不是分享的畫面。重開分享試 5 次，一次看不到就算不通過，記下來（ADR-001「WebKit 同時送鏡頭與分享」）。
 - Firefox 分享會議所在的**視窗**：出現「你分享的是會議室…」提醒（Firefox 靠視窗標題認出；第 24 步）。
 - Safari「更多 › 連線統計」的「送出的層」：Safari 實際送出幾層 simulcast；只有一層也算通過（依風險表退化為單層，別人照樣看得到），寫進 BROWSER-SUPPORT（第 20 步）。Firefox 也記一次。
 - Firefox 打開進階噪音抑制：麥克風不是 48 kHz 時出現「無法開啟進階噪音抑制」並關掉，聲音不斷（第 23 步）。

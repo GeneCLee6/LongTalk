@@ -300,6 +300,37 @@ interface MediaTransport {
 - 都還沒在 Realtime 上量：文字／動態在真實網路的差別、三個分享時每人的下行、動態內容提示在真的影片與投影片上會不會誤判（門檻在 `shareMode.ts`）。PR 預覽的 e2e 只確認兩人同時分享、主區 `f` 比側列 `h` 高、主持人停一個、切動態後畫面照常。
 - Capture Handle 只有 Chromium；Safari、Firefox 分享別的會議分頁時認不出來。
 
+## WebKit 同時送鏡頭與分享（2026-11-06，#42）
+
+`Preview / e2e-firefox` 的 `Chris (chromium) decodes Wes's screen` 從 H6 起常常第一次失敗、重跑才過（#42 之前 10 次 job 裡第一次就過的只有 3 次；另有 1 次失敗是別的原因）。在 PR 預覽上加了暫時的記錄（每個 mid、每個 rid 的統計，格子的平均顏色），重複跑 Playwright 的 Linux WebKit ＋ Chromium，都不重試：
+
+| 條件（WebKit 分享時） | 看不到分享的次數 |
+| --- | --- |
+| 照常 | 1／4 |
+| 不要 `q`（把鏡頭的 `tracks/update` 改回 `h`） | 4／5 |
+| 照常（第二輪） | 1／3 |
+| 第二個 `getUserMedia` 代替 canvas 當畫面 | 1／4 |
+| 分享只送一層 | 1／4 |
+| 鏡頭、分享都只送一層 | 2／4 |
+| 照常（第三輪） | 4／7 |
+| **WebKit 的鏡頭先關掉** | **0／7** |
+
+鏡頭開著合計 14／31。關掉與開著的差別在這個樣本量下算顯著（超幾何機率約 0.03），但只有 7 次。
+
+**看到的現象，每次看不到分享時都一樣：**
+
+- **SFU 有照送**：接收端 mid 4 的 `bytesReceived` 增加的量和發送端 mid 4 `f` 的 `bytesSent` 幾乎一樣（例：同一段時間 223 kB 對 222 kB）。要的是 `f`，`f` 也有資料。
+- **解不出來是因為等不到關鍵幀**：接收端 `framesDecoded`、`keyFramesDecoded` 一直是 0，`pliCount` 每秒加約 3；發送端 `pliCount` 每秒加約 0.4（SFU 合併），**`keyFramesEncoded` 卻不動**（有一次收到 19 個 PLI 還是 1 個關鍵幀）。卡住的有兩種：連第一個 PLI 都不理，或第一個有回、但那個關鍵幀在接收端準備好之前就過去了，之後的 PLI 都不理。看得到分享的那些，幾乎都是第一個 PLI 回的關鍵幀就到了接收端（有一次隔了約 10 秒才等到下一個）。（Chromium、Firefox 當發送端沒有這樣量過；它們的分享在 CI 幾乎都第一次就過，Firefox 有一次 `decodes Fiona's screen` 失敗，症狀不同：畫面有出來，沒有查。）
+- **鏡頭的編碼器在送分享的畫面**：只要 canvas 當畫面，Chromium 那邊 Wes 的**鏡頭格子**平均顏色就變成 248/251/250（白底），看得到分享的那幾次也一樣；鏡頭 mid 的位元組同時少到每幀不到 1 kB。那條 sender 的 `track` 還是鏡頭那條、`live`，Wes 自己的預覽也還是鏡頭，LongTalk 沒有換軌。
+
+**排除的假設**：接收端要了沒送的層（要的是 `f`，有送）；`q` 那次 `tracks/update`（不要它照樣卡）；simulcast（一層照樣卡）；canvas 替身（`getUserMedia` 照樣卡）；換層後的關鍵幀（卡住時沒有換層，事後用 `tracks/update` 換層也救不回來）。
+
+**結論**：問題在這個瀏覽器引擎同時跑兩個視訊編碼器的時候，不在 LongTalk 的選層或 SFU。這是由上面的證據推論，**沒有直接證明**：不經 LongTalk 與 SFU 的 loopback（同一頁兩條 PeerConnection）裡，WebKit 的接收端根本沒有畫面（`videoWidth` 0），分不出顏色，只看到第二個 sender 加入後，鏡頭編碼器從每秒約 28 幀掉到約 7 幀（Chromium 對照組維持約 20 幀）；也沒有讀 WebKit 的程式碼，不知道確切機制。
+
+**沒有修產品**：卡住之後試過的都不可靠：`setParameters`（原樣、改 `scaleResolutionDownBy`、`active` 關開）、`replaceTrack`、接收端換層、分享中才關鏡頭（0／4 救回來）。少數幾次救回來和隔一陣子自己好分不開。看 user agent 替 Safari 關鏡頭違反規則，也沒有證據 Safari 需要。所以 `e2e/crossbrowser.spec.ts` 在 WebKit 分享時先關鏡頭，**這一步因此不再測 WebKit「鏡頭＋分享」**。
+
+**沒有驗證的**：真的 Safari 會不會這樣。CI 的是 Playwright 的 Linux WebKit，不是 Safari；真的出現就是嚴重的產品問題（別人看不到分享、鏡頭格子變成分享的畫面），所以要實機確認（`DEPLOY.md` §5「Mac」）。如果 Safari 也中，再回來做：發送端看 `pliCount` 漲而 `keyFramesEncoded` 不動（能力偵測，不看 user agent）的處理。
+
 ## 後果
 
 - **要自己做的**：房間與軌清單（RoomDO，A3／B1）、desired／actual 訂閱對齊（`e2-t04`）、重連（`e2-t08`）、選層策略（`e2-t12`、`e2-t15`）、統計（`e2-t13`）。這些 LiveKit SDK 會送，Realtime 不會；已經排進 E2 的 task。

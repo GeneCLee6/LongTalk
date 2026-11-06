@@ -223,7 +223,7 @@ jobs:
     needs: deploy
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 15
     env:
       BASE_URL: ${{ needs.deploy.outputs.url }}
       SFU: ${{ needs.deploy.outputs.sfu }}
@@ -259,7 +259,7 @@ jobs:
 
       - name: Firefox (then WebKit) with Chromium against the preview
         if: steps.check.outputs.run == 'true'
-        run: npm run test:e2e -- --project=firefox -g "WebKit|loopback" --repeat-each=14 --retries=0
+        run: npm run test:e2e -- --project=firefox
 
       - uses: actions/upload-artifact@v4
         if: always() && steps.check.outputs.run == 'true'
