@@ -21,7 +21,8 @@ export interface ShareGestureOptions {
  * click goes to the capturing element, so the button would never hear it.
  */
 const onControl = (target: EventTarget | null): boolean =>
-  target instanceof Element && target.closest('button, a, input, select, [role="group"]') !== null
+  target instanceof Element &&
+  target.closest('button, a, input, select, textarea, [role="group"], [role="toolbar"]') !== null
 
 const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
 

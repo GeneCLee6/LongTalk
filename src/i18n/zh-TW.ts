@@ -493,6 +493,41 @@ export const zhTW = {
     recordRevoked: (actor: string) => `${actor} 取消了你的錄影權限。`,
   },
   // Screen sharing (D1: e3-t01 – e3-t03, e3-t05)
+  annotation: {
+    toolbar: '標註工具',
+    toolGroup: '工具',
+    colorGroup: '顏色',
+    widthGroup: '粗細',
+    historyGroup: '復原與清除',
+    style: '顏色與粗細',
+    modes: {
+      pen: '畫筆',
+      highlighter: '螢光筆',
+      arrow: '箭頭',
+      rect: '矩形',
+      text: '文字',
+      eraser: '橡皮擦（只擦自己的）',
+      laser: '雷射筆（不留筆跡）',
+    },
+    colors: {
+      rose: '玫瑰紅',
+      amber: '琥珀黃',
+      green: '綠色',
+      teal: '藍綠色',
+      blue: '藍色',
+      violet: '紫色',
+      white: '白色',
+      ink: '墨色',
+    },
+    widths: { thin: '細', medium: '中', thick: '粗' },
+    undo: '復原',
+    redo: '重做',
+    clear: '清除我的標註',
+    fold: '收合工具列',
+    unfold: '展開工具列',
+    textLabel: '標註文字',
+    textPlaceholder: '輸入文字，Enter 完成',
+  },
   screenShare: {
     stop: '停止分享',
     // The bar the sharer sees above the stage (e3-t03)
@@ -508,7 +543,7 @@ export const zhTW = {
     full: (max: number) => `已經有 ${max} 個人在分享畫面，等其中一人停止後再試一次。`,
     picker: '選擇主畫面要看誰的分享',
     showMain: (name: string) => `在主畫面看 ${name} 的畫面`,
-    // Zoom and fullscreen on the main share (e3-t11), and the local sketch until J2 syncs it
+    // Zoom and fullscreen on the main share (e3-t11), and turning on annotation
     viewControls: '分享畫面的檢視',
     zoomIn: '放大',
     zoomOut: '縮小',
@@ -516,8 +551,9 @@ export const zhTW = {
     fullscreen: '全螢幕',
     exitFullscreen: '離開全螢幕',
     annotate: '標註',
-    annotateHint: '標註（目前只有你看得到，關掉就會清除）',
+    annotateHint: '標註（大家都看得到，分享結束就會清除）',
     annotationCanvas: '標註畫布',
+    annotationLimit: '畫得太快了，有一筆沒有送出',
     // 文字／動態 (e3-t06): the sharing bar's switch and the hint for moving content
     mode: '分享模式',
     modeText: '文字',

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import type {
+  AnnotationMessage,
+  AnnotationsMessage,
   ClientMessage,
   ErrorCode,
   NoticeMessage,
@@ -33,6 +35,10 @@ export interface RoomConnectionHandle {
   onReaction: (listener: (reaction: ReactionMessage) => void) => () => void
   /** Sends a reaction (G3); `rateLimited` when it would be too many too fast */
   sendReaction: (emoji: Reaction) => 'sent' | 'rateLimited' | 'offline'
+  /** Listens for what happens to the strokes on the shares (J2); returns how to stop listening */
+  onAnnotation: (listener: (message: AnnotationMessage | AnnotationsMessage) => void) => () => void
+  /** Welcomed, right now */
+  isOpen: () => boolean
 }
 
 /**
@@ -87,5 +93,7 @@ export function useRoomConnection(
     sendChat: connection.sendChat,
     onReaction: connection.onReaction,
     sendReaction: connection.sendReaction,
+    onAnnotation: connection.onAnnotation,
+    isOpen: connection.isOpen,
   }
 }

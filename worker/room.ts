@@ -23,6 +23,7 @@ import {
   type SfuTrackRef,
   type UsageCursor,
 } from './room-host.ts'
+import type { AnnotationSegment, AnnotationWrite } from './room-annotations.ts'
 import type { ChatFile } from '../shared/files.ts'
 import type {
   FileAccess,
@@ -65,6 +66,10 @@ const FILES_KEY = 'files'
 /** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
 const CHAT_PREFIX = 'chat:'
 const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
+/** A segment of a share's strokes (J2, worker/room-annotations.ts): `ann:<sharer>:<segment>` */
+const ANNOTATION_PREFIX = 'ann:'
+const annotationKey = ({ share, segment }: Pick<AnnotationWrite, 'share' | 'segment'>) =>
+  `${ANNOTATION_PREFIX}${share}:${segment}`
 
 /** A socket opening asks UsageDO for the month's state when the room has not heard for this long */
 const USAGE_REFRESH_MS = 60_000
@@ -125,6 +130,14 @@ export class RoomDO extends DurableObject<Env> {
             ? storage.delete(PERSISTENT_KEY)
             : storage.put(PERSISTENT_KEY, record)),
         saveFiles: (state) => void storage.put(FILES_KEY, state),
+        saveAnnotations: (writes) => {
+          for (const { share, segment, strokes } of writes) {
+            const key = annotationKey({ share, segment })
+            void (strokes === null
+              ? storage.delete(key)
+              : storage.put<AnnotationSegment>(key, { share, segment, strokes }))
+          }
+        },
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -138,10 +151,22 @@ export class RoomDO extends DurableObject<Env> {
         }
       },
       filesGone: (gone) => ctx.waitUntil(this.deleteFiles(gone)),
+      later: (ms, work) => void setTimeout(work, ms),
     })
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG))
     void ctx.blockConcurrencyWhile(async () => {
-      const [info, rev, sessions, usage, schedule, alarm, chat, bans, extras] = await Promise.all([
+      const [
+        info,
+        rev,
+        sessions,
+        usage,
+        schedule,
+        alarm,
+        chat,
+        bans,
+        extras,
+        annotations,
+      ] = await Promise.all([
         storage.get<RoomInfo>(ROOM_KEY),
         storage.get<number>(REV_KEY),
         storage.get<SessionRecord[]>(SESSIONS_KEY),
@@ -151,6 +176,7 @@ export class RoomDO extends DurableObject<Env> {
         storage.list<ChatMessage>({ prefix: CHAT_PREFIX }),
         storage.get<Ban[]>(BANS_KEY),
         storage.get<unknown>([PASSWORD_KEY, GUESSES_KEY, ENDED_KEY, PERSISTENT_KEY, FILES_KEY]),
+        storage.list<AnnotationSegment>({ prefix: ANNOTATION_PREFIX }),
       ])
       const sockets = ctx
         .getWebSockets()
@@ -172,6 +198,7 @@ export class RoomDO extends DurableObject<Env> {
           endedUntil: (extras.get(ENDED_KEY) as number | undefined) ?? null,
           persistent: (extras.get(PERSISTENT_KEY) as PersistentRecord | undefined) ?? null,
           files: (extras.get(FILES_KEY) as FilesState | undefined) ?? null,
+          annotations: [...annotations.values()],
         },
       )
       // A room stored before C2 has no schedule: restore made one

@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client'
 import { VideoDemandContext } from '../../../src/components/useVideoDemand.ts'
 import { SharePicker } from '../../../src/components/SharePicker.tsx'
 import { ShareTile } from '../../../src/components/ShareTile.tsx'
+import { AnnotationStore } from '../../../src/room/annotationStore.ts'
 import { VideoDemandStore } from '../../../src/room/videoDemand.ts'
 import { GlobalStyle } from '../../../src/styles/GlobalStyle.ts'
 
@@ -36,10 +37,17 @@ declare global {
   interface Window {
     shareDemand: () => unknown
     picked: string[]
+    /** Every frame the toolbar and the canvas send to the room (there is no room here) */
+    annotateFrames: unknown[]
   }
 }
 window.shareDemand = () => demand.get(track)
 window.picked = []
+window.annotateFrames = []
+const store = new AnnotationStore({
+  send: (message) => window.annotateFrames.push(message),
+  isOpen: () => true,
+})
 const shares = [
   { id: 'b', name: 'Bob' },
   { id: 'c', name: 'Carol' },
@@ -52,7 +60,7 @@ createRoot(document.getElementById('root')!).render(
       <ShareTile
         name="Bob"
         video={track}
-        annotator="me"
+        annotations={{ store, share: 'b', me: 'me', nameOf: () => null }}
         recording="Gene 正在錄影"
         picker={<SharePicker shares={shares} main="b" onPick={(id) => window.picked.push(id)} />}
       />

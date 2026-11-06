@@ -544,7 +544,7 @@ interop(
       },
     )
 
-    await interop.step("Alice zooms Bob's share and sketches on it (J1)", async () => {
+    await interop.step("Alice zooms Bob's share and draws on it (J1, J2)", async () => {
       const share = alice.page.getByRole('figure', {
         name: strings.screenShare.region(bob.name),
       })
@@ -565,18 +565,23 @@ interop(
         steps: 4,
       })
       await alice.page.mouse.up()
-      // The sketch is painted (local for now: J2 syncs it)
-      await expect
-        .poll(() =>
-          canvas.evaluate((element: HTMLCanvasElement) => {
-            const { width, height } = element
-            const { data } = element.getContext('2d')!.getImageData(0, 0, width, height)
-            return data.some((value) => value !== 0)
-          }),
-        )
-        .toBe(true)
+      const painted = (where: typeof canvas) =>
+        where.evaluate((element: HTMLCanvasElement) => {
+          const { width, height } = element
+          const { data } = element.getContext('2d')!.getImageData(0, 0, width, height)
+          return data.some((value) => value !== 0)
+        })
+      await expect.poll(() => painted(canvas)).toBe(true)
+      // Carol sees it too (J2; e2e/annotation.spec.ts has the whole story). Undone for the rest
+      const onCarol = carol.page
+        .getByRole('figure', { name: strings.screenShare.region(bob.name) })
+        .getByRole('img', { name: strings.screenShare.annotationCanvas })
+      await expect(onCarol).toBeVisible()
+      await expect.poll(() => painted(onCarol)).toBe(true)
+      await share.getByRole('toolbar').getByRole('button', { name: strings.annotation.undo }).click()
+      await expect.poll(() => painted(onCarol)).toBe(false)
       await annotate.click()
-      await expect(canvas).toHaveCount(0)
+      await expect(share.getByRole('toolbar')).toHaveCount(0)
       await share.getByRole('button', { name: strings.screenShare.zoomReset(125) }).click()
       await expect(share).toHaveAttribute('data-zoom', '1')
     })

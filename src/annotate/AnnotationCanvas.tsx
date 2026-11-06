@@ -1,58 +1,149 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, type PointerEvent } from 'react'
 import styled from 'styled-components'
 import {
-  beginStroke,
-  extendStroke,
-  finishStroke,
-  putStroke,
-  type AnnotationTool,
+  laserOpacity,
+  type AnnotationColor,
+  type AnnotationWidth,
   type Stroke,
 } from '../../shared/annotation.ts'
-import { backingSize, insideContent } from '../../shared/shareGeometry.ts'
+import { backingSize, insideContent, type Point } from '../../shared/shareGeometry.ts'
+import { useReducedMotion } from '../components/layoutContext.ts'
 import { useShareGeometry } from '../components/useShareGeometry.ts'
+import type { AnnotationStore } from '../room/annotationStore.ts'
 import { strings } from '../strings.ts'
-import { drawStrokes } from './draw.ts'
+import { drawLaser, drawNameTag, drawStrokes, drawStroke } from './draw.ts'
+import type { AnnotationDrawer } from './sync.ts'
+import type { AnnotationMode } from './Toolbar.tsx'
 
 export interface AnnotationCanvasProps {
-  /** The member drawing */
-  by: string
-  /** J2's toolbar chooses; until then a pen */
-  tool?: AnnotationTool
+  store: AnnotationStore
+  /** The sharer: which share's layer */
+  share: string
+  /** Us, to leave our own name off what we draw; null when we may not annotate */
+  me: string | null
+  /** Who a stroke or pointer belongs to, for the name tag */
+  nameOf: (memberId: string) => string | null
+  /** What the pointer does; null: nothing, the marks are only shown (the tile keeps its gestures) */
+  mode: AnnotationMode | null
+  color: AnnotationColor
+  width: AnnotationWidth
+  /** How we draw; null with `mode` null */
+  drawer: AnnotationDrawer | null
+  /** The text tool picked a place on the picture */
+  onTextAt?: (at: Point) => void
 }
 
 /**
- * The drawing surface over a share (e7-t02): a canvas filling the tile, with its backing store at
+ * The marks over a share (e7-t02, J2): a canvas filling the tile, with its backing store at
  * devicePixelRatio. Everything is drawn through useShareGeometry's rectangle, so marks stay on the
  * same part of the picture through letterboxing, zoom, pan, resizes and fullscreen.
  *
- * Lazy-loaded (CLAUDE.md rule 6), and local for now: the strokes live and die with this component.
- * J2 (e7-t03, e7-t04) adds the toolbar and feeds it the room's strokes.
+ * Lazy-loaded (CLAUDE.md rule 6). The room's strokes come from the store; finished ones are kept in
+ * a picture of their own, so someone drawing over two thousand strokes only redraws what is moving
+ * (PRD E7: 接收端增量繪製).
  *
  * Only the primary pointer draws. A second finger cancels the stroke, so a pinch (handled by the
  * tile, which sees these events bubble) never leaves a mark behind.
  */
-export default function AnnotationCanvas({ by, tool = 'pen' }: AnnotationCanvasProps) {
+export default function AnnotationCanvas({
+  store,
+  share,
+  me,
+  nameOf,
+  mode,
+  color,
+  width,
+  drawer,
+  onTextAt,
+}: AnnotationCanvasProps) {
   const geometry = useShareGeometry()
   const { box, rect, pixelRatio, source, clientToContent } = geometry
   const aspect = source ? source.width / source.height : 1
+  const reducedMotion = useReducedMotion()
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const strokes = useRef<readonly Stroke[]>([])
-  const drawing = useRef<{ pointerId: number; stroke: Stroke } | null>(null)
+  const settledCanvas = useRef<HTMLCanvasElement | null>(null)
+  const settledKey = useRef('')
+  const pointer = useRef<number | null>(null)
   const frame = useRef<number | null>(null)
+  const scheduleRef = useRef<() => void>(() => undefined)
 
   const paint = useCallback(() => {
     const canvas = canvasRef.current
     const ctx = canvas?.getContext?.('2d')
     if (!canvas || !ctx || !rect) return
-    const current = drawing.current?.stroke
-    drawStrokes(
-      ctx,
-      current ? [...strokes.current, current] : strokes.current,
-      rect,
+    const active = store.active(share)
+    const strokes = store.strokes(share)
+    // The picture of finished strokes, made again only when one of them changed or the view did
+    const key = [
+      store.settledVersion(share),
+      [...active.keys()].join(),
+      rect.x,
+      rect.y,
+      rect.width,
+      rect.height,
       pixelRatio,
-      canvas,
-    )
-  }, [rect, pixelRatio])
+      canvas.width,
+      canvas.height,
+    ].join('|')
+    let settled = settledCanvas.current
+    if (!settled) {
+      settled = document.createElement('canvas')
+      settledCanvas.current = settled
+    }
+    if (settledKey.current !== key) {
+      settledKey.current = key
+      settled.width = canvas.width
+      settled.height = canvas.height
+      const context = settled.getContext?.('2d')
+      if (context) {
+        const finished = strokes.filter((stroke) => !active.has(stroke.id))
+        drawStrokes(context, finished, rect, pixelRatio, settled)
+      }
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(settled, 0, 0)
+    const moving: Stroke[] = strokes.filter((stroke) => active.has(stroke.id))
+    const now = Date.now()
+    const lasers = store.lasers(share)
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(rect.x * pixelRatio, rect.y * pixelRatio, rect.width * pixelRatio, rect.height * pixelRatio)
+    ctx.clip()
+    for (const stroke of moving) drawStroke(ctx, stroke, rect, pixelRatio)
+    for (const stroke of moving) {
+      if (stroke.by === me) continue
+      const name = nameOf(stroke.by)
+      const tip = stroke.points[stroke.points.length - 1]
+      if (name && tip) drawNameTag(ctx, name, tip, rect, pixelRatio)
+    }
+    for (const laser of lasers) {
+      // PRD E7: it fades; with less motion it just stays until it goes
+      const opacity = reducedMotion ? 1 : laserOpacity(laser.heardAt, now)
+      drawLaser(ctx, laser.at, laser.color, opacity, rect, pixelRatio)
+      const name = laser.by === me ? null : nameOf(laser.by)
+      if (name) drawNameTag(ctx, name, laser.at, rect, pixelRatio)
+    }
+    ctx.restore()
+    // Something is fading or going quiet: the next frame looks again
+    if (lasers.length > 0 || active.size > 0) scheduleRef.current()
+  }, [store, share, me, nameOf, rect, pixelRatio, reducedMotion])
+
+  /** At most one repaint a frame, however fast the pointer or the room reports */
+  const schedule = useCallback(() => {
+    if (frame.current !== null || typeof requestAnimationFrame === 'undefined') return
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null
+      paint()
+    })
+  }, [paint])
+  useEffect(() => {
+    scheduleRef.current = schedule
+  }, [schedule])
+
+  const repaint = useCallback(() => {
+    if (typeof requestAnimationFrame === 'undefined') paint()
+    else schedule()
+  }, [paint, schedule])
 
   // A new shape, size or view: the backing store follows the tile, and everything is drawn anew
   useLayoutEffect(() => {
@@ -64,71 +155,81 @@ export default function AnnotationCanvas({ by, tool = 'pen' }: AnnotationCanvasP
     paint()
   }, [box, pixelRatio, paint])
 
+  useEffect(() => store.subscribe(share, repaint), [store, share, repaint])
+
   useEffect(
     () => () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current)
+      frame.current = null
     },
     [],
   )
 
-  /** At most one repaint a frame, however fast the pointer reports */
-  const schedule = () => {
-    if (typeof requestAnimationFrame === 'undefined') {
-      paint()
-      return
-    }
-    if (frame.current !== null) return
-    frame.current = requestAnimationFrame(() => {
-      frame.current = null
-      paint()
-    })
+  /** Where the pointer is on the picture; null off it */
+  const onPicture = (clientX: number, clientY: number): Point | null => {
+    const at = clientToContent(clientX, clientY)
+    return at && insideContent(at) ? at : null
   }
 
   const onPointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (!mode || !drawer) return
     if (!event.isPrimary) {
-      drawing.current = null
-      schedule()
+      drawer.cancel()
+      pointer.current = null
       return
     }
     if (event.button !== 0) return
-    const at = clientToContent(event.clientX, event.clientY)
+    const at = onPicture(event.clientX, event.clientY)
     // Started on the letterbox bars: not on the picture, nothing to mark
-    if (!at || !insideContent(at)) return
-    const stroke = beginStroke({ by, tool, at })
-    if (!stroke) return
-    drawing.current = { pointerId: event.pointerId, stroke }
+    if (!at) return
+    switch (mode) {
+      case 'text':
+        // The press would take the focus straight back from the box it opens
+        event.preventDefault()
+        onTextAt?.(at)
+        return
+      case 'eraser':
+        drawer.eraseAt(at, aspect)
+        break
+      case 'laser':
+        drawer.laser(at, color)
+        break
+      default:
+        if (!drawer.begin({ tool: mode, color, width, at })) return
+    }
+    pointer.current = event.pointerId
     event.currentTarget.setPointerCapture?.(event.pointerId)
-    schedule()
   }
 
   const onPointerMove = (event: PointerEvent<HTMLCanvasElement>) => {
-    const active = drawing.current
-    if (!active || active.pointerId !== event.pointerId) return
+    if (!mode || !drawer) return
+    // A mouse shows the laser just by moving; a finger has to press
+    if (mode === 'laser' && (event.pointerType === 'mouse' || pointer.current === event.pointerId)) {
+      drawer.laser(onPicture(event.clientX, event.clientY), color)
+      return
+    }
+    if (pointer.current !== event.pointerId) return
+    if (mode === 'eraser') {
+      const at = onPicture(event.clientX, event.clientY)
+      if (at) drawer.eraseAt(at, aspect)
+      return
+    }
     // Every position since the last event: fast curves stay curves
     const native = event.nativeEvent
     const moves = native.getCoalescedEvents?.() ?? []
-    let { stroke } = active
     for (const move of moves.length > 0 ? moves : [native]) {
       const at = clientToContent(move.clientX, move.clientY)
-      if (at) stroke = extendStroke(stroke, at, aspect)
+      if (at) drawer.move(at, aspect)
     }
-    active.stroke = stroke
-    schedule()
   }
 
-  const onPointerUp = (event: PointerEvent<HTMLCanvasElement>) => {
-    const active = drawing.current
-    if (!active || active.pointerId !== event.pointerId) return
-    drawing.current = null
-    const finished = finishStroke(active.stroke, aspect)
-    if (finished) strokes.current = putStroke(strokes.current, finished)
-    schedule()
-  }
-
-  const onPointerCancel = (event: PointerEvent<HTMLCanvasElement>) => {
-    if (drawing.current?.pointerId !== event.pointerId) return
-    drawing.current = null
-    schedule()
+  const lift = (event: PointerEvent<HTMLCanvasElement>, keep: boolean) => {
+    if (!drawer || pointer.current !== event.pointerId) return
+    pointer.current = null
+    if (mode === 'laser') {
+      if (event.pointerType !== 'mouse') drawer.laser(null, color)
+    } else if (keep) drawer.end(aspect)
+    else drawer.cancel()
   }
 
   return (
@@ -137,19 +238,29 @@ export default function AnnotationCanvas({ by, tool = 'pen' }: AnnotationCanvasP
       role="img"
       aria-label={strings.screenShare.annotationCanvas}
       data-annotation-canvas=""
+      $mode={mode}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerCancel}
+      onPointerUp={(event) => lift(event, true)}
+      onPointerCancel={(event) => lift(event, false)}
+      onPointerLeave={(event) => {
+        if (mode === 'laser' && event.pointerType === 'mouse') drawer?.laser(null, color)
+      }}
     />
   )
 }
 
-const Surface = styled.canvas`
+const cursorOf = (mode: AnnotationMode): string =>
+  mode === 'text' ? 'text' : mode === 'eraser' ? 'cell' : 'crosshair'
+
+const Surface = styled.canvas<{ $mode: AnnotationMode | null }>`
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  cursor: crosshair;
-  touch-action: none;
+  ${({ $mode }) =>
+    $mode
+      ? `cursor: ${cursorOf($mode)}; touch-action: none;`
+      : // Only shown: pointers go straight through to the tile (its zoom, its drag, its button)
+        'pointer-events: none;'}
 `

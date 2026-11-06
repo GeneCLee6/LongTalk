@@ -438,3 +438,81 @@ export function PenIcon() {
     </svg>
   )
 }
+
+export function HighlighterIcon() {
+  return (
+    <svg {...common}>
+      <path d="M9 14l6-10 5 3-6 10H9z" />
+      <path d="M9 14l-1 3 3 2" />
+      <path d="M4 21h16" />
+    </svg>
+  )
+}
+
+export function ArrowToolIcon() {
+  return (
+    <svg {...common}>
+      <path d="M5 19L19 5M10 5h9v9" />
+    </svg>
+  )
+}
+
+export function RectIcon() {
+  return (
+    <svg {...common}>
+      <rect x="4" y="6" width="16" height="12" rx="1" />
+    </svg>
+  )
+}
+
+export function TextToolIcon() {
+  return (
+    <svg {...common}>
+      <path d="M5 6V4h14v2M12 4v16M9 20h6" />
+    </svg>
+  )
+}
+
+export function EraserIcon() {
+  return (
+    <svg {...common}>
+      <path d="M8 20l-4-4a2 2 0 0 1 0-3l9-9a2 2 0 0 1 3 0l4 4a2 2 0 0 1 0 3l-9 9z" />
+      <path d="M8 20h12M9 9l7 7" />
+    </svg>
+  )
+}
+
+export function LaserIcon() {
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
+    </svg>
+  )
+}
+
+export function UndoIcon() {
+  return (
+    <svg {...common}>
+      <path d="M8 5L4 9l4 4" />
+      <path d="M4 9h10a5 5 0 0 1 0 10h-3" />
+    </svg>
+  )
+}
+
+export function RedoIcon() {
+  return (
+    <svg {...common}>
+      <path d="M16 5l4 4-4 4" />
+      <path d="M20 9H10a5 5 0 0 0 0 10h3" />
+    </svg>
+  )
+}
+
+export function ClearIcon() {
+  return (
+    <svg {...common}>
+      <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5" />
+    </svg>
+  )
+}

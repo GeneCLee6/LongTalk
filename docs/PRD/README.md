@@ -17,7 +17,7 @@ LongTalk 的產品需求都在這個資料夾。三層結構（為什麼是三�
 
 ## Epic 進度
 
-統計日期 2026-11-06（A1–A4、B1–B4、C1–C3、D1–D4、F1–F3、G1–G5、H1–H6、I1–I6、J1 完成，M0 與 M1 的程式部分做完）。勾選以各 epic 文件為準，改了勾選順手更新這張表。
+統計日期 2026-11-06（A1–A4、B1–B4、C1–C3、D1–D4、F1–F3、G1–G5、H1–H6、I1–I6、J1–J2 完成，M0 與 M1 的程式部分做完）。勾選以各 epic 文件為準，改了勾選順手更新這張表。
 
 | Epic | 名稱 | Task 完成 | AC 完成 | M0 task | M1 task | 狀態 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -27,12 +27,12 @@ LongTalk 的產品需求都在這個資料夾。三層結構（為什麼是三�
 | [E4](e4-meeting-ui-experience.md) | 會議室介面與體驗 | 20／20 | 3／10 | 11 | 9 | in progress |
 | [E5](e5-chat-reactions-interaction.md) | 聊天、反應與互動 | 6／9 | 2／5 | 2 | 4 | in progress |
 | [E6](e6-audio-video-quality.md) | 音訊視訊品質 | 5／8 | 0／6 | 0 | 5 | in progress |
-| [E7](e7-annotation-whiteboard.md) | 畫筆標註與白板 | 2／9 | 0／5 | 0 | 0 | in progress（M2） |
+| [E7](e7-annotation-whiteboard.md) | 畫筆標註與白板 | 4／9 | 1／5 | 0 | 0 | in progress（M2） |
 | [E8](e8-recording-transcript-ai.md) | 錄影、逐字稿與 AI 摘要 | 3／9 | 0／6 | 0 | 3 | in progress |
 | [E9](e9-remote-control.md) | 遠端控制 | 0／9 | 0／5 | 0 | 0 | planned（M3） |
 | [E10](e10-scale-breakout.md) | 規模：大房間與分組討論室 | 0／7 | 0／5 | 0 | 0 | planned（M2–M3） |
 | [E11](e11-platform-security-cost-ops.md) | 平台、安全、成本與維運 | 9／13 | 6／11 | 5 | 4 | in progress |
-| | **合計** | **89／132** | **16／75** | **38** | **49** | |
+| | **合計** | **91／132** | **17／75** | **38** | **49** | |
 
 里程碑分布：M0 36 個、M1 51 個、M2 29 個、M3 16 個。M2／M3 的 task 刻意只寫一行，動工前那一批再細拆。
 

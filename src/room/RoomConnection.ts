@@ -15,6 +15,8 @@ import {
   parseServerMessage,
   roomSocketPath,
   viewAsJson,
+  type AnnotationMessage,
+  type AnnotationsMessage,
   type ClientMessage,
   type ErrorCode,
   type LobbyMessage,
@@ -232,6 +234,9 @@ export class RoomConnection {
   private readonly errorListeners = new Set<(code: ErrorCode) => void>()
   private readonly noticeListeners = new Set<(notice: NoticeMessage) => void>()
   private readonly reactionListeners = new Set<(reaction: ReactionMessage) => void>()
+  private readonly annotationListeners = new Set<
+    (message: AnnotationMessage | AnnotationsMessage) => void
+  >()
 
   constructor(roomId: string, join: JoinAs, options: RoomConnectionOptions = {}) {
     const origin =
@@ -247,6 +252,9 @@ export class RoomConnection {
   }
 
   getState = (): RoomConnectionState => this.state
+
+  /** Welcomed, right now (not as of the last render): what is sent reaches the room */
+  isOpen = (): boolean => this.state.status === 'open'
 
   /**
    * The room refused something this member sent (`error`: `share_full`, `forbidden`, …); returns
@@ -273,6 +281,18 @@ export class RoomConnection {
   onReaction = (listener: (reaction: ReactionMessage) => void): (() => void) => {
     this.reactionListeners.add(listener)
     return () => this.reactionListeners.delete(listener)
+  }
+
+  /**
+   * What happens to the strokes on the shares (J2, `annotation`, `annotations`): not in the state,
+   * or a stroke being drawn would render the whole room ten times a second. Returns a function
+   * that removes the listener
+   */
+  onAnnotation = (listener: (message: AnnotationMessage | AnnotationsMessage) => void) => {
+    this.annotationListeners.add(listener)
+    return () => {
+      this.annotationListeners.delete(listener)
+    }
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -501,6 +521,11 @@ export class RoomConnection {
       case 'reaction':
         if (this.rev < 0) return
         for (const listener of this.reactionListeners) listener(message)
+        return
+      case 'annotation':
+      case 'annotations':
+        if (this.rev < 0) return
+        for (const listener of this.annotationListeners) listener(message)
         return
       case 'chat': {
         // Only after this socket's welcome (the history follows it)

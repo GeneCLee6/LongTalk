@@ -2,6 +2,7 @@
 // recording's canvas with the stage's own layout functions (shared/layout.ts): the gallery, the
 // speaker big with a row under it (a pin or spotlight, or the 演講者 layout), or a share in the
 // main area with the people beside it. Pure: the composer draws what placeScene says.
+import type { Stroke } from '../../shared/annotation.ts'
 import {
   DEFAULT_GRID_GAP,
   DEFAULT_TILE_ASPECT,
@@ -27,6 +28,11 @@ export interface SceneShare {
   id: string
   name: string
   video: MediaStreamTrack | null
+  /**
+   * The marks on the share as they are at this frame (J2; read for every frame, they change far
+   * more often than the scene is built). The laser pointer is not recorded.
+   */
+  marks?: () => readonly Stroke[]
 }
 
 /** Everything the recorder reads for each frame (the room page keeps it up to date) */
