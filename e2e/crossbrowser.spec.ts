@@ -308,6 +308,17 @@ async function meet(a: Member, b: Member, testInfo: TestInfo) {
     [a, b],
   ] as const) {
     await test.step(`${sharer.engine} shares: ${viewer.engine} sees the screen`, async () => {
+      // Playwright's Linux WebKit cannot run two video encoders side by side: with its camera on,
+      // the camera's encoder starts sending the screen's picture, and the screen's encoder often
+      // ignores every keyframe request, so a viewer never decodes it (14 of 31 runs, 0 of 7 with
+      // the camera off; ADR-001 「WebKit 同時送鏡頭與分享」). Neither LongTalk nor the SFU can put
+      // that right, so here the share is tested alone. Whether Safari itself does this is not
+      // known: DEPLOY.md §5 checks a camera and a share together on a real Mac.
+      const cameraOff = sharer.engine === 'webkit'
+      if (cameraOff) {
+        await toolbarButton(sharer, strings.toolbar.camOn).click()
+        await expect(tile(viewer, sharer)).toContainText(strings.room.camOff)
+      }
       await toolbarButton(sharer, strings.toolbar.share).click()
       await expect(
         sharer.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
@@ -320,6 +331,7 @@ async function meet(a: Member, b: Member, testInfo: TestInfo) {
       await expect(
         viewer.page.getByRole('figure', { name: strings.screenShare.region(sharer.name) }),
       ).toHaveCount(0)
+      if (cameraOff) await toolbarButton(sharer, strings.toolbar.camOff).click()
     })
   }
 }
