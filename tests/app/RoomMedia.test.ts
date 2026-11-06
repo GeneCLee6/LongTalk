@@ -496,6 +496,25 @@ describe('RoomMedia: rebuilding the session (e2-t08) and TURN (e2-t07)', () => {
     expect(a.current().sending.get('cam-2')).toBe(cam)
   })
 
+  it('a rebuild during a share with the camera off: the screen comes back, the camera does not', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = rebuildable(sfu)
+    const mic = fakeTrack('audio')
+    const cam = fakeTrack('video')
+    await a.media.start({ mic, cam })
+    await a.media.setLocal({ mic, cam: null })
+    await a.media.setScreen(fakeTrack('video'))
+    a.current().simulateState('failed')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(a.transports).toHaveLength(2)
+    expect(listed(a).map((track) => track.kind)).toEqual(['mic', 'screen'])
+    // The camera comes back after the share, on the new session
+    await a.media.setScreen(null)
+    await a.media.setLocal({ mic, cam })
+    expect(listed(a).find((track) => track.kind === 'cam')?.muted).toBe(false)
+  })
+
   it('keeps a muted microphone muted across a rebuild', async () => {
     vi.useFakeTimers()
     const sfu = new FakeSfu()

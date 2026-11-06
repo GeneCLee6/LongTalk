@@ -89,6 +89,13 @@ export interface Capabilities {
    * only <video> has its own player; there the fullscreen button is left out (zoom still works)
    */
   fullscreen: boolean
+  /**
+   * A precaution, not an ability: this browser can share and is WebKit (in practice Mac Safari).
+   * Sending a camera and a screen at once went wrong on Playwright's Linux WebKit (ADR-001
+   * 「WebKit 同時送鏡頭與分享」), so the camera goes off while sharing (src/room/ShareCameraGuard.ts).
+   * Real Safari is unverified; BROWSER-SUPPORT.md §3 says how to remove this if it turns out fine
+   */
+  shareStopsCamera: boolean
 }
 
 export type Capability = keyof Capabilities
@@ -116,6 +123,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'localRecording',
   'passkeys',
   'fullscreen',
+  'shareStopsCamera',
 ]
 
 /** Where detection looks: the browser's globals, or a stand-in in tests */
@@ -141,6 +149,7 @@ export interface CapabilityEnv {
     permissions?: object | null
     getBattery?: unknown
     credentials?: object | null
+    vendor?: string
   }
 }
 
@@ -303,6 +312,16 @@ export function canFullscreen(env: CapabilityEnv = browser()): boolean {
   return env.document?.fullscreenEnabled === true
 }
 
+/**
+ * Whether the camera goes off while sharing (ADR-001 「WebKit 同時送鏡頭與分享」): no API can tell
+ * that two encoders fail together, so this asks for the engine. navigator.vendor is not the user
+ * agent: the HTML standard freezes it to one of three values, and only WebKit answers this one
+ * (Chrome and Edge say 'Google Inc.', Firefox says nothing). WebKit on phones cannot share at all.
+ */
+export function shareStopsCamera(env: CapabilityEnv = browser()): boolean {
+  return canShareScreen(env) && env.navigator?.vendor === 'Apple Computer, Inc.'
+}
+
 /** Everything at once (the doc's table, for this browser) */
 export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities {
   const devices = env.navigator?.mediaDevices
@@ -329,5 +348,6 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     localRecording: canRecordLocally(env),
     passkeys: canUsePasskeys(env),
     fullscreen: canFullscreen(env),
+    shareStopsCamera: shareStopsCamera(env),
   }
 }

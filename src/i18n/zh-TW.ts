@@ -576,6 +576,10 @@ export const zhTWRoom = {
     label: (name: string) => `${name} 的畫面`,
     region: (name: string) => `${name} 分享的畫面`,
     waiting: (name: string) => `${name} 開始分享畫面，馬上就來…`,
+    cameraOffForShare:
+      '鏡頭先關掉了：這個瀏覽器同時送鏡頭和分享，別人可能看不到你的分享。停止分享後鏡頭會自動打開，之後也可以再自己開關。',
+    cameraLocked:
+      '分享時不能開鏡頭：這個瀏覽器同時送鏡頭和分享，別人可能看不到你的分享。停止分享後就能打開。',
     stopped: '你的分享已被停止。',
     started: (name: string) => `${name} 開始分享畫面`,
     // Several shares at once (H5, e3-t07): the room's cap, the main area's picker, the strip
