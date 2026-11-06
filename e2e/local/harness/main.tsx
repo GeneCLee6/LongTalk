@@ -14,6 +14,8 @@ import { GlobalStyle } from '../../../src/styles/GlobalStyle.ts'
 const params = new URLSearchParams(location.search)
 const width = Number(params.get('w') ?? 1600)
 const height = Number(params.get('h') ?? 900)
+/** The sharer's own view (J3): `window`, or `screen` for a whole screen (the mirror risk) */
+const own = params.get('own')
 
 const canvas = document.createElement('canvas')
 canvas.width = width
@@ -60,7 +62,8 @@ createRoot(document.getElementById('root')!).render(
       <ShareTile
         name="Bob"
         video={track}
-        annotations={{ store, share: 'b', me: 'me', nameOf: () => null }}
+        annotations={{ store, share: 'b', me: 'me', manage: own !== null, nameOf: () => null }}
+        own={own ? { mirrorRisk: own === 'screen' } : null}
         recording="Gene 正在錄影"
         picker={<SharePicker shares={shares} main="b" onPick={(id) => window.picked.push(id)} />}
       />

@@ -61,7 +61,7 @@ const currentRatio = () =>
   typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
 
 /** devicePixelRatio, following a move to another screen or a browser zoom */
-function usePixelRatio(): number {
+export function usePixelRatio(): number {
   const [ratio, setRatio] = useState(currentRatio)
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return

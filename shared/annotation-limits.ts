@@ -1,5 +1,5 @@
-// Every number that bounds annotations on a share (E7, J2: e7-t03, e7-t04), in one place: the room
-// enforces them (worker/room-annotations.ts, worker/room-host.ts), the browser stays inside them
+// Every number that bounds annotations on a share and on the whiteboard (E7, J2: e7-t03, e7-t04;
+// J3: e7-t06), in one place: the room enforces them (worker/room-annotations.ts, worker/room-host.ts), the browser stays inside them
 // (src/annotate/sync.ts, src/room/annotationStore.ts).
 //
 // The budget they protect is Cloudflare's free tier (DEPLOY.md, ARCHITECTURE.md):
@@ -56,6 +56,57 @@ export const SNAPSHOT_FRAME_CHARS = 64_000
 export const SEGMENT_CHARS = 64_000
 /** Changed segments are written at most this often; a share stopping writes at once */
 export const ANNOTATION_FLUSH_MS = 5_000
+
+// ---------------------------------------------------------------------------------------------
+// The whiteboard (J3, e7-t06): one more layer in the same machinery, with its own numbers
+
+/**
+ * How far the board's world goes each way from its centre, in world units (1 unit is BOARD_UNIT_PX
+ * on screen at 100%): about a million pixels, which no one pans to, and it keeps a point's length
+ * on the wire bounded. "Infinite" for every purpose but that.
+ */
+export const BOARD_EXTENT = 1000
+/**
+ * One stroke's points on the board. A point there can be `[-999.1234,-999.1234],`, longer than on a
+ * share, and a whole stroke must still fit one client frame (a test checks it does)
+ */
+export const MAX_BOARD_STROKE_POINTS = 600
+/** The board keeps at most this many strokes, everyone's together */
+export const MAX_BOARD_STROKES = 4000
+/** What the board may hold (strokeCost): twice a share, since it stays until someone clears it */
+export const MAX_BOARD_COST = 3_000_000
+/** What one member may hold on the board: nobody fills it alone */
+export const MAX_BOARD_MEMBER_STROKES = 1500
+export const MAX_BOARD_MEMBER_COST = 1_000_000
+
+/**
+ * What a layer may hold, and what happens past it. A share's oldest strokes fall out (J2: it is
+ * cleared when the share stops anyway). A board is what people came to keep: nothing of it
+ * disappears by itself, a new stroke is refused and the member told to clear some.
+ */
+export type LayerLimits = {
+  strokes: number
+  cost: number
+  memberStrokes: number
+  memberCost: number
+  whenFull: 'evict' | 'refuse'
+}
+
+export const SHARE_LIMITS: LayerLimits = {
+  strokes: MAX_STROKES,
+  cost: MAX_SHARE_COST,
+  memberStrokes: MAX_MEMBER_STROKES,
+  memberCost: MAX_MEMBER_COST,
+  whenFull: 'evict',
+}
+
+export const BOARD_LIMITS: LayerLimits = {
+  strokes: MAX_BOARD_STROKES,
+  cost: MAX_BOARD_COST,
+  memberStrokes: MAX_BOARD_MEMBER_STROKES,
+  memberCost: MAX_BOARD_MEMBER_COST,
+  whenFull: 'refuse',
+}
 
 /** PRD E7: the laser pointer lasts this long after its last position, fading out */
 export const LASER_FADE_MS = 3_000

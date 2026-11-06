@@ -152,6 +152,9 @@ export const annotation = {
   /** The name beside a stroke being drawn or a laser pointer (J2) */
   tagBackground: 'rgba(11, 18, 32, 0.85)',
   tagText: '#FFFFFF',
+  /** The whiteboard's sheet and its grid (J3): always pale, so every default colour reads on it */
+  boardPaper: '#F8FAFC',
+  boardGrid: '#E2E8F0',
 } as const
 
 /** The same name always gets the same colour (FNV-1a over the code points) */

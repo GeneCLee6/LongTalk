@@ -13,6 +13,8 @@ export interface ShareGestureOptions {
   /** The annotation canvas has the single pointer: only two fingers still zoom */
   drawing: boolean
   onToggleFullscreen?: () => void
+  /** A drag and the arrow keys move it at any zoom: the whiteboard has no edges to fit (J3) */
+  alwaysPans?: boolean
 }
 
 /**
@@ -34,7 +36,7 @@ const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y +
 export function useShareGestures(
   frameRef: RefObject<HTMLElement | null>,
   viewport: ShareViewport,
-  { enabled, drawing, onToggleFullscreen }: ShareGestureOptions,
+  { enabled, drawing, onToggleFullscreen, alwaysPans = false }: ShareGestureOptions,
 ) {
   const { geometry, zoomTo, panBy, reset } = viewport
   const pointers = useRef(new Map<number, Point>())
@@ -74,7 +76,7 @@ export function useShareGestures(
       if (drawing) return
       // Held even at 100%: released outside the tile, the release must still reach us
       event.currentTarget.setPointerCapture?.(event.pointerId)
-      if (geometry.view.zoom > 1) setDragging(true)
+      if (alwaysPans || geometry.view.zoom > 1) setDragging(true)
     },
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       const before = pointers.current.get(event.pointerId)
@@ -113,7 +115,7 @@ export function useShareGestures(
       if (isTypingTarget(event.target) || insideWidget(event.target)) return
       const stepX = geometry.box.width * KEY_PAN_SHARE
       const stepY = geometry.box.height * KEY_PAN_SHARE
-      const zoomed = geometry.view.zoom > 1
+      const zoomed = alwaysPans || geometry.view.zoom > 1
       switch (event.key) {
         case '+':
         case '=':

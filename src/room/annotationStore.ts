@@ -1,6 +1,7 @@
 import { ACTIVE_STROKE_MS, LASER_FADE_MS } from '../../shared/annotation-limits.ts'
 import {
   applyStrokeUpdate,
+  spaceOf,
   type AnnotationColor,
   type AnnotationOp,
   type NormPoint,
@@ -79,6 +80,11 @@ export class AnnotationStore {
     this.deps.send({ t: 'annotate', share, ops })
   }
 
+  /** Clears a layer, or one member's strokes on it, for everyone: the room decides (J3, e7-t05) */
+  clearLayer(share: string, by: string | null): void {
+    this.deps.send({ t: 'clearAnnotations', share, by })
+  }
+
   /** A message from the room */
   receive(message: AnnotationMessage | AnnotationsMessage): void {
     if (message.t === 'annotations') {
@@ -139,7 +145,7 @@ export class AnnotationStore {
       case 'update': {
         const layer = this.layers.get(share)
         const stroke = layer?.strokes.get(op.id)
-        const next = stroke && applyStrokeUpdate(stroke, op.at, op.points)
+        const next = stroke && applyStrokeUpdate(stroke, op.at, op.points, spaceOf(share))
         if (!layer || !next) return
         layer.strokes.set(op.id, next)
         layer.list = null
@@ -220,6 +226,13 @@ export class AnnotationStore {
 
   has(share: string, id: string): boolean {
     return this.layers.get(share)?.strokes.has(id) ?? false
+  }
+
+  /** Who has strokes on a layer and how many, in the order they first drew */
+  authors(share: string): Map<string, number> {
+    const counts = new Map<string, number>()
+    for (const { by } of this.strokes(share)) counts.set(by, (counts.get(by) ?? 0) + 1)
+    return counts
   }
 
   /** Grows when a stroke not being drawn changes, see Layer */

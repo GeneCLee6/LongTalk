@@ -8,14 +8,24 @@
 // A point's x and y have different units when the picture is not square, so anything measuring
 // distance (simplifying, hit-testing) takes the picture's aspect (width / height) and measures in
 // units of the picture's height.
+//
+// The whiteboard (J3, e7-t06) is one more layer of the same strokes, in world coordinates: no picture
+// to be 0–1 of, so a point ranges over BOARD_SPACE, and its "picture" is a square (aspect 1) whose
+// side is one world unit (shared/boardGeometry.ts). Everything measured against the picture's short
+// side (line widths, text size, the eraser's reach) then just works, in world units.
 
 import {
+  BOARD_EXTENT,
+  BOARD_LIMITS,
   LASER_FADE_MS,
+  MAX_BOARD_STROKE_POINTS,
   MAX_ANNOTATION_TEXT_CHARS,
   MAX_FRAME_OPS,
   MAX_STROKES,
   MAX_STROKE_ID_CHARS,
   MAX_STROKE_POINTS,
+  SHARE_LIMITS,
+  type LayerLimits,
 } from './annotation-limits.ts'
 import { normalizeChatText } from './chat.ts'
 
@@ -46,8 +56,38 @@ export type AnnotationColor = (typeof ANNOTATION_COLORS)[number]
 export const ANNOTATION_WIDTHS = ['thin', 'medium', 'thick'] as const
 export type AnnotationWidth = (typeof ANNOTATION_WIDTHS)[number]
 
-/** [x, y], each 0–1 across the picture */
+/** [x, y]: each 0–1 across the picture on a share, world coordinates on the board (CoordSpace) */
 export type NormPoint = readonly [number, number]
+
+/** The range a layer's points live in, and how long a path may get there */
+export interface CoordSpace {
+  min: number
+  max: number
+  maxPoints: number
+}
+
+/** A share: 0–1 across the picture */
+export const PICTURE_SPACE: CoordSpace = { min: 0, max: 1, maxPoints: MAX_STROKE_POINTS }
+/** The whiteboard: world coordinates, either side of its centre */
+export const BOARD_SPACE: CoordSpace = {
+  min: -BOARD_EXTENT,
+  max: BOARD_EXTENT,
+  maxPoints: MAX_BOARD_STROKE_POINTS,
+}
+
+/** The whiteboard's layer among the room's layers: member ids are UUIDs, so never one of those */
+export const WHITEBOARD_LAYER = 'whiteboard'
+
+export const isWhiteboard = (layer: string): boolean => layer === WHITEBOARD_LAYER
+
+export const spaceOf = (layer: string): CoordSpace =>
+  isWhiteboard(layer) ? BOARD_SPACE : PICTURE_SPACE
+
+export const limitsOf = (layer: string): LayerLimits =>
+  isWhiteboard(layer) ? BOARD_LIMITS : SHARE_LIMITS
+
+export const insideSpace = (point: { x: number; y: number }, space: CoordSpace): boolean =>
+  point.x >= space.min && point.x <= space.max && point.y >= space.min && point.y <= space.max
 
 export interface Stroke {
   id: string
@@ -107,13 +147,17 @@ export const textSizeRatio = (width: AnnotationWidth): number => TEXT_SIZE[width
 export const arrowHeadRatio = (width: AnnotationWidth): number =>
   Math.max(LINE_WIDTH[width] * ARROW_HEAD_LINES, ARROW_HEAD_MIN)
 
-const roundCoord = (value: number) =>
-  Math.round(Math.min(Math.max(value, 0), 1) * PRECISION) / PRECISION
+const roundCoord = (value: number, { min, max }: CoordSpace) =>
+  Math.round(Math.min(Math.max(value, min), max) * PRECISION) / PRECISION
 
-/** A point kept on the picture, at the stored precision; null when it is not a number */
-export function normalizePoint(x: number, y: number): NormPoint | null {
+/** A point kept in its space, at the stored precision; null when it is not a number */
+export function normalizePoint(
+  x: number,
+  y: number,
+  space: CoordSpace = PICTURE_SPACE,
+): NormPoint | null {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null
-  return [roundCoord(x), roundCoord(y)]
+  return [roundCoord(x, space), roundCoord(y, space)]
 }
 
 /** Distance in units of the picture's height */
@@ -197,6 +241,8 @@ export interface NewStroke {
   /** Where the pointer went down, content coordinates */
   at: { x: number; y: number }
   text?: string
+  /** The layer's range (default: a share's) */
+  space?: CoordSpace
 }
 
 /** A stroke just begun; null for a point that is not a number */
@@ -208,8 +254,9 @@ export function beginStroke({
   width = DEFAULT_ANNOTATION_WIDTH,
   at,
   text,
+  space = PICTURE_SPACE,
 }: NewStroke): Stroke | null {
-  const start = normalizePoint(at.x, at.y)
+  const start = normalizePoint(at.x, at.y, space)
   if (!start) return null
   const base = { id, by, tool, color, width }
   if (tool === 'arrow' || tool === 'rect') return { ...base, points: [start, start] }
@@ -222,9 +269,14 @@ export function beginStroke({
  * MIN_POINT_DISTANCE dropped, thinned to 3/4 of the cap when it reaches it, so drawing never
  * stops), an arrow or rectangle moves its second point, a text mark stays put.
  */
-export function extendStroke(stroke: Stroke, at: { x: number; y: number }, aspect: number): Stroke {
+export function extendStroke(
+  stroke: Stroke,
+  at: { x: number; y: number },
+  aspect: number,
+  space: CoordSpace = PICTURE_SPACE,
+): Stroke {
   if (stroke.tool === 'text') return stroke
-  const next = normalizePoint(at.x, at.y)
+  const next = normalizePoint(at.x, at.y, space)
   if (!next) return stroke
   if (stroke.tool === 'arrow' || stroke.tool === 'rect') {
     return { ...stroke, points: [stroke.points[0], next] }
@@ -236,8 +288,8 @@ export function extendStroke(stroke: Stroke, at: { x: number; y: number }, aspec
   return {
     ...stroke,
     points:
-      points.length > MAX_STROKE_POINTS
-        ? thinTo(points, Math.floor((MAX_STROKE_POINTS * 3) / 4), ratio)
+      points.length > space.maxPoints
+        ? thinTo(points, Math.floor((space.maxPoints * 3) / 4), ratio)
         : points,
   }
 }
@@ -273,37 +325,43 @@ export function normalizeAnnotationText(raw: unknown): string | null {
 const isOneOf = <T extends string>(list: readonly T[], value: unknown): value is T =>
   list.includes(value as T)
 
-export function parsePoint(raw: unknown): NormPoint | null {
+export function parsePoint(raw: unknown, space: CoordSpace = PICTURE_SPACE): NormPoint | null {
   if (!Array.isArray(raw) || raw.length !== 2) return null
   const [x, y] = raw as unknown[]
   if (typeof x !== 'number' || typeof y !== 'number') return null
-  if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return null
-  return normalizePoint(x, y)
+  if (!(x >= space.min && x <= space.max && y >= space.min && y <= space.max)) return null
+  return normalizePoint(x, y, space)
 }
 
-const POINT_COUNT: Readonly<Record<AnnotationTool, (count: number) => boolean>> = {
-  pen: (count) => count >= 1 && count <= MAX_STROKE_POINTS,
-  highlighter: (count) => count >= 1 && count <= MAX_STROKE_POINTS,
-  arrow: (count) => count === 2,
-  rect: (count) => count === 2,
-  text: (count) => count === 1,
+/** How many points a tool's stroke may have in this space */
+function pointCountFits(tool: AnnotationTool, count: number, space: CoordSpace): boolean {
+  switch (tool) {
+    case 'pen':
+    case 'highlighter':
+      return count >= 1 && count <= space.maxPoints
+    case 'arrow':
+    case 'rect':
+      return count === 2
+    case 'text':
+      return count === 1
+  }
 }
 
 /**
  * A stroke from the wire, or null: the shapes and limits above, nothing else carried along. RoomDO
  * gets these from parseAnnotationOps, which leaves `by` empty: the room stamps it itself.
  */
-export function parseStroke(raw: unknown): Stroke | null {
+export function parseStroke(raw: unknown, space: CoordSpace = PICTURE_SPACE): Stroke | null {
   if (typeof raw !== 'object' || raw === null) return null
   const { id, by, tool, color, width, points, text } = raw as Record<string, unknown>
   if (typeof id !== 'string' || id === '' || id.length > MAX_STROKE_ID_CHARS) return null
   if (typeof by !== 'string') return null
   if (!isOneOf(ANNOTATION_TOOLS, tool)) return null
   if (!isOneOf(ANNOTATION_COLORS, color) || !isOneOf(ANNOTATION_WIDTHS, width)) return null
-  if (!Array.isArray(points) || !POINT_COUNT[tool](points.length)) return null
+  if (!Array.isArray(points) || !pointCountFits(tool, points.length, space)) return null
   const parsed: NormPoint[] = []
   for (const point of points) {
-    const good = parsePoint(point)
+    const good = parsePoint(point, space)
     if (!good) return null
     parsed.push(good)
   }
@@ -353,10 +411,11 @@ export function applyStrokeUpdate(
   stroke: Stroke,
   at: number,
   points: readonly NormPoint[],
+  space: CoordSpace = PICTURE_SPACE,
 ): Stroke | null {
   if (stroke.tool === 'text' || at > stroke.points.length) return null
   const next = [...stroke.points.slice(0, at), ...points]
-  return POINT_COUNT[stroke.tool](next.length) ? { ...stroke, points: next } : null
+  return pointCountFits(stroke.tool, next.length, space) ? { ...stroke, points: next } : null
 }
 
 /** What a stroke costs to keep and to send, about its length in JSON characters */
@@ -374,7 +433,7 @@ export const strokeCost = (stroke: Stroke): number =>
  * - `update`: a stroke being drawn (applyStrokeUpdate);
  * - `remove`: undo, the eraser; from the room also a stroke that fell out or was refused;
  * - `clear`: the sender's own strokes. From the room: `by`'s strokes, or with no `by` the whole
- *   layer (J3's 清除全部 and 清除某人 fit here);
+ *   layer (J3: someone else's strokes go through `clearAnnotations`, which the room decides on);
  * - `laser`: the pointer is here (null: gone). Never stored.
  */
 export type AnnotationOp =
@@ -387,23 +446,23 @@ export type AnnotationOp =
 const isStrokeId = (value: unknown): value is string =>
   typeof value === 'string' && value !== '' && value.length <= MAX_STROKE_ID_CHARS
 
-function parseOp(raw: unknown): AnnotationOp | null {
+function parseOp(raw: unknown, space: CoordSpace): AnnotationOp | null {
   if (typeof raw !== 'object' || raw === null) return null
   const value = raw as Record<string, unknown>
   switch (value.op) {
     case 'add': {
       if (typeof value.stroke !== 'object') return null
-      const stroke = parseStroke({ ...value.stroke, by: '' })
+      const stroke = parseStroke({ ...value.stroke, by: '' }, space)
       if (!stroke) return null
       return value.live === true ? { op: 'add', stroke, live: true } : { op: 'add', stroke }
     }
     case 'update': {
       const { id, at, points } = value
       if (!isStrokeId(id) || !Number.isInteger(at) || (at as number) < 0) return null
-      if (!Array.isArray(points) || points.length === 0 || points.length > MAX_STROKE_POINTS) {
+      if (!Array.isArray(points) || points.length === 0 || points.length > space.maxPoints) {
         return null
       }
-      const parsed = points.map(parsePoint)
+      const parsed = points.map((point) => parsePoint(point, space))
       if (parsed.includes(null)) return null
       return { op: 'update', id, at: at as number, points: parsed as NormPoint[] }
     }
@@ -414,7 +473,7 @@ function parseOp(raw: unknown): AnnotationOp | null {
     case 'laser': {
       if (!isOneOf(ANNOTATION_COLORS, value.color)) return null
       if (value.at === null) return { op: 'laser', at: null, color: value.color }
-      const at = parsePoint(value.at)
+      const at = parsePoint(value.at, space)
       return at ? { op: 'laser', at, color: value.color } : null
     }
     default:
@@ -423,9 +482,12 @@ function parseOp(raw: unknown): AnnotationOp | null {
 }
 
 /** A frame's ops from the wire, or null when any of them is not one this version understands */
-export function parseAnnotationOps(raw: unknown): AnnotationOp[] | null {
+export function parseAnnotationOps(
+  raw: unknown,
+  space: CoordSpace = PICTURE_SPACE,
+): AnnotationOp[] | null {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_FRAME_OPS) return null
-  const ops = raw.map(parseOp)
+  const ops = raw.map((op) => parseOp(op, space))
   return ops.includes(null) ? null : (ops as AnnotationOp[])
 }
 

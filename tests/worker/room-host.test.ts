@@ -48,6 +48,8 @@ const INFO = {
   spotlight: null,
   persistent: false,
   recordings: {},
+  annotationPolicy: 'everyone' as const,
+  whiteboard: null,
 }
 
 /** A browser as the room sees it: keeps its own copy of the view from what it receives */

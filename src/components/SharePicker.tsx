@@ -3,8 +3,11 @@ import { strings } from '../strings.ts'
 import { color, fontSize, radius, space } from '../styles/tokens.ts'
 
 export interface SharePickerProps {
-  /** Everyone else who shares, in the order they started */
-  shares: readonly { id: string; name: string }[]
+  /**
+   * What can be in the main area, in the order it started: everyone else who shares and the
+   * whiteboard (J3), which has no sharer's name (`label`)
+   */
+  shares: readonly { id: string; name: string; label?: string }[]
   /** The one in the main area */
   main: string
   onPick: (id: string) => void
@@ -25,7 +28,7 @@ export function SharePicker({ shares, main, onPick }: SharePickerProps) {
           aria-pressed={share.id === main}
           onClick={() => onPick(share.id)}
         >
-          {strings.screenShare.label(share.name)}
+          {share.label ?? strings.screenShare.label(share.name)}
         </Choice>
       ))}
     </Group>

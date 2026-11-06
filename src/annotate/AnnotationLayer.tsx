@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import styled from 'styled-components'
 import {
+  ANNOTATION_COLORS,
   DEFAULT_ANNOTATION_WIDTH,
+  isWhiteboard,
+  normalizePoint,
+  spaceOf,
   textSizeRatio,
   type AnnotationColor,
   type AnnotationWidth,
@@ -29,6 +33,9 @@ const DEFAULT_COLORS: readonly AnnotationColor[] = [
   'blue',
   'violet',
 ]
+
+/** White on a white sheet would be a mark nobody can see, the one who drew it included */
+const BOARD_COLORS = ANNOTATION_COLORS.filter((name) => name !== 'white')
 
 function defaultColor(memberId: string | null): AnnotationColor {
   let sum = 0
@@ -66,6 +73,9 @@ export default function AnnotationLayer({
   // A box being taken away also blurs: finished with Enter or Esc, that must not count again
   const textDone = useRef(false)
   const active = editing && drawer !== null
+
+  // The room took the tools away, or the tile went, mid-stroke: that stroke does not stay half-drawn
+  useEffect(() => () => drawer?.cancel(), [drawer])
 
   // The fingers' habit: undo and redo wherever the focus is, while the tools are out
   useEffect(() => {
@@ -150,12 +160,15 @@ export default function AnnotationLayer({
             setMode(next)
             // No pointer to place it with: the middle of what is on screen, then typing
             if (next === 'text' && byKeyboard && rect) {
-              openText({
-                x: Math.min(1, Math.max(0, (box.width / 2 - rect.x) / rect.width)),
-                y: Math.min(1, Math.max(0, (box.height / 2 - rect.y) / rect.height)),
-              })
+              const [x, y] = normalizePoint(
+                (box.width / 2 - rect.x) / rect.width,
+                (box.height / 2 - rect.y) / rect.height,
+                spaceOf(share),
+              ) ?? [0, 0]
+              openText({ x, y })
             }
           }}
+          colors={isWhiteboard(share) ? BOARD_COLORS : ANNOTATION_COLORS}
           color={color}
           onColor={setColor}
           width={width}

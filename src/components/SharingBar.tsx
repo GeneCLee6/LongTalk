@@ -1,12 +1,14 @@
 import { useEffect, useRef } from 'react'
 import styled from 'styled-components'
 import type { SelfCapture } from '../media/share.ts'
+import type { AnnotationStore } from '../room/annotationStore.ts'
 import type { ShareMode } from '../media/shareMode.ts'
 import type { SharePreview } from '../room/useSharePreview.ts'
 import { strings } from '../strings.ts'
 import { color, fontSize, media, radius, space } from '../styles/tokens.ts'
 import { Button } from './Button.tsx'
-import { ScreenShareIcon, SoundIcon, SoundOffIcon } from './icons.tsx'
+import { PenIcon, ScreenShareIcon, SoundIcon, SoundOffIcon } from './icons.tsx'
+import { useMarked } from './useShareChrome.ts'
 
 export interface SharingBarProps {
   onStop: () => void
@@ -26,6 +28,11 @@ export interface SharingBarProps {
   preview?: { sample: SharePreview; off: boolean } | null
   /** What we share shows the meeting (e3-t09): the warning, 換一個畫面 and 知道了 */
   selfCapture?: { kind: SelfCapture; onRepick: () => void; onDismiss: () => void } | null
+  /**
+   * Our own share with its marks in the main area (J3): whether it is there, its switch, and the
+   * layer whose marks make the switch say there is something to look at
+   */
+  ownView?: { open: boolean; onToggle: () => void; store: AnnotationStore; layer: string } | null
 }
 
 const MODES: { mode: ShareMode; label: () => string; hint: () => string }[] = [
@@ -56,6 +63,7 @@ export function SharingBar({
   motionHint = null,
   preview = null,
   selfCapture = null,
+  ownView = null,
 }: SharingBarProps) {
   const hint = !audio
     ? strings.screenShare.youAreSharingHint
@@ -94,6 +102,7 @@ export function SharingBar({
             ))}
           </Modes>
         )}
+        {ownView && <OwnViewButton {...ownView} />}
         {audio && (
           <Button variant="secondary" onClick={audio.onToggle}>
             <Glyph aria-hidden="true">{audio.on ? <SoundIcon /> : <SoundOffIcon />}</Glyph>
@@ -127,6 +136,33 @@ export function SharingBar({
         </Notice>
       )}
     </Bar>
+  )
+}
+
+/**
+ * Opens our own share in the main area, where other people's marks show (J3). It says so when there
+ * are any while the view is shut: nothing else tells the presenter that someone drew on their share.
+ */
+function OwnViewButton({
+  open,
+  onToggle,
+  store,
+  layer,
+}: NonNullable<SharingBarProps['ownView']>) {
+  const marked = useMarked(store, layer)
+  const text = strings.screenShare
+  const label = open ? text.ownClose : marked ? text.ownOpenMarked : text.ownOpen
+  return (
+    <Button
+      variant={marked && !open ? 'primary' : 'secondary'}
+      aria-pressed={open}
+      onClick={onToggle}
+    >
+      <Glyph aria-hidden="true">
+        <PenIcon />
+      </Glyph>
+      {label}
+    </Button>
   )
 }
 

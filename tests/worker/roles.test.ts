@@ -23,6 +23,7 @@ const EXPECTED: Record<Action, string> = {
   react: 'HCP',
   raiseHand: 'HCP',
   annotate: 'HCP',
+  openWhiteboard: 'HCP',
   requestControl: 'HCP',
   renameRoom: 'HC',
   muteAll: 'HC',

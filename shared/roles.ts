@@ -64,8 +64,13 @@ export const PERMISSIONS = {
   /** Reactions and raising a hand (G3) */
   react: { who: IN_ROOM, on: 'self', since: 'G3' },
   raiseHand: { who: IN_ROOM, on: 'self', since: 'G3' },
-  /** Draw on a share, subject to the room's annotation policy (J, E7) */
+  /** Draw on a share or the whiteboard, subject to the room's annotation policy (J, E7: mayDraw) */
   annotate: { who: IN_ROOM, on: 'self', since: 'J' },
+  /**
+   * Open the room's whiteboard for everyone (J3, e7-t06), subject to the same policy (mayOpenBoard).
+   * Closing it is mayCloseBoard: it asks for more than opening does
+   */
+  openWhiteboard: { who: IN_ROOM, on: 'self', since: 'J3' },
   /** Ask the sharer for remote control (N, E9; the sharer still has to accept) */
   requestControl: { who: IN_ROOM, on: 'self', since: 'N' },
 
@@ -87,7 +92,10 @@ export const PERMISSIONS = {
   spotlight: { who: STAFF, on: 'room', since: 'G2' },
   /** The room's password (F3, e1-t15) */
   setPassword: { who: ['host'], on: 'room', since: 'F3' },
-  /** Who may annotate (J, E7 AC-7.3) and clearing everyone's drawings */
+  /**
+   * Who may annotate (J, E7 AC-7.3) and clearing everyone's drawings. Whoever shares may also clear
+   * on their own share, and whoever opened the whiteboard on it (mayClearLayer)
+   */
   annotationPolicy: { who: STAFF, on: 'room', since: 'J' },
   clearAnnotations: { who: STAFF, on: 'room', since: 'J' },
   /**
@@ -134,3 +142,45 @@ export function canActOn(actor: Role, action: Action, target: Role, self = false
 }
 
 export const isRole = (value: unknown): value is Role => ROLES.includes(value as Role)
+
+// ---------------------------------------------------------------------------------------------
+// Annotations (J3, e7-t05; AC-7.3): the table's rows and the room's policy together. Whether someone
+// may draw depends on more than the role (the policy, whose layer it is), so the decision is these
+// functions, used by RoomDO to decide and by the browser only to leave out what would be refused.
+
+/**
+ * Who may draw on the room's shares and whiteboard (`RoomInfo.annotationPolicy`, set by a host or
+ * co-host):
+ * - `everyone`: everyone in the meeting;
+ * - `sharer`: the host, co-hosts and the layer's owner (who shares it, who opened the whiteboard);
+ * - `off`: nobody, not the host either. What is drawn stays, and can still be cleared.
+ */
+export type AnnotationPolicy = 'everyone' | 'sharer' | 'off'
+
+export const ANNOTATION_POLICIES: readonly AnnotationPolicy[] = ['everyone', 'sharer', 'off']
+
+export const DEFAULT_ANNOTATION_POLICY: AnnotationPolicy = 'everyone'
+
+export const isAnnotationPolicy = (value: unknown): value is AnnotationPolicy =>
+  ANNOTATION_POLICIES.includes(value as AnnotationPolicy)
+
+/** Whether `role` may draw on a layer; `owner`: the layer is theirs */
+export function mayDraw(policy: AnnotationPolicy, role: Role, owner: boolean): boolean {
+  if (!can(role, 'annotate')) return false
+  if (policy === 'off') return false
+  return policy === 'everyone' || owner || can(role, 'annotationPolicy')
+}
+
+/** Whether `role` may clear everything on a layer, or one person's on it */
+export function mayClearLayer(role: Role, owner: boolean): boolean {
+  return can(role, 'annotate') && (owner || can(role, 'clearAnnotations'))
+}
+
+/** Whether `role` may open the whiteboard: a host or co-host always, others when anyone may draw */
+export function mayOpenBoard(policy: AnnotationPolicy, role: Role): boolean {
+  if (!can(role, 'openWhiteboard')) return false
+  return policy === 'everyone' || can(role, 'clearAnnotations')
+}
+
+/** Whether `role` may take the whiteboard off the stage: a host, a co-host, whoever opened it */
+export const mayCloseBoard = (role: Role, owner: boolean): boolean => mayClearLayer(role, owner)

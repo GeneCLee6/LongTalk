@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import { PROTOCOL_VERSION } from '../shared/protocol.ts'
 import { zhTW as strings } from '../src/i18n/zh-TW.ts'
 
 // J2 (e7-t03, e7-t04; AC-7.1, AC-7.2) on the deployed Worker, through the real RoomDO and the real
@@ -306,4 +307,227 @@ test('Alice shares, Bob draws, Carol sees it, Dave replays it, the share stops a
   })
 
   for (const member of [alice, bob, carol, dave]) await member.context.close()
+})
+
+// J3 (e7-t05, e7-t06; AC-7.3, AC-7.4) on the deployed Worker. The whiteboard's details are in
+// e2e/local/whiteboard.spec.ts; here is what a real share and a real deployment add.
+
+const myShare = (sharer: Member) =>
+  sharer.page.getByRole('figure', { name: strings.screenShare.ownRegion })
+
+async function shareAndWait(sharer: Member, viewers: Member[]) {
+  await toolbarButton(sharer, strings.toolbar.share).click()
+  for (const viewer of viewers) {
+    await expect
+      .poll(
+        () =>
+          shareTile(viewer, sharer)
+            .locator('video')
+            .evaluate((video: HTMLVideoElement) => video.videoWidth),
+        { timeout: 60_000 },
+      )
+      .toBeGreaterThan(0)
+  }
+}
+
+async function drawOnShare(viewer: Member, sharer: Member) {
+  const tile = shareTile(viewer, sharer)
+  await tile.hover()
+  await tile.getByRole('button', { name: strings.screenShare.annotate, exact: true }).click()
+  // The canvas is a lazy chunk: a stroke begun before it arrives lands on nothing
+  await expect(viewer.page.getByRole('toolbar', { name: strings.annotation.toolbar })).toBeVisible()
+  const from = await contentToPage(viewer, sharer, 0.2, LINE_Y)
+  const to = await contentToPage(viewer, sharer, 0.8, LINE_Y)
+  await viewer.page.mouse.move(from.x, from.y)
+  await viewer.page.mouse.down()
+  await viewer.page.mouse.move(to.x, to.y, { steps: 12 })
+  await viewer.page.mouse.up()
+}
+
+const openParticipants = (member: Member) =>
+  member.page
+    .getByRole('toolbar', { name: strings.devices.controls })
+    .getByRole('button', { name: new RegExp(strings.toolbar.participants) })
+    .click()
+
+test('a sharer sees a viewer\'s stroke on their own share, drawn from the local capture', async ({
+  browser,
+}) => {
+  test.setTimeout(240_000)
+  const url = await openRoom(browser)
+  const alice = await join(browser, url, 'Alice')
+  const bob = await join(browser, url, 'Bob')
+  await shareAndWait(alice, [bob])
+  const bar = alice.page.getByRole('region', { name: strings.screenShare.youAreSharing })
+
+  await test.step('Bob draws; Alice\'s bar says so before she opens anything', async () => {
+    await expect(myShare(alice)).toHaveCount(0)
+    await bar.getByRole('button', { name: strings.screenShare.ownOpen }).waitFor()
+    await drawOnShare(bob, alice)
+    await expect(bar.getByRole('button', { name: strings.screenShare.ownOpenMarked })).toBeVisible()
+  })
+
+  await test.step('Alice opens her own view: the stroke, on her own capture', async () => {
+    await bar.getByRole('button', { name: strings.screenShare.ownOpenMarked }).click()
+    await expect(myShare(alice)).toBeVisible()
+    await expect(myShare(alice).getByText(strings.screenShare.ownLimit)).toBeVisible()
+    // Her own track (the stand-in screen is a captured canvas), not one coming back from the SFU
+    const local = await myShare(alice)
+      .locator('video')
+      .evaluate((video: HTMLVideoElement) =>
+        'canvas' in (video.srcObject as MediaStream).getVideoTracks()[0],
+      )
+    expect(local).toBe(true)
+    const canvas = myShare(alice).getByRole('img', { name: strings.screenShare.annotationCanvas })
+    await expect
+      .poll(() =>
+        canvas.evaluate((element: HTMLCanvasElement, y) => {
+          const { width, height } = element
+          const data = element.getContext('2d')!.getImageData(0, Math.round(height * y) - 3, width, 7).data
+          for (let i = 3; i < data.length; i += 4) if (data[i] > 0) return true
+          return false
+        }, LINE_Y),
+      )
+      .toBe(true)
+  })
+
+  await test.step('Alice clears it, with confirmation; Bob is told', async () => {
+    await myShare(alice).hover()
+    await myShare(alice).getByRole('button', { name: strings.annotation.clearOthers }).click()
+    await alice.page.getByRole('button', { name: strings.annotation.clearOne('Bob', 1) }).click()
+    await alice.page.getByRole('button', { name: strings.annotation.clearConfirm, exact: true }).click()
+    await expect(bob.page.getByText(strings.hostNotice.annotationsCleared('Alice', false, false))).toBeVisible()
+    await expect.poll(() => paintedAt(bob, alice, 0.5, LINE_Y)).toBe(false)
+  })
+
+  for (const member of [alice, bob]) await member.context.close()
+})
+
+test('with annotation off the toolbar goes and a forged stroke is refused', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const url = await openRoom(browser)
+  const alice = await join(browser, url, 'Alice')
+  const bob = await join(browser, url, 'Bob')
+  const carol = await join(browser, url, 'Carol')
+  await shareAndWait(carol, [alice, bob])
+  await drawOnShare(bob, carol)
+  await expectLine(alice, carol)
+
+  await test.step('the host turns it off: Bob\'s toolbar and button go, the line stays', async () => {
+    const tools = bob.page.getByRole('toolbar', { name: strings.annotation.toolbar })
+    await expect(tools).toBeVisible()
+    await openParticipants(alice)
+    await alice.page
+      .getByRole('combobox', { name: strings.annotation.policy.label })
+      .selectOption('off')
+    await expect(tools).toHaveCount(0)
+    await shareTile(bob, carol).hover()
+    await expect(
+      shareTile(bob, carol).getByRole('button', { name: strings.screenShare.annotate, exact: true }),
+    ).toHaveCount(0)
+    await expectLine(alice, carol)
+  })
+
+  await test.step('a forged stroke from Bob\'s own socket is refused and reaches nobody', async () => {
+    const received = await bob.page.evaluate(
+      async ({ path, name }) => {
+        // Someone new in the meeting who skips the interface: exactly what a forged client is
+        const socket = new WebSocket(
+          `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${path}`,
+        )
+        const received: { t: string; code?: string; ops?: unknown[] }[] = []
+        socket.addEventListener('message', (event) => {
+          if (String(event.data).startsWith('{')) received.push(JSON.parse(String(event.data)))
+        })
+        await new Promise((resolve) => socket.addEventListener('open', resolve))
+        socket.send(JSON.stringify({ t: 'join', name, token: null, client: null }))
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        const welcome = received.find((message) => message.t === 'welcome') as
+          | { state: { room: { shares: Record<string, unknown> } } }
+          | undefined
+        const share = Object.keys(welcome?.state.room.shares ?? {})[0]
+        socket.send(
+          JSON.stringify({
+            t: 'annotate',
+            share,
+            ops: [
+              {
+                op: 'add',
+                stroke: {
+                  id: 'forged',
+                  by: '',
+                  tool: 'pen',
+                  color: 'rose',
+                  width: 'thick',
+                  points: [
+                    [0.2, 0.2],
+                    [0.8, 0.2],
+                  ],
+                },
+              },
+            ],
+          }),
+        )
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        socket.close()
+        return received
+      },
+      {
+        path: new URL(url).pathname.replace(/^\/r\//, '/api/rooms/') + '/ws?v=' + PROTOCOL_VERSION,
+        name: 'Forger',
+      },
+    )
+    expect(received.filter((message) => message.t === 'error').map((m) => m.code)).toContain('forbidden')
+    expect(await paintedAt(alice, carol, 0.5, 0.2)).toBe(false)
+    expect(await paintedAt(bob, carol, 0.5, 0.2)).toBe(false)
+  })
+
+  for (const member of [alice, bob, carol]) await member.context.close()
+})
+
+test('whiteboard: Alice draws, Bob sees it, late Carol gets the replay', async ({ browser }) => {
+  test.setTimeout(180_000)
+  const url = await openRoom(browser)
+  const alice = await join(browser, url, 'Alice')
+  const bob = await join(browser, url, 'Bob')
+  const board = (member: Member) =>
+    member.page.getByRole('figure', { name: strings.whiteboard.region })
+  const paintedOnBoard = (member: Member, x: number, y: number) =>
+    board(member)
+      .getByRole('img', { name: strings.screenShare.annotationCanvas })
+      .evaluate(
+        (element: HTMLCanvasElement, { x, y }) => {
+          const ratio = element.width / element.clientWidth
+          const px = (element.clientWidth / 2 + x * 1000) * ratio
+          const py = (element.clientHeight / 2 + y * 1000) * ratio
+          const data = element
+            .getContext('2d')!
+            .getImageData(Math.round(px) - 2, Math.round(py) - 2, 5, 5).data
+          for (let i = 3; i < data.length; i += 4) if (data[i] > 0) return true
+          return false
+        },
+        { x, y },
+      )
+
+  await toolbarButton(alice, strings.toolbar.more).click()
+  await alice.page.getByRole('menuitem', { name: strings.whiteboard.open, exact: true }).click()
+  await expect(board(alice)).toBeVisible()
+  await expect(board(bob)).toBeVisible()
+
+  const box = (await board(alice).boundingBox())!
+  const middle = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  await alice.page.mouse.move(middle.x - 150, middle.y)
+  await alice.page.mouse.down()
+  await alice.page.mouse.move(middle.x + 150, middle.y, { steps: 12 })
+  await alice.page.mouse.up()
+  await expect.poll(() => paintedOnBoard(bob, 0, 0)).toBe(true)
+  expect(await paintedOnBoard(bob, 0, 0.1)).toBe(false)
+
+  const carol = await join(browser, url, 'Carol')
+  await expect(board(carol)).toBeVisible()
+  await expect.poll(() => paintedOnBoard(carol, 0, 0)).toBe(true)
+  await expect.poll(() => paintedOnBoard(carol, 0.14, 0)).toBe(true)
+  expect(await paintedOnBoard(carol, 0.3, 0)).toBe(false)
+
+  for (const member of [alice, bob, carol]) await member.context.close()
 })

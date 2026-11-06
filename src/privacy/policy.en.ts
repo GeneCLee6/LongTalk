@@ -33,7 +33,7 @@ const STORAGE: StorageDescriptions = {
     'Your member token in that room, so a reload brings you back as the same member',
   'longtalk.password.<room>':
     'That room’s password as you entered or set it, in plain text, for “copy link with password”',
-  'longtalk:mainShare:<room>': 'Whose shared screen you chose for the main area',
+  'longtalk:mainShare:<room>': 'Whose shared screen (or the whiteboard) you chose for the main area',
 }
 
 export const policy = (f: Facts): PolicyDocument => ({
@@ -91,7 +91,7 @@ export const policy = (f: Facts): PolicyDocument => ({
               key: 'room',
               cells: [
                 'The room (Cloudflare Durable Object, one per room)',
-                `For the length of the meeting: the room’s name; each member’s display name, role, member token, this browser’s random id and microphone, camera and raised-hand state; the last ${f.chatMessages} chat messages; each chat file’s name, size, type and which member sent it; who is recording and who agreed; marks on shared screens (strokes, text and who drew them); names in the waiting room; removed browsers’ ids. If the room has a password, a salted hash of it, and for wrong guesses the browser’s random id and a digest of the network.`,
+                `For the length of the meeting: the room’s name; each member’s display name, role, member token, this browser’s random id and microphone, camera and raised-hand state; the last ${f.chatMessages} chat messages; each chat file’s name, size, type and which member sent it; who is recording and who agreed; marks on shared screens and the whiteboard (strokes, text and who drew them); names in the waiting room; removed browsers’ ids. If the room has a password, a salted hash of it, and for wrong guesses the browser’s random id and a digest of the network.`,
               ],
             },
             {
@@ -200,9 +200,9 @@ export const policy = (f: Facts): PolicyDocument => ({
             {
               key: 'annotations',
               cells: [
-                'Marks on a shared screen: strokes, text and who drew them (the laser pointer is not stored)',
+                'Marks on a shared screen and on the whiteboard: strokes, text and who drew them (the laser pointer is not stored)',
                 'The room',
-                'Deleted when that person stops sharing, and when the meeting ends.',
+                'On a shared screen: deleted when that person stops sharing. On the whiteboard: kept when it is closed, deleted when someone clears it or the meeting ends. Marks on a shared screen can be cleared too, and everything goes when the meeting ends.',
               ],
             },
             {
