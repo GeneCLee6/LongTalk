@@ -26,6 +26,8 @@ export interface SharingBarProps {
   preview?: { sample: SharePreview; off: boolean } | null
   /** What we share shows the meeting (e3-t09): the warning, 換一個畫面 and 知道了 */
   selfCapture?: { kind: SelfCapture; onRepick: () => void; onDismiss: () => void } | null
+  /** A line for the sharer: why the camera cannot be turned on while sharing here */
+  note?: string | null
 }
 
 const MODES: { mode: ShareMode; label: () => string; hint: () => string }[] = [
@@ -56,6 +58,7 @@ export function SharingBar({
   motionHint = null,
   preview = null,
   selfCapture = null,
+  note = null,
 }: SharingBarProps) {
   const hint = !audio
     ? strings.screenShare.youAreSharingHint
@@ -78,6 +81,7 @@ export function SharingBar({
           <strong>{strings.screenShare.youAreSharing}</strong>
           <span>{hint}</span>
           {preview?.off && <span>{strings.screenShare.previewOff}</span>}
+          {note && <span>{note}</span>}
         </Text>
         {mode && (
           <Modes role="group" aria-label={strings.screenShare.mode}>

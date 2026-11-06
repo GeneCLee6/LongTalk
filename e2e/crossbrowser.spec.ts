@@ -308,21 +308,22 @@ async function meet(a: Member, b: Member, testInfo: TestInfo) {
     [a, b],
   ] as const) {
     await test.step(`${sharer.engine} shares: ${viewer.engine} sees the screen`, async () => {
-      // Playwright's Linux WebKit cannot run two video encoders side by side: with its camera on,
-      // the camera's encoder starts sending the screen's picture, and the screen's encoder often
-      // ignores every keyframe request, so a viewer never decodes it (14 of 31 runs, 0 of 7 with
-      // the camera off; ADR-001 「WebKit 同時送鏡頭與分享」). Neither LongTalk nor the SFU can put
-      // that right, so here the share is tested alone. Whether Safari itself does this is not
-      // known: DEPLOY.md §5 checks a camera and a share together on a real Mac.
-      const cameraOff = sharer.engine === 'webkit'
-      if (cameraOff) {
-        await toolbarButton(sharer, strings.toolbar.camOn).click()
-        await expect(tile(viewer, sharer)).toContainText(strings.room.camOff)
-      }
+      // Pressed with the camera on, as people do. Playwright's Linux WebKit cannot run two video
+      // encoders side by side (14 of 31 runs lost the share, 0 of 7 with the camera off; ADR-001
+      // 「WebKit 同時送鏡頭與分享」), so the app turns the camera off first there
+      // (`shareStopsCamera`) and brings it back after; Chromium and Firefox send both.
+      const guarded = sharer.engine === 'webkit'
       await toolbarButton(sharer, strings.toolbar.share).click()
       await expect(
         sharer.page.getByRole('region', { name: strings.screenShare.youAreSharing }),
       ).toBeVisible()
+      if (guarded) {
+        await expect(sharer.page.getByText(strings.screenShare.cameraOffForShare)).toBeVisible()
+        await expect(toolbarButton(sharer, strings.toolbar.camOff)).toBeDisabled()
+        await expect(tile(viewer, sharer)).toContainText(strings.room.camOff)
+      } else {
+        await expect(toolbarButton(sharer, strings.toolbar.camOn)).toBeEnabled()
+      }
       await expectSeesShare(viewer, sharer)
       await sharer.page
         .getByRole('region', { name: strings.screenShare.youAreSharing })
@@ -331,7 +332,11 @@ async function meet(a: Member, b: Member, testInfo: TestInfo) {
       await expect(
         viewer.page.getByRole('figure', { name: strings.screenShare.region(sharer.name) }),
       ).toHaveCount(0)
-      if (cameraOff) await toolbarButton(sharer, strings.toolbar.camOff).click()
+      if (guarded) {
+        // Back by itself, and viewers get it again
+        await expect(toolbarButton(sharer, strings.toolbar.camOn)).toBeEnabled()
+        await expectReceiving(viewer, sharer)
+      }
     })
   }
 }
@@ -350,6 +355,149 @@ async function leave(members: Member[], testInfo: TestInfo) {
     await member.context.close()
   }
 }
+
+// TEMP-DIAG-START
+function diagScript() {
+  const log: string[] = []
+  ;(window as unknown as { __diag: string[] }).__diag = log
+  const add = (text: string) => log.push(`${Math.round(performance.now())} ${text}`)
+  const loads = Number(sessionStorage.getItem('__loads') ?? 0) + 1
+  sessionStorage.setItem('__loads', String(loads))
+  add(`load #${loads} vendor=${navigator.vendor} online=${navigator.onLine}`)
+  const describe = (t: EventTarget | null) => {
+    const e = t as HTMLElement | null
+    if (!e || !e.tagName) return String(t)
+    return `${e.tagName}[${e.getAttribute?.('type') ?? ''}]#conn=${e.isConnected}`
+  }
+  for (const type of ['beforeinput', 'input', 'change', 'focusin', 'focusout', 'compositionstart', 'compositionend', 'keydown']) {
+    document.addEventListener(
+      type,
+      (event) => {
+        const target = event.target as HTMLInputElement
+        add(`${type} ${describe(event.target)} value=${JSON.stringify(target.value ?? null)} data=${JSON.stringify((event as InputEvent).data ?? null)} composing=${(event as InputEvent).isComposing ?? ''}`)
+      },
+      true,
+    )
+  }
+  for (const type of ['pagehide', 'beforeunload', 'error', 'unhandledrejection', 'online', 'offline', 'focus', 'blur', 'pageshow']) {
+    window.addEventListener(type, (event) => add(`window ${type} ${(event as ErrorEvent).message ?? ''} ${String((event as PromiseRejectionEvent).reason ?? '')}`), true)
+  }
+  document.addEventListener('visibilitychange', () => add(`visibility ${document.visibilityState}`))
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.removedNodes) {
+        const e = node as HTMLElement
+        if (e.nodeType !== 1) continue
+        if (e.tagName === 'INPUT' || e.querySelector?.('input')) add(`REMOVED ${e.tagName} with input`)
+      }
+      for (const node of record.addedNodes) {
+        const e = node as HTMLElement
+        if (e.nodeType !== 1) continue
+        if (e.tagName === 'INPUT' || e.querySelector?.('input')) {
+          const input = (e.tagName === 'INPUT' ? e : e.querySelector('input')) as HTMLInputElement
+          add(`ADDED ${e.tagName} with input value=${JSON.stringify(input.value)}`)
+        }
+      }
+    }
+  }).observe(document, { childList: true, subtree: true })
+}
+
+async function diagDump(page: Page, label: string, extra: string[]) {
+  const state = await page
+    .evaluate(() => {
+      const inputs = [...document.querySelectorAll('input')] as HTMLInputElement[]
+      const buttons = [...document.querySelectorAll('button[type=submit]')] as HTMLButtonElement[]
+      const props = (e: Element) => {
+        const key = Object.keys(e).find((k) => k.startsWith('__reactProps'))
+        const p = key ? (e as unknown as Record<string, Record<string, unknown>>)[key] : null
+        return p ? { value: p.value, disabled: p.disabled, required: p.required } : null
+      }
+      const tracker = (e: Element) =>
+        (e as unknown as { _valueTracker?: { getValue(): string } })._valueTracker?.getValue()
+      const active = document.activeElement as HTMLElement | null
+      return {
+        url: location.href,
+        visibility: document.visibilityState,
+        hasFocus: document.hasFocus(),
+        active: active ? active.tagName : null,
+        activeIsInput: active === inputs[0],
+        inputs: inputs.map((e) => ({
+          type: e.type,
+          value: e.value,
+          react: props(e),
+          tracker: tracker(e),
+        })),
+        buttons: buttons.map((e) => ({ text: e.textContent, disabled: e.disabled, react: props(e) })),
+        name: localStorage.getItem('longtalk.name'),
+        loads: sessionStorage.getItem('__loads'),
+        body: document.body.innerText.slice(0, 500),
+        controller: navigator.serviceWorker?.controller?.state ?? null,
+        log: (window as unknown as { __diag: string[] }).__diag,
+      }
+    })
+    .catch((error: unknown) => ({ evaluateFailed: String(error) }))
+  console.log(`[DIAG ${label}] ${JSON.stringify(state)} events=${JSON.stringify(extra)}`)
+}
+
+function diagEvents(page: Page) {
+  const events: string[] = []
+  const start = Date.now()
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) events.push(`+${Date.now() - start} nav ${frame.url()}`)
+  })
+  page.on('pageerror', (error) => events.push(`+${Date.now() - start} pageerror ${error.message}`))
+  page.on('console', (m) => events.push(`+${Date.now() - start} ${m.type()} ${m.text().slice(0, 200)}`))
+  page.on('crash', () => events.push(`+${Date.now() - start} crash`))
+  return events
+}
+
+test('TEMP join probe', async ({ browser }, testInfo) => {
+  test.setTimeout(420_000)
+  const url = await openRoom(browser)
+  const other = await chromium.launch({ args: chromiumFakeMedia })
+  const chris = await join(other, 'chromium', url, 'Chris', { permissions: ['camera', 'microphone'] })
+  const started = Date.now()
+  let tried = 0
+  const stuck: number[] = []
+  try {
+    while (Date.now() - started < 330_000 && tried < 40) {
+      tried += 1
+      const safari = await webkit.launch()
+      try {
+        const context = await safari.newContext({ locale: 'zh-TW', permissions: ['camera', 'microphone'] })
+        await context.addInitScript(stubScreen)
+        await context.addInitScript(keepPeerConnections)
+        await context.addInitScript(diagScript)
+        const page = await context.newPage()
+        const events = diagEvents(page)
+        await page.goto(url)
+        await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill('Wes')
+        const button = page.getByRole('button', { name: strings.prejoin.join, exact: true })
+        const ok = await expect(button)
+          .toBeEnabled({ timeout: 8_000 })
+          .then(() => true)
+          .catch(() => false)
+        if (!ok) {
+          stuck.push(tried)
+          await diagDump(page, `STUCK ${tried}`, events)
+          await testInfo.attach(`stuck-${tried}.png`, {
+            body: await page.screenshot({ fullPage: true }),
+            contentType: 'image/png',
+          })
+        } else if (tried <= 2) {
+          await diagDump(page, `ok ${tried}`, events)
+        }
+      } finally {
+        await safari.close()
+      }
+    }
+  } finally {
+    console.log(`[DIAG summary] tried=${tried} stuck=${stuck.length} ${JSON.stringify(stuck)}`)
+    await chris.context.close()
+    await other.close()
+  }
+})
+// TEMP-DIAG-END
 
 test('Firefox and Chromium in one room see and hear each other, a mute and each other’s screen', async ({
   browser,

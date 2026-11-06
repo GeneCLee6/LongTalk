@@ -32,19 +32,24 @@ import type { ShareMode } from '../media/shareMode.ts'
 // in the room); RoomMedia applies it. `motionHint`: the screen moves too much for 文字 (the page's
 // sampler says so, noticeMotion), shown once per screen picked.
 //
+// Where the camera has to go off first (Safari, as a precaution: ShareCameraGuard.ts), step 2 waits
+// for `prepare` (`preparing`), which comes after the picker so that closing the picker changes
+// nothing; `released` says the share is over, whichever way it ended, except on leaving the room.
+//
 // No React here: useScreenShare wraps it.
 
 /**
  * - `idle`: not sharing
  * - `picking`: the browser's picker is open
+ * - `preparing`: picked; `prepare` runs before the room is asked (only with `prepare`)
  * - `claiming`: picked; waiting for the room to list our share
  * - `sharing`: the room lists our share; the screen is published
  */
-export type SharePhase = 'idle' | 'picking' | 'claiming' | 'sharing'
+export type SharePhase = 'idle' | 'picking' | 'preparing' | 'claiming' | 'sharing'
 
 export interface ScreenShareState {
   phase: SharePhase
-  /** The captured screen, while claiming or sharing */
+  /** The captured screen, from `preparing` on */
   track: MediaStreamTrack | null
   /** The screen's sound (tab or system audio), when the picker gave any (e3-t04) */
   audio: MediaStreamTrack | null
@@ -78,6 +83,10 @@ export interface ScreenShareOptions {
   notify: (notice: ShareNotice) => void
   /** The mode to start in; 文字 without it */
   mode?: ShareMode
+  /** Runs once a screen is picked, before the room is asked for the share; must not reject */
+  prepare?: () => Promise<void>
+  /** A share past the picker ended, however it ended; not called on leaving the room */
+  released?: () => void
 }
 
 export const idleShare: ScreenShareState = {
@@ -250,13 +259,20 @@ export class ScreenShare {
     }
     this.listen(result.track, result.audio)
     this.hinted = false
+    const { prepare } = this.options
     this.update({
       ...this.idle(),
-      phase: 'claiming',
+      phase: prepare ? 'preparing' : 'claiming',
       track: result.track,
       audio: result.audio,
       surface: capturedSurface(result.track),
     })
+    if (prepare) {
+      await prepare()
+      // Stopped meanwhile (the browser's stop button, leaving the room): nothing to ask for
+      if (this.closed || this.state.track !== result.track) return
+      this.update({ ...this.state, phase: 'claiming' })
+    }
     this.options.send({ t: 'share' })
     this.evaluate()
   }
@@ -316,6 +332,9 @@ export class ScreenShare {
     this.releaseCapture()
     const { phase, track, audio, repicking } = this.state
     if (phase !== 'idle' || track || audio || repicking) this.update(this.idle())
+    if (!this.closed && (phase === 'preparing' || phase === 'claiming' || phase === 'sharing')) {
+      this.options.released?.()
+    }
   }
 
   private update(state: ScreenShareState): void {

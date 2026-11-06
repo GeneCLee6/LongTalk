@@ -11,6 +11,7 @@ import {
   canShareScreen,
   canWebShare,
   detectCapabilities,
+  shareStopsCamera,
   supportsWebRtc,
   type CapabilityEnv,
 } from '../../../src/media/capabilities.ts'
@@ -82,7 +83,10 @@ describe('capabilities (e11-t04)', () => {
   it('finds everything in a browser that has it', () => {
     const found = detectCapabilities(fullBrowser())
     expect(Object.keys(found)).toEqual([...CAPABILITIES])
-    expect(Object.values(found).every(Boolean)).toBe(true)
+    // A precaution rather than an ability: only WebKit has it
+    const { shareStopsCamera: precaution, ...abilities } = found
+    expect(Object.values(abilities).every(Boolean)).toBe(true)
+    expect(precaution).toBe(false)
   })
 
   it('advanced noise suppression needs AudioWorklet, a stream destination and WebAssembly (e6-t02)', () => {
@@ -178,6 +182,26 @@ describe('capabilities (e11-t04)', () => {
     expect(canChooseSpeaker()).toBe('setSinkId' in HTMLMediaElement.prototype)
     expect(canShareScreen()).toBe(false)
     expect(canShareAudio()).toBe(false)
+  })
+})
+
+describe('shareStopsCamera (ADR-001 「WebKit 同時送鏡頭與分享」)', () => {
+  const browser = (vendor: string, share = true): CapabilityEnv => ({
+    navigator: { vendor, mediaDevices: share ? { getDisplayMedia() {} } : {} },
+  })
+
+  it('is on for WebKit that can share (Mac Safari)', () => {
+    expect(shareStopsCamera(browser('Apple Computer, Inc.'))).toBe(true)
+  })
+
+  it('is off for Chrome, Edge and Firefox', () => {
+    expect(shareStopsCamera(browser('Google Inc.'))).toBe(false)
+    expect(shareStopsCamera(browser(''))).toBe(false)
+    expect(shareStopsCamera(fullBrowser())).toBe(false)
+  })
+
+  it('is off for WebKit that cannot share (iPhone, iPad)', () => {
+    expect(shareStopsCamera(browser('Apple Computer, Inc.', false))).toBe(false)
   })
 })
 

@@ -97,6 +97,7 @@ import {
   canShareScreen,
   canSuppressNoise,
   canWebShare,
+  shareStopsCamera,
   supportsWebRtc,
 } from '../media/capabilities.ts'
 import type { AudioProcessing } from '../media/audioProcessing.ts'
@@ -146,6 +147,7 @@ import type { VideoDemandStore } from '../room/videoDemand.ts'
 import { useRoomShortcuts } from '../room/useRoomShortcuts.ts'
 import { useOnline } from '../pwa/online.ts'
 import type { ShareNotice } from '../room/ScreenShare.ts'
+import { ShareCameraGuard } from '../room/ShareCameraGuard.ts'
 import { useScreenShare } from '../room/useScreenShare.ts'
 import { useSelfCapture, useSharePreview } from '../room/useSharePreview.ts'
 import { loadMainShare, saveMainShare } from '../room/mainShare.ts'
@@ -1218,7 +1220,11 @@ function Room({
     },
     [show],
   )
+  // Where the camera goes off while sharing (Safari, as a precaution): what the guard does is set
+  // below, once everything it needs is declared
+  const [cameraGuard] = useState(() => (shareStopsCamera() ? new ShareCameraGuard() : null))
   const screenShare = useScreenShare({
+    guard: cameraGuard,
     shares: roomShares,
     you: state.you,
     send,
@@ -1227,6 +1233,9 @@ function Room({
     notify: onShareNotice,
   })
   const sharePhase = screenShare.phase
+  const shareUnderWay =
+    sharePhase === 'preparing' || sharePhase === 'claiming' || sharePhase === 'sharing'
+  const cameraLocked = cameraGuard !== null && shareUnderWay
   const sharingScreen = sharePhase === 'sharing' ? screenShare.track : null
   // The share's sound (e3-t04): sent with the screen while the bar's switch is on
   const sharingAudio = sharePhase === 'sharing' && screenShare.audioOn ? screenShare.audio : null
@@ -1281,7 +1290,9 @@ function Room({
       if (camBeforeAudioOnly.current) void devices?.setOn('cam', false)
     } else if (camBeforeAudioOnly.current) {
       camBeforeAudioOnly.current = false
-      void devices?.setOn('cam', true)
+      // During a share where the camera must stay off, it comes back when the share ends
+      if (cameraGuard?.active) cameraGuard.hold()
+      else void devices?.setOn('cam', true)
     }
   })
   useEffect(() => {
@@ -1289,6 +1300,29 @@ function Room({
     audioOnlyBefore.current = audioOnly
     onAudioOnlyChange(audioOnly)
   }, [audioOnly])
+  useEffect(() => {
+    cameraGuard?.configure({
+      cameraOn: () => {
+        const cam = devices?.getState().cam
+        return !!cam && (cam.on || cam.opening)
+      },
+      turnOff: () => void devices?.setOn('cam', false),
+      restore: () => {
+        // Once the month is audio-only a camera that is off stays off (e11-t13)
+        if (usage === 'audioOnly') return
+        // 純音訊模式 sends no camera: it comes back when the mode ends
+        if (audioOnly) camBeforeAudioOnly.current = true
+        else void devices?.setOn('cam', true)
+      },
+      notify: () => show(strings.screenShare.cameraOffForShare, 'warn'),
+    })
+  })
+  const cameraOpen = local.cam.on || local.cam.opening
+  const cameraSent = media.published.some((track) => track.kind === 'cam' && !track.muted)
+  useEffect(() => {
+    if (cameraOpen) cameraGuard?.cameraCameOn()
+    else if (!cameraSent) cameraGuard?.cameraGone()
+  }, [cameraGuard, cameraOpen, cameraSent])
   // The uplink held HD back (e6-t04): said once each time
   useEffect(() => {
     if (media.hdLimited) show(strings.settings.hdLimitedToast, 'warn')
@@ -1318,6 +1352,7 @@ function Room({
         show(notice.all ? strings.hostNotice.mutedAll(who) : strings.hostNotice.muted(who), 'warn')
         return
       case 'camOff':
+        cameraGuard?.forget()
         void devices?.setOn('cam', false)
         show(strings.hostNotice.camOff(who), 'warn')
         return
@@ -1452,7 +1487,7 @@ function Room({
     stopShare()
   }, [media.screenRefused, show, stopShare])
   const onToggleShare = () => {
-    if (sharePhase === 'sharing' || sharePhase === 'claiming') {
+    if (shareUnderWay) {
       screenShare.stop()
       return
     }
@@ -1465,6 +1500,11 @@ function Room({
   }
 
   const toggleCam = () => {
+    // The button is disabled meanwhile; this is for the keyboard shortcut
+    if (cameraLocked) {
+      show(strings.screenShare.cameraLocked, 'warn')
+      return false
+    }
     // Once the month is audio-only a camera that is off stays off (e11-t13): say so without
     // opening it
     if (!local.cam.on && usage === 'audioOnly') {
@@ -1891,6 +1931,7 @@ function Room({
           <StageArea>
             {sharePhase === 'sharing' && (
               <SharingBar
+                note={cameraLocked ? strings.screenShare.cameraLocked : null}
                 onStop={screenShare.stop}
                 audio={
                   screenShare.audio
@@ -2098,7 +2139,7 @@ function Room({
             memberCount={members.length}
             waitingCount={canAdmit ? waitingList.length : 0}
             canShareScreen={screenShareSupported}
-            sharing={sharePhase === 'sharing' || sharePhase === 'claiming'}
+            sharing={shareUnderWay}
             onToggleShare={onToggleShare}
             chatOpen={chatOpen}
             chatUnread={chat.unread}
@@ -2110,7 +2151,8 @@ function Room({
             micOn={local.mic.on}
             camOn={local.cam.on}
             micBusy={micBusy}
-            camBusy={!local.ready || local.cam.opening}
+            camBusy={!local.ready || local.cam.opening || cameraLocked}
+            camBusyHint={cameraLocked ? strings.screenShare.cameraLocked : undefined}
             onToggleMic={() => void devices?.setOn('mic', !local.mic.on)}
             onToggleCam={toggleCam}
             shortcuts={phone === null}
