@@ -39,8 +39,10 @@ export interface SfuDeps {
 
 export const REALTIME_API_BASE = 'https://rtc.live.cloudflare.com/v1'
 
-// Largest body we forward: an SDP offer with a handful of transceivers is a few kB
-const MAX_BODY_BYTES = 64 * 1024
+// Largest body we forward. An SDP is about 3 kB per m-section, one per track received, and stopped
+// ones stay in it: 64 kB was refused at about 20 tracks (measured on the PR preview, L1). A full
+// room is 24 microphones and 16 cameras plus what we publish, for a long meeting's worth of paging.
+const MAX_BODY_BYTES = 1024 * 1024
 /** Tracks one call may add (the client batches a page's subscriptions, L1: MAX_SUBSCRIBE_BATCH) */
 const MAX_TRACKS_PER_CALL = 16
 
