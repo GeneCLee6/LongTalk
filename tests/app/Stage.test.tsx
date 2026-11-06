@@ -2,6 +2,9 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Stage } from '../../src/components/Stage.tsx'
 import { Tile } from '../../src/components/Tile.tsx'
+import { TileSeat } from '../../src/components/TileSeat.tsx'
+import { VideoDemandContext } from '../../src/components/useVideoDemand.ts'
+import { VideoDemandStore } from '../../src/room/videoDemand.ts'
 import { strings } from '../../src/strings.ts'
 
 /** A ResizeObserver the test drives: resize(width, height) reports a new content box */
@@ -200,5 +203,89 @@ describe('Stage, speaker (e4-t07, a phone held sideways)', () => {
       'data-mode',
       'grid',
     )
+  })
+})
+
+describe('Stage, a large room on a desktop (L1, e10-t02)', () => {
+  it('stays one grid up to sixteen tiles', () => {
+    render(<Stage>{tiles(16)}</Stage>)
+    expect(screen.getByRole('region', { name: strings.room.grid })).toHaveAttribute(
+      'data-mode',
+      'grid',
+    )
+  })
+
+  it('goes to pages of sixteen past that, with an indicator and the keyboard', () => {
+    render(<Stage>{tiles(25)}</Stage>)
+    FakeResizeObserver.last!.resize(1000, 640)
+    const pager = screen.getByRole('region', { name: strings.room.grid })
+    expect(pager).toHaveAttribute('data-mode', 'paged')
+    expect(pager).toHaveAttribute('data-pages', '2')
+    const first = screen.getByRole('group', { name: strings.stage.page(1, 2) })
+    expect(within(first).getAllByRole('figure')).toHaveLength(16)
+    const dots = screen.getByRole('group', { name: strings.stage.pages })
+    expect(within(dots).getAllByRole('button')).toHaveLength(2)
+    fireEvent.keyDown(pager, { key: 'PageDown' })
+    expect(pager).toHaveAttribute('data-page', '1')
+    fireEvent.keyDown(pager, { key: 'Home' })
+    expect(pager).toHaveAttribute('data-page', '0')
+  })
+
+  it('moves the speaker on another page to the side, and back when their page is shown', () => {
+    render(<Stage sideSpeaker={20}>{tiles(25)}</Stage>)
+    FakeResizeObserver.last!.resize(1000, 640)
+    const side = screen.getByRole('group', { name: strings.stage.sideSpeaker })
+    expect(within(side).getByRole('figure', { name: 'm20' })).toBeInTheDocument()
+    const pager = screen.getByRole('region', { name: strings.room.grid })
+    expect(within(pager).queryByRole('figure', { name: 'm20' })).toBeNull()
+    fireEvent.keyDown(pager, { key: 'End' })
+    expect(within(side).queryByRole('figure', { name: 'm20' })).toBeNull()
+    expect(within(pager).getByRole('figure', { name: 'm20' })).toBeInTheDocument()
+  })
+
+  it('shows nobody at the side when the speaker is on this page, or nobody has spoken', () => {
+    const { rerender } = render(<Stage sideSpeaker={2}>{tiles(25)}</Stage>)
+    const side = screen.getByRole('group', { name: strings.stage.sideSpeaker })
+    expect(within(side).queryByRole('figure')).toBeNull()
+    rerender(<Stage sideSpeaker={null}>{tiles(25)}</Stage>)
+    expect(within(side).queryByRole('figure')).toBeNull()
+  })
+
+  it('a phone stays at four a page with no side column', () => {
+    render(
+      <Stage mode="paged" sideSpeaker={5}>
+        {tiles(6)}
+      </Stage>,
+    )
+    expect(screen.queryByRole('group', { name: strings.stage.sideSpeaker })).toBeNull()
+    FakeResizeObserver.last!.resize(374, 560)
+    const first = screen.getByRole('group', { name: strings.stage.page(1, 2) })
+    expect(within(first).getAllByRole('figure')).toHaveLength(4)
+  })
+
+  it('reports each tile in its pager as in sight or not, and the pointer on a button as near', () => {
+    const store = new VideoDemandStore()
+    const cells = Array.from({ length: 17 }, (_, i) => (
+      <TileSeat key={`m${i}`} camera={`cam${i}`}>
+        <figure aria-label={`m${i}`} />
+      </TileSeat>
+    ))
+    render(
+      <VideoDemandContext.Provider value={store}>
+        <Stage>{cells}</Stage>
+      </VideoDemandContext.Provider>,
+    )
+    FakeResizeObserver.last!.resize(1000, 640)
+    expect(store.inSight().has('cam0')).toBe(true)
+    expect(store.inSight().has('cam16')).toBe(false)
+    const next = screen.getByRole('button', { name: strings.stage.page(2, 2) })
+    fireEvent.pointerEnter(next)
+    expect(store.inSight().has('cam16')).toBe(true)
+    expect(store.seatDemand('cam16')).toMatchObject({ visible: false })
+    fireEvent.pointerLeave(next)
+    expect(store.inSight().has('cam16')).toBe(false)
+    fireEvent.click(next)
+    expect(store.inSight().has('cam16')).toBe(true)
+    expect(store.inSight().has('cam0')).toBe(false)
   })
 })

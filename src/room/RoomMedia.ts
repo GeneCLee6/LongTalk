@@ -23,6 +23,13 @@ import {
   uplinkVerdict,
 } from '../media/quality.ts'
 import { capFrameRate, POWER_SAVING_BUDGET_BPS, POWER_SAVING_FPS } from '../media/powerSaving.ts'
+import {
+  CameraSight,
+  cameraWanted,
+  HIDDEN_GRACE_MS,
+  subscribeBatches,
+  UNSEEN_GRACE_MS,
+} from '../media/subscriptions.ts'
 import type { ShareMode } from '../media/shareMode.ts'
 import { sampleStats, type StatsSample } from '../media/stats.ts'
 import {
@@ -94,6 +101,14 @@ import type { VideoDemandStore } from './videoDemand.ts'
 // (media/layers.ts: size, visibility, budget, hysteresis), and only the ones that changed go to
 // the SFU. A camera starts at medium and a screen at high until its tile reports. Without a
 // demand store nothing is recomputed.
+//
+// Only what is in sight (L1, e2-t18, e10-t01; media/subscriptions.ts, `visibleOnly`): a camera is
+// received when a tile shows it (demand.inSight(): Stage says so, TileSeat reports it), when
+// setVideoPriority keeps it, or when a recording made here draws it (setVideoNeeded). A page's
+// cameras go in one batch (MediaTransport.subscribeMany, one SDP exchange), starting at the layer
+// their tiles already call for; a camera out of sight goes after a grace, so paging back and forth
+// costs no SDP. What is left out is `unseenVideos`; tiles show initials. Every microphone is
+// received, always.
 //
 // Statistics and adaptation (H2, e2-t13, e2-t15; ADR-001 「頻寬自適應」): one poller, every
 // STATS_POLL_MS, reads the transport's getStats() and turns two readings into a sample
@@ -191,6 +206,8 @@ export interface RoomMediaState {
   uplink: UplinkState
   /** Other members' cameras not received to save the downlink, or in audio-only, by trackKey */
   pausedVideos: readonly string[]
+  /** Other members' cameras not received because no tile shows them (L1), by trackKey */
+  unseenVideos: readonly string[]
   /** 純音訊模式 (e6-t04): no video received, our camera not sent */
   audioOnly: boolean
   /** HD is wanted (e6-t04): the camera sends its 720p layer, uplink allowing */
@@ -229,6 +246,8 @@ export interface RoomMediaOptions {
   backoff?: Backoff
   /** Where tiles draw each received video, for choosing layers (e2-t12) */
   demand?: VideoDemandStore
+  /** Receive only the cameras in sight (L1): the room page, whose tiles report their seats */
+  visibleOnly?: boolean
   /** Wait after a layout change before recomputing layers */
   layerDebounceMs?: number
   /** How often getStats() is read (STATS_POLL_MS; at most statsIntervalMs) */
@@ -295,6 +314,7 @@ export const idleRoomMedia: RoomMediaState = {
   downlinkBudgetBps: DOWNLINK_BUDGET_BPS,
   uplink: FULL_UPLINK,
   pausedVideos: [],
+  unseenVideos: [],
   audioOnly: false,
   hd: true,
   hdLimited: false,
@@ -368,6 +388,12 @@ export class RoomMedia {
   private readonly layerDebounceMs: number
   private layerTimer: Timer | null = null
   private offDemand: (() => void) | null = null
+  /** When each camera came into sight and left it (L1); null: everything is received */
+  private readonly sight: CameraSight | null
+  /** Looking at `sight` again when an answer changes by itself */
+  private sightTimer: Timer | null = null
+  /** The cameras a recording made here draws (L1, setVideoNeeded), by trackKey */
+  private needed: ReadonlySet<string> = new Set()
   private readonly pollIntervalMs: number
   private readonly statsStore: StatsStore | null
   private readonly adapt: boolean
@@ -438,7 +464,13 @@ export class RoomMedia {
       hd: options.hd ?? true,
       powerSaving: options.powerSaving ?? false,
     }
-    this.offDemand = this.demand?.subscribe(() => this.scheduleLayers()) ?? null
+    this.sight = options.visibleOnly && this.demand ? new CameraSight() : null
+    this.offDemand =
+      this.demand?.subscribe(() => {
+        this.scheduleLayers()
+        this.onSeats()
+      }) ?? null
+    this.onSeats()
     this.pollIntervalMs = Math.min(options.pollIntervalMs ?? STATS_POLL_MS, this.statsIntervalMs)
     this.statsStore = options.stats ?? null
     this.adapt = options.adapt ?? true
@@ -614,32 +646,98 @@ export class RoomMedia {
     this.reconcile()
   }
 
-  /** Whether a desired track is to be received now: 純音訊模式 and the adaptation may say no */
+  /**
+   * The cameras a recording made here draws (L1): received whatever the screen shows, for as long
+   * as they are listed. The recorder reads the tracks, not the tiles.
+   */
+  setVideoNeeded(keys: readonly string[]): void {
+    if (keys.length === this.needed.size && keys.every((key) => this.needed.has(key))) return
+    this.needed = new Set(keys)
+    this.reconcile()
+  }
+
+  /** The adaptation has stopped receiving cameras (e2-t15), or 純音訊模式 receives none */
+  private videoCut(): boolean {
+    return (
+      this.state.audioOnly ||
+      this.state.downlink === 'videoCut' ||
+      this.state.downlink === 'audioOnly'
+    )
+  }
+
+  /**
+   * Whether a desired track is to be received now: 純音訊模式 and the adaptation may say no, and
+   * then whether a camera is in sight (L1, media/subscriptions.ts)
+   */
   private wants(key: string): boolean {
     const track = this.desired.get(key)
     if (!track) return false
     if (track.kind !== 'cam' && track.kind !== 'screen') return true
     if (this.state.audioOnly) return false
     if (track.kind === 'screen') return true
-    const cut = this.state.downlink === 'videoCut' || this.state.downlink === 'audioOnly'
-    return !cut || this.kept.includes(key)
+    if (this.videoCut()) return this.kept.includes(key)
+    if (!this.sight) return true
+    const held = key in this.state.received || this.pending.has(key)
+    return cameraWanted({
+      seen: this.sight.wanted(key, this.now(), held, this.sightGrace()),
+      kept: this.kept.includes(key),
+      needed: this.needed.has(key),
+      hidden: this.demand?.pageHidden ?? false,
+    })
+  }
+
+  private sightGrace(): number {
+    return this.demand?.pageHidden ? HIDDEN_GRACE_MS : UNSEEN_GRACE_MS
+  }
+
+  /** The tiles' seats changed: note what is in sight now, and act on it when it is time */
+  private onSeats(): void {
+    if (this.closed || !this.sight || !this.demand) return
+    if (this.sight.update(this.demand.inSight(), this.now())) this.lookAgain()
+  }
+
+  /** Reconciles when an answer of the sight rules changes next */
+  private lookAgain(): void {
+    if (this.sightTimer !== null) clearTimeout(this.sightTimer)
+    this.sightTimer = null
+    if (this.closed || !this.sight) return
+    const now = this.now()
+    const at = this.sight.nextChange(now, this.sightGrace())
+    if (at === null) return
+    this.sightTimer = setTimeout(() => {
+      this.sightTimer = null
+      this.reconcile()
+      this.lookAgain()
+    }, at - now)
   }
 
   /** Subscribes to what is desired and missing, unsubscribes what is received and not desired */
   reconcile(): void {
     this.updatePaused()
     if (this.closed || this.state.status !== 'connected') return
+    const missing: { key: string; track: MemberTrack; muted: boolean }[] = []
     for (const [key, track] of this.desired) {
       if (key in this.state.received || this.pending.has(key) || this.ended.has(key)) continue
-      if (this.retryTimers.has(key) || !this.wants(key)) continue
-      void this.subscribeTo(key, track)
+      if (!this.wants(key)) {
+        // Out of sight while it waited to be tried again: it starts afresh when it is back
+        if (this.retryTimers.has(key)) this.forgetRetry(key)
+        continue
+      }
+      if (this.retryTimers.has(key)) continue
+      missing.push({ key, track, muted: track.muted })
     }
-    for (const key of Object.keys(this.state.received)) {
-      if (this.wants(key)) continue
-      const { sessionId, trackName } = this.state.received[key]
-      this.removeReceived(key)
-      void this.transport.unsubscribe({ sessionId, trackName }).catch(() => undefined)
+    const going = Object.keys(this.state.received).filter((key) => !this.wants(key))
+    if (going.length > 0) {
+      const refs = going.map((key) => {
+        const { sessionId, trackName } = this.state.received[key]
+        return { sessionId, trackName }
+      })
+      this.removeAllReceived(going)
+      void this.transport.unsubscribeMany(refs).catch(() => undefined)
     }
+    if (missing.length === 0) return
+    const first = this.firstLayers(missing)
+    for (const batch of subscribeBatches(missing)) void this.subscribeBatch(batch, first)
   }
 
   /**
@@ -671,15 +769,18 @@ export class RoomMedia {
     void this.rebuild()
   }
 
-  /** The cameras listed and not received because of the adaptation or audio-only */
+  /** The cameras listed and not received: because of the adaptation or audio-only, or unseen */
   private updatePaused(): void {
-    const paused = [...this.desired]
+    const left = [...this.desired]
       .filter(([key, track]) => track.kind === 'cam' && !track.muted && !this.wants(key))
       .map(([key]) => key)
       .sort()
-    const now = this.state.pausedVideos
-    if (paused.length === now.length && paused.every((key, i) => key === now[i])) return
-    this.update({ pausedVideos: paused })
+    const paused = this.videoCut() ? left : []
+    const unseen = this.videoCut() ? [] : left
+    const same = (a: readonly string[], b: readonly string[]) =>
+      a.length === b.length && a.every((key, i) => key === b[i])
+    if (same(paused, this.state.pausedVideos) && same(unseen, this.state.unseenVideos)) return
+    this.update({ pausedVideos: paused, unseenVideos: unseen })
   }
 
   /** Stops everything; the published tracks end on the SFU with the session */
@@ -690,6 +791,8 @@ export class RoomMedia {
     if (this.statsTimer !== null) clearInterval(this.statsTimer)
     if (this.signalTimer !== null) clearTimeout(this.signalTimer)
     this.signalTimer = null
+    if (this.sightTimer !== null) clearTimeout(this.sightTimer)
+    this.sightTimer = null
     if (this.uplinkTimer !== null) clearInterval(this.uplinkTimer)
     this.clearHdRetry()
     this.clearSessionTimers()
@@ -878,10 +981,19 @@ export class RoomMedia {
 
   /** Asks the SFU for each received video's layer, where it changed (media/layers.ts) */
   private applyLayers(): void {
+    if (this.closed || !this.demand || !this.ready || this.state.status !== 'connected') return
+    this.askLayers(chooseLayers(this.receivedInputs(), this.layerBudget()))
+  }
+
+  private layerBudget(): number {
+    return this.state.powerSaving ? POWER_SAVING_BUDGET_BPS : this.state.downlinkBudgetBps
+  }
+
+  /** Where each received video is drawn now */
+  private receivedInputs(): LayerInput[] {
     const demand = this.demand
-    if (this.closed || !demand || !this.ready || this.state.status !== 'connected') return
-    const transport = this.transport
     const inputs: LayerInput[] = []
+    if (!demand) return inputs
     for (const [key, received] of Object.entries(this.state.received)) {
       if (received.kind !== 'cam' && received.kind !== 'screen') continue
       inputs.push({
@@ -891,25 +1003,64 @@ export class RoomMedia {
         current: this.state.layers[key] ?? null,
       })
     }
-    const budget = this.state.powerSaving ? POWER_SAVING_BUDGET_BPS : this.state.downlinkBudgetBps
-    const chosen = chooseLayers(inputs, budget)
-    const changes = [...chosen].filter(([key, layer]) => this.state.layers[key] !== layer)
+    return inputs
+  }
+
+  /** The layers that changed go to the SFU, in one call */
+  private askLayers(chosen: ReadonlyMap<string, Layer>): void {
+    const transport = this.transport
+    const changes = [...chosen].filter(
+      ([key, layer]) => key in this.state.received && this.state.layers[key] !== layer,
+    )
     if (changes.length === 0) return
     this.update({ layers: { ...this.state.layers, ...Object.fromEntries(changes) } })
-    for (const [key, layer] of changes) {
+    const asked = changes.map(([key, layer]) => {
       const { sessionId, trackName } = this.state.received[key]
-      transport.setPreferredLayer({ sessionId, trackName }, layer).catch(() => {
-        // Not applied (unsubscribed meanwhile, or the call failed): forget it, so that the next
-        // recompute asks again
-        if (this.closed || transport !== this.transport || this.state.layers[key] !== layer) return
+      return { ref: { sessionId, trackName }, layer }
+    })
+    void transport
+      .setPreferredLayers(asked)
+      .catch((reason: unknown) => asked.map(() => ({ status: 'rejected' as const, reason })))
+      .then((results) => {
+        let retry = false
         const layers = { ...this.state.layers }
-        delete layers[key]
-        this.update({ layers })
-        if (key in this.state.received) {
-          setTimeout(() => this.scheduleLayers(), this.retryDelayMs)
+        results.forEach((result, i) => {
+          const [key, layer] = changes[i]
+          // Not applied (unsubscribed meanwhile, or the call failed): forget it, so that the next
+          // recompute asks again
+          if (result.status === 'fulfilled' || layers[key] !== layer) return
+          delete layers[key]
+          if (key in this.state.received) retry = true
+        })
+        if (this.closed || transport !== this.transport) return
+        if (Object.keys(layers).length !== Object.keys(this.state.layers).length) {
+          this.update({ layers })
         }
+        if (retry) setTimeout(() => this.scheduleLayers(), this.retryDelayMs)
       })
+  }
+
+  /**
+   * The layer each new subscription starts at. A tile in its seat knows the size it draws: all of
+   * them are chosen together with what is received now, and the changes to those go first, so a
+   * page turned costs one tracks/update and no second one once the new tiles report. Without a
+   * seat, INITIAL_LAYER until its tile reports.
+   */
+  private firstLayers(missing: readonly { key: string; track: MemberTrack }[]): Map<string, Layer> {
+    const first = new Map<string, Layer>()
+    const newInputs: LayerInput[] = []
+    for (const { key, track } of missing) {
+      if (track.kind !== 'cam' && track.kind !== 'screen') continue
+      first.set(key, INITIAL_LAYER[track.kind])
+      const seat = this.demand?.seatDemand(key) ?? null
+      // In sight mode a camera without a seat is one that is kept: no tile draws it, lowest
+      if (seat || this.sight) newInputs.push({ key, kind: track.kind, demand: seat, current: null })
     }
+    if (newInputs.length === 0) return first
+    const chosen = chooseLayers([...this.receivedInputs(), ...newInputs], this.layerBudget())
+    for (const { key } of newInputs) first.set(key, chosen.get(key)!)
+    this.askLayers(chosen)
+    return first
   }
 
   private syncLocal(): Promise<void> {
@@ -1266,46 +1417,67 @@ export class RoomMedia {
     }
   }
 
-  private async subscribeTo(key: string, track: MemberTrack): Promise<void> {
+  /** One SDP exchange for these tracks (MediaTransport.subscribeMany); each one settles alone */
+  private async subscribeBatch(
+    batch: readonly { key: string; track: MemberTrack }[],
+    first: ReadonlyMap<string, Layer>,
+  ): Promise<void> {
     const transport = this.transport
-    this.pending.add(key)
-    const layer = track.kind === 'cam' || track.kind === 'screen' ? INITIAL_LAYER[track.kind] : null
-    try {
-      const remote = await transport.subscribe(track, layer ? { layer } : undefined)
-      if (transport !== this.transport) return
+    for (const { key } of batch) this.pending.add(key)
+    const results = await transport.subscribeMany(
+      batch.map(({ key, track }) => {
+        const layer = first.get(key)
+        return { ref: track, options: layer ? { layer } : undefined }
+      }),
+    )
+    if (transport !== this.transport) return
+    const received = { ...this.state.received }
+    const layers = { ...this.state.layers }
+    const gone: MemberTrack[] = []
+    let arrived = false
+    results.forEach((result, i) => {
+      const { key, track } = batch[i]
+      // Asked while still pending: a camera that went out of sight meanwhile has its grace, like
+      // one received (a page turned back before the exchange ended costs nothing)
+      const wanted = !this.closed && this.wants(key)
       this.pending.delete(key)
       if (this.closed) return
-      if (!this.wants(key)) {
-        // Left the list (or the adaptation cut it) while we were subscribing
-        await transport.unsubscribe(track).catch(() => undefined)
+      if (result.status === 'rejected') {
+        if (wanted) this.retryLater(key)
+        return
+      }
+      if (!wanted) {
+        // Left the list (or the adaptation cut it, or its grace ended) while we subscribed
+        gone.push(track)
         return
       }
       this.attempts.delete(key)
-      this.update({
-        received: {
-          ...this.state.received,
-          [key]: {
-            sessionId: track.sessionId,
-            trackName: track.trackName,
-            kind: track.kind,
-            track: remote.track,
-          },
-        },
-        layers: layer ? { ...this.state.layers, [key]: layer } : this.state.layers,
-      })
-      if (layer) this.scheduleLayers()
-    } catch {
-      if (transport !== this.transport) return
-      this.pending.delete(key)
-      if (this.closed || !this.wants(key)) return
-      const attempts = (this.attempts.get(key) ?? 0) + 1
-      this.attempts.set(key, attempts)
-      const timer = setTimeout(() => {
-        this.retryTimers.delete(key)
-        this.reconcile()
-      }, this.retryWait(attempts))
-      this.retryTimers.set(key, timer)
-    }
+      received[key] = {
+        sessionId: track.sessionId,
+        trackName: track.trackName,
+        kind: track.kind,
+        track: result.value.track,
+      }
+      const layer = first.get(key)
+      if (layer) {
+        layers[key] = layer
+        arrived = true
+      }
+    })
+    if (this.closed) return
+    this.update({ received, layers })
+    if (arrived) this.scheduleLayers()
+    if (gone.length > 0) await transport.unsubscribeMany(gone).catch(() => undefined)
+  }
+
+  private retryLater(key: string): void {
+    const attempts = (this.attempts.get(key) ?? 0) + 1
+    this.attempts.set(key, attempts)
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(key)
+      this.reconcile()
+    }, this.retryWait(attempts))
+    this.retryTimers.set(key, timer)
   }
 
   /** The wait before retry number `attempts`: doubling from retryDelayMs up to retryMaxMs */
@@ -1405,6 +1577,7 @@ export class RoomMedia {
       downlink: this.downlink.state,
       uplink: this.uplink.state,
       paused: this.state.pausedVideos,
+      unseen: this.state.unseenVideos,
       audioOnly: this.state.audioOnly,
       hd: this.state.hd,
       hdLimited: this.state.hdLimited,
@@ -1483,10 +1656,16 @@ export class RoomMedia {
   }
 
   private removeReceived(key: string): void {
+    this.removeAllReceived([key])
+  }
+
+  private removeAllReceived(keys: readonly string[]): void {
     const received = { ...this.state.received }
-    delete received[key]
     const layers = { ...this.state.layers }
-    delete layers[key]
+    for (const key of keys) {
+      delete received[key]
+      delete layers[key]
+    }
     this.update({ received, layers })
   }
 

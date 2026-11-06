@@ -60,6 +60,12 @@ export interface SubscribeOptions {
   layer?: Layer
 }
 
+/** One subscription of a batch (subscribeMany) */
+export interface SubscribeRequest {
+  ref: TrackRef
+  options?: SubscribeOptions
+}
+
 export interface ConnectOptions {
   /** STUN and short-lived TURN servers from the Worker (e2-t07) */
   iceServers?: RTCIceServer[]
@@ -221,13 +227,25 @@ export interface MediaTransport {
 
   /** Starts receiving someone else's track; rejects with `not_found` if it is not published */
   subscribe(ref: TrackRef, options?: SubscribeOptions): Promise<RemoteTrack>
+  /**
+   * Several subscriptions in one SDP exchange (L1, e10-t01): a page's cameras take as long as one.
+   * One result per request, in order: a track that is not there yet rejects alone, the others go
+   * on. Never rejects as a whole. Keep a batch to MAX_SUBSCRIBE_BATCH (media/subscriptions.ts).
+   */
+  subscribeMany(requests: readonly SubscribeRequest[]): Promise<PromiseSettledResult<RemoteTrack>[]>
   /** Stops receiving; a no-op for a track that is not subscribed */
   unsubscribe(ref: TrackRef): Promise<void>
+  /** Stops receiving several tracks in one SDP exchange (L1); no-ops as unsubscribe */
+  unsubscribeMany(refs: readonly TrackRef[]): Promise<void>
   /**
    * Asks the SFU for another simulcast layer of a subscribed video track (e2-t12); asking for
    * the layer already asked for does nothing. Rejects with `not_found` when not subscribed.
    */
   setPreferredLayer(ref: TrackRef, layer: Layer): Promise<void>
+  /** Several layers in one call (L1): one result per change, in order; never rejects as a whole */
+  setPreferredLayers(
+    changes: readonly { ref: TrackRef; layer: Layer }[],
+  ): Promise<PromiseSettledResult<void>[]>
 
   /**
    * The highest simulcast layer a published video sends (e6-t04, HD): `high` sends every layer,

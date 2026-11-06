@@ -90,6 +90,28 @@ class ScriptedSfu {
     }
   }
 
+  /** A batch of pulls (L1): one offer for all of them, each track with its own result */
+  #pullMany(sessionId: string, session: SfuSession, body: TracksBody): Response {
+    this.log.push(`${sessionId} pull batch ${body.tracks.length}`)
+    const pulled: string[] = []
+    const tracks = body.tracks.map((track) => {
+      const ref = { sessionId: track.sessionId, trackName: track.trackName }
+      const pushed = this.tracks.get(`${track.sessionId}/${track.trackName}`)
+      if (!pushed) return { ...ref, errorCode: 'not_found_track_error' }
+      if (!pushed.sending) return { ...ref, mid: '', errorCode: 'empty_track_error' }
+      const mid = `r${session.nextMid++}`
+      session.pulled.set(mid, track.simulcast?.preferredRid)
+      pulled.push(`pull-mid-${mid}`)
+      return { ...ref, mid }
+    })
+    session.awaitingAnswer = true
+    return Response.json({
+      requiresImmediateRenegotiation: true,
+      sessionDescription: { type: 'offer', sdp: pulled.join(' ') || 'sfu-offer' },
+      tracks,
+    })
+  }
+
   #handle(sessionId: string, session: SfuSession, route: string, body: TracksBody): Response {
     if (route === 'PUT /renegotiate') {
       session.awaitingAnswer = false
@@ -100,16 +122,19 @@ class ScriptedSfu {
       return Response.json({ sessionDescription: { type: 'answer', sdp: 'closed' }, tracks: [] })
     }
     if (route === 'PUT /tracks/update') {
-      const [update] = body.tracks
-      if (!update.mid || !session.pulled.has(update.mid)) {
-        this.log.push(`${sessionId} update ${update.mid} not_found`)
-        return Response.json({ tracks: [{ mid: update.mid, errorCode: 'track_not_found' }] })
-      }
-      const rid = update.simulcast?.preferredRid
-      session.pulled.set(update.mid, rid)
-      this.log.push(`${sessionId} update ${update.trackName} ${rid}`)
-      return Response.json({ requiresImmediateRenegotiation: false, tracks: [{ mid: update.mid }] })
+      const tracks = body.tracks.map((update) => {
+        if (!update.mid || !session.pulled.has(update.mid)) {
+          this.log.push(`${sessionId} update ${update.mid} not_found`)
+          return { mid: update.mid, errorCode: 'track_not_found' }
+        }
+        const rid = update.simulcast?.preferredRid
+        session.pulled.set(update.mid, rid)
+        this.log.push(`${sessionId} update ${update.trackName} ${rid}`)
+        return { mid: update.mid }
+      })
+      return Response.json({ requiresImmediateRenegotiation: false, tracks })
     }
+    if (body.tracks.length > 1) return this.#pullMany(sessionId, session, body)
     const [track] = body.tracks
     if (track.location === 'local') {
       const key = `${sessionId}/${track.trackName}`
@@ -222,8 +247,7 @@ class MockPc {
     }
     this.signalingState = d.type === 'answer' ? 'stable' : 'have-remote-offer'
     if (d.type === 'answer') for (const t of this.transceivers) t.sender?.start()
-    const pulled = /pull-mid-(\w+)/.exec(d.sdp)
-    if (pulled) {
+    for (const pulled of d.sdp.matchAll(/pull-mid-(\w+)/g)) {
       this.transceivers.push({
         mid: pulled[1],
         stop: vi.fn(),
@@ -632,5 +656,132 @@ describe('RoomMedia: a share with its sound in a busy room (e3-t04)', () => {
     })
     expect(sfu.conflicts).toBe(0)
     await Promise.all([...members.values()].map((m) => m.close()))
+  })
+})
+
+// L1 (e10-t01): a page of cameras is one exchange, and the queue still keeps the SFU's rules
+describe('Batches against the scripted SFU (L1)', () => {
+  async function publishers(sfu: ScriptedSfu, count: number) {
+    const refs = []
+    for (let i = 0; i < count; i++) {
+      const member = transport(sfu)
+      await member.connect()
+      refs.push(await member.publish(video, { kind: 'cam', simulcast: true }))
+    }
+    return refs
+  }
+
+  it('subscribes several tracks in one call, each at its layer', async () => {
+    const sfu = new ScriptedSfu()
+    const refs = await publishers(sfu, 3)
+    const bob = transport(sfu)
+    await bob.connect()
+    const results = await bob.subscribeMany(refs.map((ref) => ({ ref, options: { layer: 'low' } })))
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled', 'fulfilled'])
+    const session = bob.sessionId!
+    expect(sfu.log.filter((l) => l.startsWith(`${session} `))).toEqual([
+      `${session} pull batch 3`,
+      `${session} renegotiate`,
+    ])
+    expect(sfu.conflicts).toBe(0)
+  })
+
+  it('one track that is not there rejects alone, and the exchange is still answered', async () => {
+    const sfu = new ScriptedSfu()
+    const [cam] = await publishers(sfu, 1)
+    const missing = { sessionId: 'nobody', trackName: 'cam-x' }
+    const bob = transport(sfu)
+    await bob.connect()
+    const results = await bob.subscribeMany([{ ref: cam }, { ref: missing }])
+    expect(results[0].status).toBe('fulfilled')
+    expect(results[1]).toMatchObject({ status: 'rejected', reason: { code: 'not_found' } })
+    // The session is not stuck waiting for an answer: the next call goes through
+    await expect(bob.subscribe(missing)).rejects.toMatchObject({ code: 'not_found' })
+    expect(sfu.conflicts).toBe(0)
+  })
+
+  it('a track already subscribed is not asked for again', async () => {
+    const sfu = new ScriptedSfu()
+    const [a, b] = await publishers(sfu, 2)
+    const bob = transport(sfu)
+    await bob.connect()
+    await bob.subscribe(a)
+    const results = await bob.subscribeMany([{ ref: a }, { ref: b }, { ref: b }])
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled', 'fulfilled'])
+    expect(sfu.log.filter((l) => l.includes('pull')).at(-1)).toContain(`pull ${b.trackName}`)
+  })
+
+  it('closes a batch in one call, and subscribing again in the queue works', async () => {
+    const sfu = new ScriptedSfu()
+    const refs = await publishers(sfu, 2)
+    const bob = transport(sfu)
+    await bob.connect()
+    await bob.subscribeMany(refs.map((ref) => ({ ref })))
+    const ended: string[] = []
+    bob.on('trackEnded', (ref) => ended.push(ref.trackName))
+    const results = await Promise.all([
+      bob.unsubscribeMany(refs),
+      bob.subscribeMany(refs.map((ref) => ({ ref }))),
+      bob.unsubscribeMany(refs),
+      bob.subscribeMany(refs.map((ref) => ({ ref }))),
+    ])
+    expect(results[3].map((r) => r.status)).toEqual(['fulfilled', 'fulfilled'])
+    expect(ended).toHaveLength(4)
+    expect(sfu.conflicts).toBe(0)
+  })
+
+  it('changes several layers in one call; one that fails rejects alone', async () => {
+    const sfu = new ScriptedSfu()
+    const [a, b] = await publishers(sfu, 2)
+    const bob = transport(sfu)
+    await bob.connect()
+    await bob.subscribeMany([a, b].map((ref) => ({ ref, options: { layer: 'medium' } })))
+    const results = await bob.setPreferredLayers([
+      { ref: a, layer: 'low' },
+      { ref: b, layer: 'low' },
+      { ref: { sessionId: 'nobody', trackName: 'cam-x' }, layer: 'low' },
+    ])
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled', 'rejected'])
+    const session = bob.sessionId!
+    expect(sfu.log.filter((l) => l.startsWith(`${session} update`))).toHaveLength(2)
+    // Asked again: nothing to send
+    const before = sfu.log.length
+    await bob.setPreferredLayers([{ ref: a, layer: 'low' }])
+    expect(sfu.log.length).toBe(before)
+  })
+
+  it('a room paging back and forth stays clean through RoomMedia', async () => {
+    const { VideoDemandStore } = await import('../../../src/room/videoDemand.ts')
+    const sfu = new ScriptedSfu()
+    const refs = await publishers(sfu, 4)
+    const demand = new VideoDemandStore()
+    const bob = new RoomMedia({
+      transport: transport(sfu),
+      send: () => {},
+      demand,
+      visibleOnly: true,
+      adapt: false,
+    })
+    await bob.start({ mic: null, cam: null })
+    bob.setDesired(refs.map((ref) => ({ ...ref, kind: 'cam', muted: false })) as MemberTrack[])
+    const keys = refs.map((ref) => `${ref.sessionId}/${ref.trackName}`)
+    const view = {}
+    const show = (shown: string[]) => {
+      for (const key of keys) {
+        demand.reportSeat(key, view, { width: 300, height: 170, visible: shown.includes(key) })
+      }
+    }
+    for (let i = 0; i < 4; i++) {
+      show(keys.slice(0, 2))
+      await sleep(170)
+      show(keys.slice(2))
+      await sleep(170)
+    }
+    expect(sfu.conflicts).toBe(0)
+    // The last page's are still on their way, or here; none of the first page's were closed
+    await sleep(100)
+    expect(Object.keys(bob.getState().received).sort()).toEqual([...keys].sort())
+    expect(sfu.log.filter((l) => l.includes('pull batch'))).toHaveLength(2)
+    await bob.close()
   })
 })

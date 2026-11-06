@@ -23,7 +23,12 @@ import {
   type RoomView,
   type ServerMessage,
 } from '../../shared/protocol.ts'
-import { ASSUMED_BITRATE, MAX_REPORTED_BITRATE, RELAY_OVERHEAD } from '../../shared/usage.ts'
+import {
+  ASSUMED_BITRATE,
+  MAX_ASSUMED_VIDEO_BPS,
+  MAX_REPORTED_BITRATE,
+  RELAY_OVERHEAD,
+} from '../../shared/usage.ts'
 import {
   MAX_USAGE_GAP_MS,
   RoomHost,
@@ -655,6 +660,21 @@ describe('RoomHost media (e2-t03) and usage (e11-t13)', () => {
     const woken = setup()
     woken.host.restore(ROOM, t.saved.rev, t.saved.sessions, [{ conn: a.conn, openedAt: 0 }])
     expect(woken.host.sfuAccess(a.token, 'sess-a', [])).toMatchObject({ ok: true })
+  })
+
+  it('assumes no more video per receiver than the cap (L1)', () => {
+    const publishers = Array.from({ length: 6 }, (_, i) => t.join(`p${i}`))
+    const receiver = t.join('Gene')
+    t.host.takeUsage()
+    publishers.forEach((p, i) => {
+      t.host.bindSfu(p.token, `sess-${i}`)
+      t.host.message(p.conn, tracksMessage(`sess-${i}`, [{ trackName: 'cam-1', kind: 'cam' }]))
+    })
+    expect(receiver.token).toBeTruthy()
+    t.tick(10_000)
+    // Six publishers each see five cameras (7.5 Mbps), the receiver six (9 Mbps): all capped
+    const perReceiver = (MAX_ASSUMED_VIDEO_BPS / 8) * 10
+    expect(t.host.takeUsage().estimateBytes).toBe(7 * perReceiver)
   })
 
   it('estimates egress from the tracks every connected member receives', () => {
@@ -2020,7 +2040,10 @@ describe('RoomHost abuse limits (I1, e11-t05)', () => {
     for (let i = 1; i < SOCKET_MESSAGE_RATE.count; i++) t.host.message(alice.conn, '{"t":"resync"}')
     expect(alice.client.closed).toBeNull()
     t.host.message(alice.conn, '{"t":"resync"}')
-    expect(alice.client.closed).toEqual({ code: CloseCode.rateLimited, reason: 'too many messages' })
+    expect(alice.client.closed).toEqual({
+      code: CloseCode.rateLimited,
+      reason: 'too many messages',
+    })
     expect(offences).toEqual([`${alice.conn}:flood`])
     expect(bob.client.view?.members[alice.id].reconnecting).toBe(true)
     // Further frames on the closed connection are ignored
@@ -2028,9 +2051,11 @@ describe('RoomHost abuse limits (I1, e11-t05)', () => {
     expect(bob.client.view?.members[alice.id].name).toBe('Alice')
     // A new window lets a well-behaved socket go on for ever
     t.tick(SOCKET_MESSAGE_RATE.windowMs)
-    for (let i = 0; i < SOCKET_MESSAGE_RATE.count - 1; i++) t.host.message(bob.conn, '{"t":"resync"}')
+    for (let i = 0; i < SOCKET_MESSAGE_RATE.count - 1; i++)
+      t.host.message(bob.conn, '{"t":"resync"}')
     t.tick(SOCKET_MESSAGE_RATE.windowMs)
-    for (let i = 0; i < SOCKET_MESSAGE_RATE.count - 1; i++) t.host.message(bob.conn, '{"t":"resync"}')
+    for (let i = 0; i < SOCKET_MESSAGE_RATE.count - 1; i++)
+      t.host.message(bob.conn, '{"t":"resync"}')
     expect(bob.client.closed).toBeNull()
     expect(ROOM_CONNECT_RATE.count).toBeGreaterThan(MAX_MEMBERS / 2)
   })

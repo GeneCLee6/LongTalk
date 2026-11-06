@@ -230,8 +230,11 @@ export const JOIN_TIMEOUT_MS = 10_000
 /** How long a disconnected member keeps its place (ARCHITECTURE.md §4) */
 export const RECONNECT_GRACE_MS = 60_000
 
-/** Hard cap on members connected to one room (M3's target is 50, F36) */
-export const MAX_MEMBERS = 50
+/**
+ * Hard cap on members connected to one room: M2's target (F32, AC-10.3). M3 raises it to 50 (F36)
+ * once its load test has passed (e10-t07)
+ */
+export const MAX_MEMBERS = 25
 /** Sockets that opened but have not joined yet, on top of MAX_MEMBERS */
 export const MAX_PENDING_SOCKETS = 10
 /**

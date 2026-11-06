@@ -7,8 +7,9 @@
 // is in it, two numbers for the interval since its last flush, and the larger one is added:
 // - what its browsers reported (`stats`: the transport's cumulative bytesReceived, which is the
 //   SFU's egress to that browser), and
-// - the server's own estimate: elapsed time × every track a connected member receives (in B1
-//   everyone receives every other member's tracks) × the bitrate assumed for its kind.
+// - the server's own estimate: elapsed time × every track a connected member could receive ×
+//   the bitrate assumed for its kind, the video part capped at MAX_ASSUMED_VIDEO_BPS per receiver
+//   (L1: a browser receives what is on its screen within a budget, not everyone's top layer).
 // The estimate does not trust the browsers, so a browser that reports nothing cannot hide its
 // traffic; the reports catch what the estimate gets wrong (a camera sending more than assumed).
 //
@@ -53,6 +54,14 @@ export const ASSUMED_BITRATE: Record<TrackKind, number> = {
   screen: 2_500_000,
   screenAudio: 64_000,
 }
+
+/**
+ * The most video the server estimate assumes one receiver gets: AC-10.3's 6 Mbps, above the
+ * browser's own budget (src/media/layers.ts, 3.4 Mbps) on purpose. Without the cap a 25-person
+ * room would count as 25 × 24 × 1.5 Mbps, about 400 GB an hour, when the budget allows about
+ * 40 GB. A browser that takes more than this shows up in its own `stats`.
+ */
+export const MAX_ASSUMED_VIDEO_BPS = 6_000_000
 
 /**
  * What a relayed receiver's egress is counted at, relative to the media it receives: TURN's

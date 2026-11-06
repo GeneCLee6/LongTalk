@@ -376,7 +376,7 @@ describe('SFU proxy: what it forwards', () => {
     ).toBeNull()
     expect(planTracks({ tracks: [{ location: 'remote', trackName: 'x' }] })).toBeNull()
     expect(planTracks({ tracks: [{ location: 'elsewhere' }] })).toBeNull()
-    expect(planTracks({ tracks: Array(9).fill(remote) })).toBeNull()
+    expect(planTracks({ tracks: Array(17).fill(remote) })).toBeNull()
     expect(
       planTracks({ sessionDescription: offer, tracks: [{ location: 'local', mid: '1' }, remote] }),
     ).toEqual({ pushesVideo: true, pulls: [{ sessionId: 's', trackName: 't' }] })

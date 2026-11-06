@@ -11,23 +11,33 @@ import styled from 'styled-components'
 import {
   clampPage,
   DEFAULT_GRID_GAP,
+  GALLERY_PAGE_SIZE,
+  galleryIsPaged,
+  gallerySide,
   gridLayout,
   pagedLayout,
   pageRange,
   pagesInView,
+  PHONE_PAGE_SIZE,
   shareLayout,
+  sideTile,
   speakerLayout,
   tileAspect,
   type PagesInView,
   type StripSide,
 } from '../../shared/layout.ts'
 import { strings } from '../strings.ts'
-import { color, media, motion, radius, space } from '../styles/tokens.ts'
+import { color, fontSize, media, motion, radius, space } from '../styles/tokens.ts'
 import { ChevronLeftIcon, ChevronRightIcon } from './icons.tsx'
-import { TileVisibleContext, useReducedMotion } from './layoutContext.ts'
+import {
+  TileSightContext,
+  TileVisibleContext,
+  useReducedMotion,
+  type TileSight,
+} from './layoutContext.ts'
 
 /**
- * grid: the gallery (desktop); paged: four tiles a page, swiped sideways (a phone held upright);
+ * grid: the gallery (desktop; past 16 tiles in pages of 16, L1); paged: four tiles a page, swiped sideways (a phone held upright);
  * speaker: the speaker (or the pinned or spotlighted member) big and the others in a strip (a
  * phone held sideways; the desktop's 演講者 from G2)
  */
@@ -39,6 +49,11 @@ export interface StageProps {
   mode?: StageMode
   /** The speaker layout's big tile: an index into the children (shared/layout.ts stageFocus) */
   speaker?: number
+  /**
+   * Who speaks, for a desktop's paged gallery (L1, e10-t02): an index into the children; their tile
+   * moves to the column beside it while their page is out of view. Null: nobody has yet
+   */
+  sideSpeaker?: number | null
   /** Where the speaker layout's strip goes: `bottom` on a desktop (G2), `auto` on phones */
   stripSide?: StripSide
   /**
@@ -89,6 +104,7 @@ export function Stage({
   children,
   mode = 'grid',
   speaker = 0,
+  sideSpeaker = null,
   stripSide = 'auto',
   share,
 }: StageProps) {
@@ -99,6 +115,9 @@ export function Stage({
     return (
       <SpeakerStage cells={cells} speaker={clampPage(speaker, cells.length)} side={stripSide} />
     )
+  }
+  if (mode === 'grid' && galleryIsPaged(cells.length)) {
+    return <PagedStage cells={cells} pageSize={GALLERY_PAGE_SIZE} sideSpeaker={sideSpeaker} />
   }
   return <GridStage cells={cells} />
 }
@@ -147,17 +166,36 @@ const sameView = (a: PagesInView, b: PagesInView) =>
  * where you are and turn the page; with a mouse there are previous / next buttons too, and the
  * arrow keys, Page Up / Down, Home and End work once the stage has focus. Tiles on pages out of
  * view show no video (TileVisibleContext); their sound plays on (MemberAudio).
+ *
+ * A desktop's large room (L1, e10-t02) is the same with 16 tiles a page, no animation when a page
+ * is turned (the new page's cameras are asked for at once) and a column on the right: whoever
+ * speaks on a page out of view has their tile there. The column stays while the gallery is paged,
+ * so the tiles never change size. The pointer on a button to another page subscribes its cameras
+ * ahead (TileSightContext `near`, at their lowest layer); there is no other subscribing ahead, or
+ * a room of two pages would receive everyone.
  */
-function PagedStage({ cells }: { cells: Cells }) {
+function PagedStage({
+  cells,
+  pageSize = PHONE_PAGE_SIZE,
+  sideSpeaker = null,
+}: {
+  cells: Cells
+  pageSize?: number
+  sideSpeaker?: number | null
+}) {
+  const desktop = pageSize === GALLERY_PAGE_SIZE
+  const { ref: stageRef, size: stageSize } = useContentSize<HTMLDivElement>()
   const { ref, size } = useContentSize<HTMLElement>()
   const hintId = useId()
   const reducedMotion = useReducedMotion()
   const layout = pagedLayout({
     count: cells.length,
+    pageSize,
     ...size,
     aspect: tileAspect(size.width, size.height),
   })
   const { pages } = layout
+  const [intent, setIntent] = useState<number | null>(null)
   const [view, setView] = useState<PagesInView>({ first: 0, last: 0, current: 0 })
   const current = clampPage(view.current, pages)
   const page = useRef(current)
@@ -190,7 +228,7 @@ function PagedStage({ cells }: { cells: Cells }) {
     if (!scroller) return
     const left = target * scroller.clientWidth
     if (typeof scroller.scrollTo === 'function') {
-      scroller.scrollTo({ left, behavior: reducedMotion ? 'auto' : 'smooth' })
+      scroller.scrollTo({ left, behavior: reducedMotion || desktop ? 'auto' : 'smooth' })
     } else {
       scroller.scrollLeft = left
     }
@@ -214,51 +252,92 @@ function PagedStage({ cells }: { cells: Cells }) {
 
   const measured = layout.tileWidth > 0
   const paged = pages > 1
+  const side = desktop ? gallerySide(stageSize.width, stageSize.height) : null
+  const sideIndex = desktop ? sideTile(sideSpeaker, view, cells.length, pageSize) : null
+  const sideCell = sideIndex === null ? null : cells[sideIndex]
+  const sightOf = (index: number, visible: boolean): TileSight =>
+    visible ? 'shown' : index === intent ? 'near' : 'away'
+  /** The pointer or the focus on a button to `page`: its cameras are worth having ahead */
+  const aheadTo = (page: number) => ({
+    onPointerEnter: () => setIntent(page),
+    onPointerLeave: () => setIntent(null),
+    onFocus: () => setIntent(page),
+    onBlur: () => setIntent(null),
+  })
   return (
-    <PagedArea>
-      <Pager
-        ref={ref}
-        aria-label={strings.room.grid}
-        aria-roledescription={paged ? strings.stage.pager : undefined}
-        aria-describedby={paged ? hintId : undefined}
-        data-mode="paged"
-        data-cols={layout.cols}
-        data-rows={layout.rows}
-        data-pages={pages}
-        data-page={current}
-        tabIndex={paged ? 0 : undefined}
-        onScroll={onScroll}
-        onKeyDown={onKeyDown}
-      >
-        {Array.from({ length: Math.max(pages, 1) }, (_, index) => {
-          const { start, end } = pageRange(index, cells.length)
-          const visible = index >= view.first && index <= view.last
-          return (
-            <PageBox
-              key={index}
-              role={paged ? 'group' : undefined}
-              aria-label={paged ? strings.stage.page(index + 1, pages) : undefined}
-              data-visible={visible || undefined}
-            >
-              <PageGrid style={measured ? { width: layout.width } : undefined}>
-                {cells.slice(start, end).map((cell, i) => (
-                  <Cell
-                    key={keyOf(cell, start + i)}
-                    style={
-                      measured ? { width: layout.tileWidth, height: layout.tileHeight } : undefined
-                    }
-                    $measured={measured}
-                  >
-                    <TileVisibleContext.Provider value={visible}>
-                      {cell}
-                    </TileVisibleContext.Provider>
-                  </Cell>
-                ))}
-              </PageGrid>
-            </PageBox>
-          )
-        })}
-      </Pager>
+    <PagedArea ref={stageRef}>
+      <PagedRow>
+        <Pager
+          ref={ref}
+          aria-label={strings.room.grid}
+          aria-roledescription={paged ? strings.stage.pager : undefined}
+          aria-describedby={paged ? hintId : undefined}
+          data-mode="paged"
+          data-cols={layout.cols}
+          data-rows={layout.rows}
+          data-pages={pages}
+          data-page={current}
+          tabIndex={paged ? 0 : undefined}
+          onScroll={onScroll}
+          onKeyDown={onKeyDown}
+        >
+          {Array.from({ length: Math.max(pages, 1) }, (_, index) => {
+            const { start, end } = pageRange(index, cells.length, pageSize)
+            const visible = index >= view.first && index <= view.last
+            return (
+              <PageBox
+                key={index}
+                role={paged ? 'group' : undefined}
+                aria-label={paged ? strings.stage.page(index + 1, pages) : undefined}
+                data-visible={visible || undefined}
+              >
+                <PageGrid style={measured ? { width: layout.width } : undefined}>
+                  {cells.slice(start, end).map((cell, i) =>
+                    start + i === sideIndex ? null : (
+                      <Cell
+                        key={keyOf(cell, start + i)}
+                        style={
+                          measured
+                            ? { width: layout.tileWidth, height: layout.tileHeight }
+                            : undefined
+                        }
+                        $measured={measured}
+                      >
+                        <TileVisibleContext.Provider value={visible}>
+                          <TileSightContext.Provider value={sightOf(index, visible)}>
+                            {cell}
+                          </TileSightContext.Provider>
+                        </TileVisibleContext.Provider>
+                      </Cell>
+                    ),
+                  )}
+                </PageGrid>
+              </PageBox>
+            )
+          })}
+        </Pager>
+        {side && (
+          <Side
+            role="group"
+            aria-label={strings.stage.sideSpeaker}
+            style={{ width: side.tileWidth }}
+          >
+            {sideCell && sideIndex !== null && (
+              <>
+                <SideLabel>{strings.stage.sideSpeaker}</SideLabel>
+                <Cell
+                  key={keyOf(sideCell, sideIndex)}
+                  data-side-speaker=""
+                  style={{ width: side.tileWidth, height: side.tileHeight }}
+                  $measured
+                >
+                  {sideCell}
+                </Cell>
+              </>
+            )}
+          </Side>
+        )}
+      </PagedRow>
       {paged && (
         <PagerBar>
           <Hint id={hintId}>{strings.stage.hint}</Hint>
@@ -267,6 +346,7 @@ function PagedStage({ cells }: { cells: Cells }) {
             aria-label={strings.stage.previous}
             disabled={current === 0}
             onClick={() => goTo(current - 1)}
+            {...aheadTo(current - 1)}
           >
             <ChevronLeftIcon />
           </Step>
@@ -278,6 +358,7 @@ function PagedStage({ cells }: { cells: Cells }) {
                 aria-label={strings.stage.page(index + 1, pages)}
                 aria-current={index === current ? 'true' : undefined}
                 onClick={() => goTo(index)}
+                {...aheadTo(index)}
               />
             ))}
           </Dots>
@@ -286,6 +367,7 @@ function PagedStage({ cells }: { cells: Cells }) {
             aria-label={strings.stage.next}
             disabled={current === pages - 1}
             onClick={() => goTo(current + 1)}
+            {...aheadTo(current + 1)}
           >
             <ChevronRightIcon />
           </Step>
@@ -451,9 +533,33 @@ const PagedArea = styled.div`
   flex-direction: column;
 `
 
+/** The pager and, on a desktop's large room, the column beside it */
+const PagedRow = styled.div`
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: ${DEFAULT_GRID_GAP}px;
+`
+
+/** The column beside a large room's pages: the speaker on another page, centred (L1) */
+const Side = styled.div`
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: ${space(1)};
+`
+
+const SideLabel = styled.span`
+  color: ${color.muted};
+  font-size: ${fontSize.nameplate};
+  text-align: center;
+`
+
 /** Pages side by side; one swipe snaps one page (scroll-snap-stop), no scrollbar */
 const Pager = styled.section`
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   overflow-x: auto;

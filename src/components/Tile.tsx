@@ -63,6 +63,8 @@ export interface TileProps {
   signal?: SignalLevel | null
   /** Their camera is on, but we do not receive it to save our downlink (e2-t15): initials */
   videoPaused?: boolean
+  /** Their camera is on and its picture is on its way, or off screen (L1): initials, not "off" */
+  videoWaiting?: boolean
 }
 
 /**
@@ -91,6 +93,7 @@ export function Tile({
   role,
   signal = null,
   videoPaused = false,
+  videoWaiting = false,
 }: TileProps) {
   const visible = useContext(TileVisibleContext)
   const shown = visible ? video : null
@@ -106,7 +109,7 @@ export function Tile({
     host: role === 'host',
     cohost: role === 'cohost',
     micMuted,
-    camOff: !video,
+    camOff: !video && !videoWaiting,
     hand,
     pinned,
     spotlighted,
@@ -123,7 +126,13 @@ export function Tile({
       $speaking={outlined}
       $dimmed={reconnecting}
     >
-      {shown ? (
+      {/* Under someone else's video too: a <video> is see-through until its first frame (L1) */}
+      {(!shown || !you) && (
+        <Avatar aria-hidden="true" style={{ background: avatarColor(name) }}>
+          {[...name][0]?.toUpperCase()}
+        </Avatar>
+      )}
+      {shown && (
         <Video
           ref={videoRef}
           aria-label={strings.room.tileVideo(name)}
@@ -132,10 +141,6 @@ export function Tile({
           playsInline
           $mirrored={you}
         />
-      ) : (
-        <Avatar aria-hidden="true" style={{ background: avatarColor(name) }}>
-          {[...name][0]?.toUpperCase()}
-        </Avatar>
       )}
       <Corner>
         {reconnecting && (
@@ -213,7 +218,7 @@ export function Tile({
         {signal && !reconnecting && <SignalBars level={signal} />}
         {you && <You>{strings.common.you}</You>}
         {relayed && <Quiet>{strings.room.relayed}</Quiet>}
-        {!video && !videoPaused && <VisuallyHidden> · {strings.room.camOff}</VisuallyHidden>}
+        {!video && !videoPaused && !videoWaiting && <VisuallyHidden> · {strings.room.camOff}</VisuallyHidden>}
       </Nameplate>
       <span id={stateId} hidden>
         {state}

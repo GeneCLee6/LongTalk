@@ -181,6 +181,7 @@ export const enRoom: RoomStrings = {
     previous: 'Previous page',
     next: 'Next page',
     strip: 'Other participants',
+    sideSpeaker: 'Speaking (not on this page)',
   },
   view: {
     section: 'Layout',
@@ -1193,6 +1194,9 @@ export const enRoom: RoomStrings = {
       audioOnly: 'audio-only suggested',
     },
     budget: 'Video budget',
+    videoSubscriptions: 'Videos received',
+    videoSubscriptionsValue: (received: number, unseen: number) =>
+      unseen > 0 ? `${received}; ${unseen} off screen, not subscribed` : `${received}`,
     paused: (count: number) => `video paused for ${count} ${plural(count, 'person', 'people')}`,
     uplinkNormal: 'normal',
     uplinkLimited: 'your top quality is off',

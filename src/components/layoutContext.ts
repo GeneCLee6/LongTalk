@@ -14,10 +14,19 @@ export const usePhoneLayout = (): PhoneLayout => useContext(PhoneLayoutContext)
 
 /**
  * Whether a tile is on screen (e4-t07): the paged gallery says no for tiles on pages out of
- * view, and the tile shows its initial instead of a <video> until it is back (the track is still
- * received: pausing the subscription itself is for layer selection, e2-t11 / e2-t12)
+ * view, and the tile shows its initial instead of a <video> until it is back (its camera is
+ * unsubscribed after a while: TileSeat, media/subscriptions.ts, L1)
  */
 export const TileVisibleContext = createContext(true)
+
+/**
+ * How a tile's seat knows it is in sight (L1, TileSeat): `observe` by an IntersectionObserver
+ * (everywhere but a pager); inside a pager the pager says so, at once when a page is turned:
+ * `shown`, `near` (the pointer is on the button to its page: worth subscribing ahead), `away`
+ */
+export type TileSight = 'observe' | 'shown' | 'near' | 'away'
+
+export const TileSightContext = createContext<TileSight>('observe')
 
 const hasMatchMedia = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function'
 

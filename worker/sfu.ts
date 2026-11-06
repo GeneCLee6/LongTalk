@@ -41,8 +41,8 @@ export const REALTIME_API_BASE = 'https://rtc.live.cloudflare.com/v1'
 
 // Largest body we forward: an SDP offer with a handful of transceivers is a few kB
 const MAX_BODY_BYTES = 64 * 1024
-/** Tracks one call may add (the client adds one at a time) */
-const MAX_TRACKS_PER_CALL = 8
+/** Tracks one call may add (the client batches a page's subscriptions, L1: MAX_SUBSCRIBE_BATCH) */
+const MAX_TRACKS_PER_CALL = 16
 
 const PATH = /^\/api\/sfu\/([^/]+)\/sessions(?:\/([^/]+)(\/.*)?)?$/
 

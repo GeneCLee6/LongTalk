@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { strings } from '../../src/strings.ts'
 import StatsPanel from '../../src/components/StatsPanel.tsx'
 import { Tile } from '../../src/components/Tile.tsx'
 import { DOWNLINK_BUDGET_BPS } from '../../src/media/layers.ts'
@@ -129,6 +130,7 @@ const snapshot: StatsSnapshot = {
   downlink: { stage: 'reduced', budgetBps: 1_200_000 },
   uplink: { cam: 'medium', screen: 'high' },
   paused: [],
+  unseen: [],
   audioOnly: false,
   hd: true,
   hdLimited: false,
@@ -143,6 +145,13 @@ afterEach(() => {
 })
 
 describe('the stats panel (e2-t14)', () => {
+  it('says how many videos it receives and how many are off screen (AC-10.1)', () => {
+    const store = new StatsStore()
+    store.set({ ...snapshot, unseen: ['a/cam', 'b/cam'] })
+    render(<StatsPanel store={store} describe={describeTrack} />)
+    expect(screen.getByText(strings.stats.videoSubscriptionsValue(1, 2))).toBeInTheDocument()
+  })
+
   it('says it is collecting until the first sample, then follows the store', () => {
     const store = new StatsStore()
     render(<StatsPanel store={store} describe={describeTrack} />)

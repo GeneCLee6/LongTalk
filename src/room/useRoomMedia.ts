@@ -46,6 +46,8 @@ export interface UseRoomMediaOptions {
   initialAudioOnly?: boolean
   /** 省電模式 (e6-t05): lowest layers received, no HD, the camera at a lower frame rate */
   powerSaving?: boolean
+  /** Receive only the cameras in sight (L1); the room page, whose tiles report their seats */
+  visibleOnly?: boolean
 }
 
 export interface RoomMediaHandle extends RoomMediaState {
@@ -64,6 +66,8 @@ export interface RoomMediaHandle extends RoomMediaState {
    * tile, whoever speaks)
    */
   setVideoPriority: (chosen: readonly string[], speakers: readonly string[]) => void
+  /** The cameras a recording made here draws (L1): received whatever the screen shows */
+  setVideoNeeded: (keys: readonly string[]) => void
   /**
    * 純音訊模式 on or off (e6-t04): no video received, our camera not sent. Kept across sessions;
    * `audioOnly` follows it at once. For the settings panel and anything else that decides it
@@ -127,6 +131,7 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
       audioOnly: mode.current.audioOnly,
       hd: mode.current.hd,
       powerSaving: mode.current.powerSaving,
+      visibleOnly: latest.current.visibleOnly,
     })
     setMedia(run)
     void run.start(startLocal ?? { mic: null, cam: null }, startView?.usage ?? 'normal')
@@ -202,6 +207,17 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
   useEffect(() => {
     media?.setVideoPriority(priority.current.chosen, priority.current.speakers)
   }, [media])
+  const needed = useRef<readonly string[]>(NO_KEYS)
+  const setVideoNeeded = useCallback(
+    (keys: readonly string[]) => {
+      needed.current = keys
+      media?.setVideoNeeded(keys)
+    },
+    [media],
+  )
+  useEffect(() => {
+    media?.setVideoNeeded(needed.current)
+  }, [media])
 
   const usage = view?.usage ?? 'normal'
   useEffect(() => {
@@ -227,7 +243,8 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
       stats,
       setAudioOnly,
       setVideoPriority,
+      setVideoNeeded,
     }),
-    [state, audioOnly, hd, powerSaving, retry, demand, stats, setVideoPriority],
+    [state, audioOnly, hd, powerSaving, retry, demand, stats, setVideoPriority, setVideoNeeded],
   )
 }

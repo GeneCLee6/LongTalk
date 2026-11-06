@@ -13,6 +13,8 @@ export interface StatsSnapshot {
   uplink: UplinkState
   /** Cameras not received to save the downlink (or in audio-only), by trackKey */
   paused: readonly string[]
+  /** Cameras not received because no tile shows them (L1, AC-10.1), by trackKey */
+  unseen: readonly string[]
   audioOnly: boolean
   /** HD wanted (e6-t04), and held back by the uplink */
   hd: boolean

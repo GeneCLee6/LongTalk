@@ -29,6 +29,7 @@ import {
   type PublishedTrack,
   type RemoteTrack,
   type SubscribeOptions,
+  type SubscribeRequest,
   type TrackKind,
   type TrackRef,
   type TransportStats,
@@ -236,104 +237,175 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     await transceiver.sender.replaceTrack(track)
   }
 
-  subscribe(ref: TrackRef, options: SubscribeOptions = {}): Promise<RemoteTrack> {
+  async subscribe(ref: TrackRef, options: SubscribeOptions = {}): Promise<RemoteTrack> {
+    const [result] = await this.subscribeMany([{ ref, options }])
+    if (result.status === 'rejected') throw result.reason
+    return result.value
+  }
+
+  subscribeMany(
+    requests: readonly SubscribeRequest[],
+  ): Promise<PromiseSettledResult<RemoteTrack>[]> {
     return this.#serial(async () => {
-      const existing = this.#subscriptions.get(trackKey(ref))
-      if (existing) return toRemote(existing)
-      const { pc, sessionId } = this.#require()
-      const layer = options.layer ?? null
-      const { res, json } = await this.#request<TracksResponse>(
-        'POST',
-        `/sessions/${sessionId}/tracks`,
-        {
-          tracks: [
-            {
+      const results = new Map<string, PromiseSettledResult<RemoteTrack>>()
+      const settled = () =>
+        requests.map(
+          ({ ref }) => results.get(trackKey(ref)) ?? rejected(new MediaTransportError('not_found')),
+        )
+      const wanted: SubscribeRequest[] = []
+      for (const request of requests) {
+        const key = trackKey(request.ref)
+        const existing = this.#subscriptions.get(key)
+        if (existing) results.set(key, { status: 'fulfilled', value: toRemote(existing) })
+        else if (!wanted.some(({ ref }) => trackKey(ref) === key)) wanted.push(request)
+      }
+      if (wanted.length === 0) return settled()
+      try {
+        const { pc, sessionId } = this.#require()
+        const { res, json } = await this.#request<TracksResponse>(
+          'POST',
+          `/sessions/${sessionId}/tracks`,
+          {
+            tracks: wanted.map(({ ref, options }) => ({
               location: 'remote',
               sessionId: ref.sessionId,
               trackName: ref.trackName,
-              ...(layer ? { simulcast: simulcastPreference(layer) } : {}),
-            },
-          ],
-        },
-      )
-      // Realtime can ask for a renegotiation even when the track itself failed (empty_track_error:
-      // the publisher is not sending yet), or the call as a whole. The session then waits for our
-      // answer and refuses every other call until it gets one (406; found by the e2e test, e2-t10,
-      // and in rooms of three): answer first, then look at the result
-      const offer = json.sessionDescription
-      if (json.requiresImmediateRenegotiation && offer?.type === 'offer') {
-        await this.#exchange(() => this.#answer(pc, sessionId, offer))
+              ...(options?.layer ? { simulcast: simulcastPreference(options.layer) } : {}),
+            })),
+          },
+        )
+        // Realtime can ask for a renegotiation even when a track itself failed
+        // (empty_track_error: the publisher is not sending yet), or the call as a whole. The
+        // session then waits for our answer and refuses every other call until it gets one (406;
+        // found by the e2e test, e2-t10, and in rooms of three): answer first, then look at the
+        // result
+        const offer = json.sessionDescription
+        if (json.requiresImmediateRenegotiation && offer?.type === 'offer') {
+          await this.#exchange(() => this.#answer(pc, sessionId, offer))
+        }
+        this.#check(res, json)
+        for (const { ref, options } of wanted) {
+          const result =
+            json.tracks?.find(
+              (t) => t.sessionId === ref.sessionId && t.trackName === ref.trackName,
+            ) ?? (wanted.length === 1 && json.tracks?.length === 1 ? json.tracks[0] : undefined)
+          const key = trackKey(ref)
+          try {
+            if (result) assertTracksOk({ tracks: [result] })
+            const mid = result?.mid
+            if (!mid) throw new MediaTransportError('not_found', `No track ${key}`)
+            const transceiver = await this.#transceiver(pc, mid)
+            if (!transceiver) {
+              // The SFU put the track on a mid this PeerConnection does not have: the two sides no
+              // longer agree on the SDP, and only a new session puts that right
+              this.#setState('failed')
+              throw new MediaTransportError('negotiation_failed', `No transceiver ${mid}`)
+            }
+            const subscription: Subscription = {
+              ...ref,
+              mid,
+              track: transceiver.receiver.track,
+              layer: options?.layer ?? null,
+            }
+            this.#subscriptions.set(key, subscription)
+            const remote = toRemote(subscription)
+            this.#emitter.emit('track', remote)
+            results.set(key, { status: 'fulfilled', value: remote })
+          } catch (error) {
+            results.set(key, rejected(error))
+          }
+        }
+      } catch (error) {
+        for (const { ref } of wanted) results.set(trackKey(ref), rejected(error))
       }
-      this.#check(res, json)
-      const result =
-        json.tracks?.find((t) => t.sessionId === ref.sessionId && t.trackName === ref.trackName) ??
-        (json.tracks?.length === 1 ? json.tracks[0] : undefined)
-      if (result) assertTracksOk({ tracks: [result] })
-      const mid = result?.mid
-      if (!mid) throw new MediaTransportError('not_found', `No track ${trackKey(ref)}`)
-      const transceiver = await this.#transceiver(pc, mid)
-      if (!transceiver) {
-        // The SFU put the track on a mid this PeerConnection does not have: the two sides no
-        // longer agree on the SDP, and only a new session puts that right
-        this.#setState('failed')
-        throw new MediaTransportError('negotiation_failed', `No transceiver ${mid}`)
-      }
-      const subscription: Subscription = {
-        ...ref,
-        mid,
-        track: transceiver.receiver.track,
-        layer,
-      }
-      this.#subscriptions.set(trackKey(ref), subscription)
-      const remote = toRemote(subscription)
-      this.#emitter.emit('track', remote)
-      return remote
+      return settled()
     })
   }
 
   unsubscribe(ref: TrackRef): Promise<void> {
+    return this.unsubscribeMany([ref])
+  }
+
+  unsubscribeMany(refs: readonly TrackRef[]): Promise<void> {
     return this.#serial(async () => {
-      const subscription = this.#subscriptions.get(trackKey(ref))
-      if (!subscription) return
-      this.#subscriptions.delete(trackKey(ref))
-      const transceiver = this.#pc?.getTransceivers().find((t) => t.mid === subscription.mid)
-      if (transceiver) await this.#closeTransceivers([transceiver])
-      this.#emitter.emit('trackEnded', { sessionId: ref.sessionId, trackName: ref.trackName })
+      const gone: { ref: TrackRef; mid: string }[] = []
+      for (const ref of refs) {
+        const subscription = this.#subscriptions.get(trackKey(ref))
+        if (!subscription) continue
+        this.#subscriptions.delete(trackKey(ref))
+        gone.push({ ref, mid: subscription.mid })
+      }
+      if (gone.length === 0) return
+      const transceivers = this.#pc?.getTransceivers() ?? []
+      const closing = gone.flatMap(({ mid }) => transceivers.filter((t) => t.mid === mid))
+      if (closing.length > 0) await this.#closeTransceivers(closing)
+      for (const { ref } of gone) {
+        this.#emitter.emit('trackEnded', { sessionId: ref.sessionId, trackName: ref.trackName })
+      }
     })
   }
 
-  setPreferredLayer(ref: TrackRef, layer: Layer): Promise<void> {
+  async setPreferredLayer(ref: TrackRef, layer: Layer): Promise<void> {
+    const [result] = await this.setPreferredLayers([{ ref, layer }])
+    if (result.status === 'rejected') throw result.reason
+  }
+
+  setPreferredLayers(
+    changes: readonly { ref: TrackRef; layer: Layer }[],
+  ): Promise<PromiseSettledResult<void>[]> {
     return this.#serial(async () => {
-      const { pc, sessionId } = this.#require()
-      const subscription = this.#subscriptions.get(trackKey(ref))
-      if (!subscription)
-        throw new MediaTransportError('not_found', `Not subscribed to ${trackKey(ref)}`)
-      if (subscription.layer === layer) return
-      // Realtime (Simulcast): the receiving session's tracks/update with the subscription's mid
-      // and the new preference. No SDP changes; should the SFU ask for a renegotiation anyway, it
-      // gets its answer first (or the session refuses every later call).
-      const { res, json } = await this.#request<TracksResponse>(
-        'PUT',
-        `/sessions/${sessionId}/tracks/update`,
-        {
-          tracks: [
-            {
+      const results: PromiseSettledResult<void>[] = changes.map(() => ({
+        status: 'fulfilled',
+        value: undefined,
+      }))
+      const sending: { index: number; subscription: Subscription; layer: Layer }[] = []
+      changes.forEach(({ ref, layer }, index) => {
+        const subscription = this.#subscriptions.get(trackKey(ref))
+        if (!subscription) {
+          results[index] = rejected(
+            new MediaTransportError('not_found', `Not subscribed to ${trackKey(ref)}`),
+          )
+        } else if (subscription.layer !== layer) {
+          sending.push({ index, subscription, layer })
+        }
+      })
+      if (sending.length === 0) return results
+      try {
+        const { pc, sessionId } = this.#require()
+        // Realtime (Simulcast): the receiving session's tracks/update with each subscription's
+        // mid and new preference. No SDP changes; should the SFU ask for a renegotiation anyway,
+        // it gets its answer first (or the session refuses every later call).
+        const { res, json } = await this.#request<TracksResponse>(
+          'PUT',
+          `/sessions/${sessionId}/tracks/update`,
+          {
+            tracks: sending.map(({ subscription, layer }) => ({
               location: 'remote',
               mid: subscription.mid,
-              sessionId: ref.sessionId,
-              trackName: ref.trackName,
+              sessionId: subscription.sessionId,
+              trackName: subscription.trackName,
               simulcast: simulcastPreference(layer),
-            },
-          ],
-        },
-      )
-      const offer = json.sessionDescription
-      if (json.requiresImmediateRenegotiation && offer?.type === 'offer') {
-        await this.#exchange(() => this.#answer(pc, sessionId, offer))
+            })),
+          },
+        )
+        const offer = json.sessionDescription
+        if (json.requiresImmediateRenegotiation && offer?.type === 'offer') {
+          await this.#exchange(() => this.#answer(pc, sessionId, offer))
+        }
+        this.#check(res, json)
+        for (const { index, subscription, layer } of sending) {
+          const result = json.tracks?.find((t) => t.mid === subscription.mid)
+          try {
+            if (result) assertTracksOk({ tracks: [result] })
+            subscription.layer = layer
+          } catch (error) {
+            results[index] = rejected(error)
+          }
+        }
+      } catch (error) {
+        for (const { index } of sending) results[index] = rejected(error)
       }
-      this.#check(res, json)
-      assertTracksOk(json)
-      subscription.layer = layer
+      return results
     })
   }
 
@@ -683,6 +755,8 @@ function assertTracksOk(res: TracksResponse): void {
     throw new MediaTransportError(code, `${failed.errorCode}: ${failed.errorDescription ?? ''}`)
   }
 }
+
+const rejected = (reason: unknown): PromiseRejectedResult => ({ status: 'rejected', reason })
 
 function toRemote(subscription: Subscription): RemoteTrack {
   return {

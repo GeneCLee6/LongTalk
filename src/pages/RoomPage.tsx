@@ -90,6 +90,7 @@ import { SettingsDialog } from '../components/SettingsDialog.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
 import type { DeviceChoice } from '../components/DeviceSelect.tsx'
 import { Stage } from '../components/Stage.tsx'
+import { TileSeat } from '../components/TileSeat.tsx'
 import { Tile, type TileProps } from '../components/Tile.tsx'
 import type { StatsPanelProps } from '../components/StatsPanel.tsx'
 import type { DownlinkStage, UplinkState } from '../media/adaptation.ts'
@@ -1282,6 +1283,7 @@ function Room({
     hd: mediaSettings.hd,
     powerSaving,
     initialAudioOnly: choices.audioOnly ?? false,
+    visibleOnly: true,
   })
   const usage = state.view?.usage ?? 'normal'
   useUsageNotices(usage, media.videoRefused, show)
@@ -1369,7 +1371,10 @@ function Room({
       case 'annotationPolicy':
         if (notice.policy) {
           show(
-            strings.hostNotice.annotationPolicy(who, strings.annotation.policy.options[notice.policy]),
+            strings.hostNotice.annotationPolicy(
+              who,
+              strings.annotation.policy.options[notice.policy],
+            ),
           )
         }
         return
@@ -1538,10 +1543,17 @@ function Room({
   }
   const videoPaused = (member: (typeof members)[number]) =>
     member.id !== state.you && paused.has(camKey(member) ?? '')
+  // A camera that is on, not paused and not here: off screen, or its picture is on its way (L1).
+  // Also still "on": its tile must stay, or it would never come into view and be subscribed
+  const videoWaiting = (member: (typeof members)[number]) => {
+    if (member.id === state.you || videoPaused(member)) return false
+    const cam = member.tracks.find((t) => t.kind === 'cam')
+    return !!cam && !cam.muted && !media.received[trackKey(cam)]
+  }
   const shown = visibleTiles({
     tiles: members.map((member) => ({
       id: member.id,
-      video: videoOf(member) !== null || videoPaused(member),
+      video: videoOf(member) !== null || videoPaused(member) || videoWaiting(member),
     })),
     you: state.you,
     hideSelf: view.hideSelf,
@@ -1733,6 +1745,24 @@ function Room({
   useEffect(() => {
     if (weRecord) recordingScene.current = buildScene()
   })
+  // The recorder reads the tracks, not the tiles (L1): the cameras it draws stay received
+  // whatever this screen shows. Someone who has not agreed is drawn as an initial: not needed.
+  const recordedCameras = weRecord
+    ? shown.ids
+        .filter(
+          (id) => id !== state.you && roomRecordings?.[state.you ?? '']?.consented.includes(id),
+        )
+        .flatMap((id) => {
+          const member = state.view?.members[id]
+          const key = member ? camKey(member) : null
+          return key ? [key] : []
+        })
+        .join(' ')
+    : ''
+  const { setVideoNeeded } = media
+  useEffect(() => {
+    setVideoNeeded(recordedCameras === '' ? [] : recordedCameras.split(' '))
+  }, [setVideoNeeded, recordedCameras])
 
   if (gone || outcome) {
     return (
@@ -1960,12 +1990,7 @@ function Room({
         />
       )),
     ...(slots.strip.includes(WHITEBOARD_LAYER)
-      ? [
-          <BoardStripTile
-            key={WHITEBOARD_LAYER}
-            onShowMain={() => chooseShare(WHITEBOARD_LAYER)}
-          />,
-        ]
+      ? [<BoardStripTile key={WHITEBOARD_LAYER} onShowMain={() => chooseShare(WHITEBOARD_LAYER)} />]
       : []),
   ]
   // 更多 › 白板: open it (and bring it to our own main area), look at it, close it for everyone
@@ -2088,6 +2113,12 @@ function Room({
                     0,
                     stageMembers.findIndex((member) => member.id === focus?.id),
                   )}
+                  // Whoever speaks on another page of a large room (L1): nobody before anyone did
+                  sideSpeaker={
+                    lastHeard !== null && focus?.reason === 'speaker'
+                      ? stageMembers.findIndex((member) => member.id === focus.id)
+                      : null
+                  }
                 >
                   {stripShares}
                   {stageMembers.map((member) => {
@@ -2107,6 +2138,8 @@ function Room({
                           you ? (media.status === 'connected' ? media.signal : null) : member.signal
                         }
                         videoPaused={videoPaused(member)}
+                        videoWaiting={videoWaiting(member)}
+                        camera={you ? null : camKey(member)}
                         video={videoOf(member)}
                         pinned={member.id === pinnedId}
                         spotlighted={member.id === spotlight}
@@ -2636,8 +2669,14 @@ const SPEAKER_HOLD_MS = 1000
 function MemberTile({
   level,
   onHeard,
+  camera,
   ...tile
-}: TileProps & { level: MediaStreamTrack | null; onHeard?: () => void }) {
+}: TileProps & {
+  level: MediaStreamTrack | null
+  onHeard?: () => void
+  /** Their camera's trackKey: the tile's seat for it (L1); null for us, or without one */
+  camera: string | null
+}) {
   const speaking = useSpeaking(level)
   const heard = useRef(onHeard)
   useEffect(() => {
@@ -2649,7 +2688,11 @@ function MemberTile({
     const timer = setTimeout(() => heard.current?.(), SPEAKER_HOLD_MS)
     return () => clearTimeout(timer)
   }, [speaking])
-  return <Tile {...tile} speaking={speaking} />
+  return (
+    <TileSeat camera={camera}>
+      <Tile {...tile} speaking={speaking} />
+    </TileSeat>
+  )
 }
 
 const trackDevice = (track: MediaStreamTrack | null): string | null =>

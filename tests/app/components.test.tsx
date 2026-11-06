@@ -181,6 +181,18 @@ describe('Tile (e4-t04, e4-t05)', () => {
     expect(screen.queryByRole('img', { name: strings.room.micMuted })).toBeNull()
   })
 
+  it('keeps the initial under a received video until its first frame (L1)', () => {
+    render(<Tile name="Wei" video={video} />)
+    const tile = screen.getByRole('figure', { name: 'Wei' })
+    expect(tile).toHaveTextContent('W')
+    expect(screen.getByLabelText(strings.room.tileVideo('Wei'))).toBeInTheDocument()
+  })
+
+  it('does not say a camera on its way is off (L1)', () => {
+    render(<Tile name="Wei" video={null} videoWaiting />)
+    expect(screen.getByRole('figure', { name: 'Wei' })).not.toHaveTextContent(strings.room.camOff)
+  })
+
   it('shows the initial instead of the video while out of view (e4-t07)', () => {
     const { rerender } = render(
       <TileVisibleContext.Provider value={false}>
