@@ -50,8 +50,14 @@ export class FakeBucket {
     return {
       size: object.bytes.byteLength,
       body: new Response(object.bytes as unknown as ArrayBuffer).body,
+      text: async () => new TextDecoder().decode(object.bytes),
       httpMetadata: { contentType: object.contentType },
     }
+  }
+
+  async head(key: string) {
+    const object = this.objects.get(key)
+    return object ? { size: object.bytes.byteLength } : null
   }
 
   async list(options: { prefix?: string; cursor?: string; limit?: number } = {}) {

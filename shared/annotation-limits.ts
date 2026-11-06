@@ -108,6 +108,19 @@ export const BOARD_LIMITS: LayerLimits = {
   whenFull: 'refuse',
 }
 
+/**
+ * A persistent room's board in R2 (J4, e7-t08): a meeting that changed it saves at most this often,
+ * on top of when the last person leaves and when the meeting closes. 12 Class A operations an hour
+ * for a room being drawn in, of a free million a month; what a crash can lose is at most this.
+ */
+export const BOARD_SAVE_MS = 5 * 60_000
+/**
+ * The saved JSON's largest size, bytes. A board within its limits is below it even when every point
+ * is as long as a point can be (cost counts 16 characters a point, the longest takes 21) and all its
+ * text is three-byte characters: a test fills one to check that. So only a bug ever hits this.
+ */
+export const MAX_BOARD_FILE_BYTES = 5 * 1024 * 1024
+
 /** PRD E7: the laser pointer lasts this long after its last position, fading out */
 export const LASER_FADE_MS = 3_000
 /** A stroke not heard of for this long no longer counts as being drawn (its name tag goes) */

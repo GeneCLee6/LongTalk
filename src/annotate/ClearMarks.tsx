@@ -1,12 +1,12 @@
 import { useId, useState, type KeyboardEvent, type SyntheticEvent } from 'react'
-import styled from 'styled-components'
+import { PAST_AUTHOR } from '../../shared/annotation.ts'
 import { Button } from '../components/Button.tsx'
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx'
 import { ClearIcon } from '../components/icons.tsx'
 import { Control } from '../components/shareChrome.tsx'
 import type { AnnotationStore } from '../room/annotationStore.ts'
 import { strings } from '../strings.ts'
-import { color, fontSize, layer, radius, space } from '../styles/tokens.ts'
+import { Backdrop, Choices, Panel } from './TilePanel.tsx'
 
 export interface ClearMarksProps {
   store: AnnotationStore
@@ -84,7 +84,7 @@ export default function ClearMarks({ store, layer: layerId, nameOf }: ClearMarks
                     {text.clearAll(total)}
                   </Button>
                   {[...(counts ?? [])].map(([by, count]) => {
-                    const name = nameOf(by) ?? text.departed
+                    const name = by === PAST_AUTHOR ? text.earlier : (nameOf(by) ?? text.departed)
                     return (
                       <Button
                         key={by}
@@ -107,38 +107,3 @@ export default function ClearMarks({ store, layer: layerId, nameOf }: ClearMarks
     </>
   )
 }
-
-const Backdrop = styled.div`
-  position: fixed;
-  inset: 0;
-  z-index: ${layer.menu};
-  display: grid;
-  place-items: center;
-  padding: ${space(4)};
-  background: ${color.overlay};
-  cursor: default;
-`
-
-const Panel = styled.div`
-  display: grid;
-  gap: ${space(3)};
-  width: min(100%, 360px);
-  max-height: 100%;
-  overflow-y: auto;
-  padding: ${space(5)};
-  border: 1px solid ${color.line};
-  border-radius: ${radius.panel};
-  background: ${color.surface};
-  color: ${color.fg};
-  box-shadow: 0 8px 24px ${color.shadow};
-
-  h2 {
-    margin: 0;
-    font-size: ${fontSize.base};
-  }
-`
-
-const Choices = styled.div`
-  display: grid;
-  gap: ${space(2)};
-`

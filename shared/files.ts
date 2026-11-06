@@ -36,6 +36,11 @@ export const BACKUP_STALE_MS = 26 * 60 * 60_000
 /** Where uploads live in the bucket; the hour in the key is what the sweep goes by */
 export const UPLOAD_PREFIX = 'uploads/'
 export const BACKUP_PREFIX = 'd1/'
+/**
+ * Persistent rooms' whiteboards (J4, e7-t08): in the uploads bucket, but outside UPLOAD_PREFIX, so
+ * the 24 hours do not apply. The sweep counts them towards GLOBAL_FILE_CAP_BYTES (worker/sweep.ts)
+ */
+export const BOARD_PREFIX = 'boards/'
 
 export const FILES_API = '/api/files'
 

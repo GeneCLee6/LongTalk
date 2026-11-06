@@ -164,6 +164,16 @@ test('Alice opens the board and draws, Bob sees it, late Carol gets the replay',
     await bob.page.setViewportSize({ width: 900, height: 700 })
     await expectLine(bob, -0.1)
     await bob.page.setViewportSize({ width: 1280, height: 800 })
+    // The stage eases to its new size: drawing during that would miss where it aims
+    let last = ''
+    await expect
+      .poll(async () => {
+        const now = JSON.stringify(await board(bob).boundingBox())
+        const settled = now === last
+        last = now
+        return settled
+      })
+      .toBe(true)
   })
 
   await test.step('Bob draws too, and his own zoom and pan are his alone', async () => {
@@ -384,5 +394,36 @@ test('a phone sees the board and its tools fit (the fingers\' details are e7-t09
   expect(overflow).toBeLessThanOrEqual(0)
   await expectNoViolations(page, 'the whiteboard on a phone')
   await context.close()
+  await alice.context.close()
+})
+
+test('the keyboard draws on the board, and the export dialog and the cursor pass axe (J4, e7-t09)', async ({
+  browser,
+}) => {
+  const path = await newRoom(await browser.newPage())
+  const alice = await member(browser, path, 'Alice')
+  await menuItem(alice, strings.whiteboard.open)
+  await expect(tools(alice)).toBeVisible()
+
+  await tools(alice).getByRole('button', { name: strings.annotation.modes.pen, exact: true }).focus()
+  await alice.page.keyboard.press('Enter')
+  const cursor = alice.page.getByRole('application', { name: strings.annotation.keyboard.cursor })
+  await expect(cursor).toBeFocused()
+  await expectNoViolations(alice.page, 'the keyboard pen')
+  await alice.page.keyboard.press('Enter')
+  for (let i = 0; i < 5; i += 1) await alice.page.keyboard.press('Shift+ArrowRight')
+  await alice.page.keyboard.press('Enter')
+  // From the centre, 40 px at a time: 0.2 of a world unit along
+  for (const x of [0.05, 0.15]) await expect.poll(() => paintedAt(alice, x, 0)).toBe(true)
+  expect(await paintedAt(alice, 0, 0.05)).toBe(false)
+  await alice.page.keyboard.press('Escape')
+  await expect(cursor).toBeHidden()
+
+  await board(alice).getByRole('button', { name: strings.annotation.exportButton }).click()
+  await expect(
+    alice.page.getByRole('dialog', { name: strings.annotation.exporting.boardTitle }),
+  ).toBeVisible()
+  await expectNoViolations(alice.page, 'the export dialog')
+  await alice.page.keyboard.press('Escape')
   await alice.context.close()
 })

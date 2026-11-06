@@ -134,79 +134,81 @@ export function AnnotationToolbar({
 
   return (
     <Bar role="toolbar" aria-label={text.toolbar} onKeyDown={moveAlong}>
-      {!folded && (
-        <>
-          <Group role="group" aria-label={text.toolGroup}>
-            {MODES.map((name) => {
-              const Icon = MODE_ICON[name]
-              return (
-                <Tool
-                  key={name}
-                  type="button"
-                  aria-label={text.modes[name]}
-                  title={text.modes[name]}
-                  aria-pressed={mode === name}
-                  // A click from the keyboard has no pointer to place a text mark with
-                  onClick={(event) => onMode(name, event.detail === 0)}
-                >
-                  <Icon />
-                </Tool>
-              )
-            })}
-          </Group>
-          {compact ? (
-            <Tool
-              type="button"
-              aria-label={text.style}
-              title={text.style}
-              aria-expanded={styleOpen}
-              onClick={() => setStyleOpen((open) => !open)}
-            >
-              <WidthDot $size={WIDTH_DOT[width]} $paint={annotation.colors[color]} />
-            </Tool>
-          ) : (
-            style
-          )}
-          <Group role="group" aria-label={text.historyGroup}>
-            <Tool
-              type="button"
-              aria-label={text.undo}
-              title={text.undo}
-              disabled={!drawer.canUndo}
-              onClick={() => drawer.undo()}
-            >
-              <UndoIcon />
-            </Tool>
-            <Tool
-              type="button"
-              aria-label={text.redo}
-              title={text.redo}
-              disabled={!drawer.canRedo}
-              onClick={() => drawer.redo()}
-            >
-              <RedoIcon />
-            </Tool>
-            <Tool
-              type="button"
-              aria-label={text.clear}
-              title={text.clear}
-              onClick={() => drawer.clearOwn()}
-            >
-              <ClearIcon />
-            </Tool>
-          </Group>
-        </>
-      )}
-      <Tool
-        type="button"
-        aria-label={folded ? text.unfold : text.fold}
-        title={folded ? text.unfold : text.fold}
-        aria-expanded={!folded}
-        $flip={folded}
-        onClick={() => setFolded((now) => !now)}
-      >
-        <ChevronUpIcon />
-      </Tool>
+      <Row $scrolls={compact}>
+        {!folded && (
+          <>
+            <Group role="group" aria-label={text.toolGroup}>
+              {MODES.map((name) => {
+                const Icon = MODE_ICON[name]
+                return (
+                  <Tool
+                    key={name}
+                    type="button"
+                    aria-label={text.modes[name]}
+                    title={text.modes[name]}
+                    aria-pressed={mode === name}
+                    // A click from the keyboard has no pointer to place a text mark with
+                    onClick={(event) => onMode(name, event.detail === 0)}
+                  >
+                    <Icon />
+                  </Tool>
+                )
+              })}
+            </Group>
+            {compact ? (
+              <Tool
+                type="button"
+                aria-label={text.style}
+                title={text.style}
+                aria-expanded={styleOpen}
+                onClick={() => setStyleOpen((open) => !open)}
+              >
+                <WidthDot $size={WIDTH_DOT[width]} $paint={annotation.colors[color]} />
+              </Tool>
+            ) : (
+              style
+            )}
+            <Group role="group" aria-label={text.historyGroup}>
+              <Tool
+                type="button"
+                aria-label={text.undo}
+                title={text.undo}
+                disabled={!drawer.canUndo}
+                onClick={() => drawer.undo()}
+              >
+                <UndoIcon />
+              </Tool>
+              <Tool
+                type="button"
+                aria-label={text.redo}
+                title={text.redo}
+                disabled={!drawer.canRedo}
+                onClick={() => drawer.redo()}
+              >
+                <RedoIcon />
+              </Tool>
+              <Tool
+                type="button"
+                aria-label={text.clear}
+                title={text.clear}
+                onClick={() => drawer.clearOwn()}
+              >
+                <ClearIcon />
+              </Tool>
+            </Group>
+          </>
+        )}
+        <Tool
+          type="button"
+          aria-label={folded ? text.unfold : text.fold}
+          title={folded ? text.unfold : text.fold}
+          aria-expanded={!folded}
+          $flip={folded}
+          onClick={() => setFolded((now) => !now)}
+        >
+          <ChevronUpIcon />
+        </Tool>
+      </Row>
       {!folded && compact && styleOpen && <StyleRow>{style}</StyleRow>}
     </Bar>
   )
@@ -218,10 +220,7 @@ const Bar = styled.div`
   top: ${space(12)};
   left: 50%;
   transform: translateX(-50%);
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  align-items: center;
+  display: grid;
   gap: ${space(1)};
   width: max-content;
   max-width: calc(100% - ${space(4)});
@@ -231,19 +230,40 @@ const Bar = styled.div`
   color: ${colorToken.fg};
   font-size: ${fontSize.nameplate};
   cursor: default;
-  touch-action: manipulation;
+`
+
+/**
+ * On a small tile one row that a finger slides along (J4, e7-t09): wrapped, seven tools at the size
+ * of a fingertip and the rest take three rows of a phone's sheet. A pan here is the row's, the only
+ * gesture allowed on a tile that otherwise keeps every finger to itself.
+ */
+const Row = styled.div<{ $scrolls: boolean }>`
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: ${space(1)};
+  min-width: 0;
+  ${({ $scrolls }) =>
+    $scrolls
+      ? `
+        justify-content: flex-start;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+        touch-action: pan-x;
+        > * { flex: none; }
+      `
+      : 'flex-wrap: wrap; touch-action: manipulation;'}
 `
 
 const Group = styled.div`
   display: flex;
-  flex-wrap: wrap;
   justify-content: center;
   align-items: center;
   gap: ${space(0.5)};
 `
 
 const StyleRow = styled.div`
-  flex-basis: 100%;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;

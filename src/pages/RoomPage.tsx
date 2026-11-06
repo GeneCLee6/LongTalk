@@ -1943,6 +1943,7 @@ function Room({
           picker={mainPicker}
           recording={recordingText}
           onClose={mayCloseThisBoard ? closeBoard : undefined}
+          roomName={roomInfo?.name ?? null}
         />
       </Suspense>
     ) : ownView && state.you ? (
@@ -1956,6 +1957,7 @@ function Room({
           me: mayDraw(annotationPolicy, role, true) ? state.you : null,
           manage: mayClearLayer(role, true),
           nameOf: nameOnMarks,
+          roomName: roomInfo?.name ?? null,
         }}
         recording={recordingText}
         picker={mainPicker}
@@ -1978,6 +1980,7 @@ function Room({
           me: mayDraw(annotationPolicy, role, false) ? state.you : null,
           manage: mayClearLayer(role, false),
           nameOf: nameOnMarks,
+          roomName: roomInfo?.name ?? null,
         }}
         recording={recordingText}
         picker={mainPicker}

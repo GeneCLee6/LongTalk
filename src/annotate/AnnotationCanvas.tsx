@@ -69,6 +69,8 @@ export default function AnnotationCanvas({
   const settledCanvas = useRef<HTMLCanvasElement | null>(null)
   const settledKey = useRef('')
   const pointer = useRef<number | null>(null)
+  /** A finger came down with the text tool: it places a mark if it lifts as a tap (J4) */
+  const textTap = useRef<{ id: number; x: number; y: number } | null>(null)
   const frame = useRef<number | null>(null)
   const scheduleRef = useRef<() => void>(() => undefined)
 
@@ -183,6 +185,7 @@ export default function AnnotationCanvas({
     if (!event.isPrimary) {
       drawer.cancel()
       pointer.current = null
+      textTap.current = null
       return
     }
     if (event.button !== 0) return
@@ -191,6 +194,11 @@ export default function AnnotationCanvas({
     if (!at) return
     switch (mode) {
       case 'text':
+        // A finger may be starting a pinch or a scroll: only a tap places a mark (J4, e7-t09)
+        if (event.pointerType === 'touch') {
+          textTap.current = { id: event.pointerId, x: event.clientX, y: event.clientY }
+          return
+        }
         // The press would take the focus straight back from the box it opens
         event.preventDefault()
         onTextAt?.(at)
@@ -231,6 +239,18 @@ export default function AnnotationCanvas({
   }
 
   const lift = (event: PointerEvent<HTMLCanvasElement>, keep: boolean) => {
+    const tap = textTap.current
+    if (tap?.id === event.pointerId) {
+      textTap.current = null
+      const moved = Math.hypot(event.clientX - tap.x, event.clientY - tap.y)
+      const at = keep && moved <= TAP_SLOP_PX ? onPicture(tap.x, tap.y) : null
+      if (at) {
+        // The lifting finger's click would land outside the box it opens and take the focus back
+        event.preventDefault()
+        onTextAt?.(at)
+      }
+      return
+    }
     if (!drawer || pointer.current !== event.pointerId) return
     pointer.current = null
     if (mode === 'laser') {
@@ -256,6 +276,9 @@ export default function AnnotationCanvas({
     />
   )
 }
+
+/** A finger moving no further than this between down and up is a tap */
+const TAP_SLOP_PX = 10
 
 const cursorOf = (mode: AnnotationMode): string =>
   mode === 'text' ? 'text' : mode === 'eraser' ? 'cell' : 'crosshair'

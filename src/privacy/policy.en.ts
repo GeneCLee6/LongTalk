@@ -202,7 +202,15 @@ export const policy = (f: Facts): PolicyDocument => ({
               cells: [
                 'Marks on a shared screen and on the whiteboard: strokes, text and who drew them (the laser pointer is not stored)',
                 'The room',
-                'On a shared screen: deleted when that person stops sharing. On the whiteboard: kept when it is closed, deleted when someone clears it or the meeting ends. Marks on a shared screen can be cleared too, and everything goes when the meeting ends.',
+                'On a shared screen: deleted when that person stops sharing. On the whiteboard: kept when it is closed, deleted when someone clears it or the meeting ends (a personal room’s whiteboard: the next row). Marks on a shared screen can be cleared too, and everything goes when the meeting ends.',
+              ],
+            },
+            {
+              key: 'boards',
+              cells: [
+                'A personal room’s whiteboard: strokes and text, without who drew them',
+                'R2',
+                `Saved every ${f.boardSaveMinutes} minutes during a meeting, when the last person leaves and when the meeting ends, and used by the next meeting, with no fixed limit. Deleted when someone clears it, or with the room or the account; should that fail at the time, the hourly job deletes it.`,
               ],
             },
             {
@@ -562,7 +570,7 @@ export const policy = (f: Facts): PolicyDocument => ({
           kind: 'p',
           text: [
             { text: 'On your account page', href: '/me' },
-            `, a signed-in person can delete the account, which at once deletes its passkeys, signed-in browsers, personal rooms and scheduled meetings, and ends any meeting in those rooms. Backups still hold a copy for up to ${f.backupDays} days (see “Backups”). You can also delete one personal room, scheduled meeting or passkey there. Delete the passkey on your own devices yourself; calendar events and .ics files other people saved are out of LongTalk’s reach.`,
+            `, a signed-in person can delete the account, which at once deletes its passkeys, signed-in browsers, personal rooms (with their whiteboards) and scheduled meetings, and ends any meeting in those rooms. Backups still hold a copy for up to ${f.backupDays} days (see “Backups”). You can also delete one personal room, scheduled meeting or passkey there. Delete the passkey on your own devices yourself; calendar events and .ics files other people saved are out of LongTalk’s reach.`,
           ],
         },
         {

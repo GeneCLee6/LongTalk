@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -540,6 +540,67 @@ test('fullscreen fills the screen, keeps the overlay, and shows the recording no
   await expectPixel(page, await expectedAt(page, { x: 0.5, y: 0.5 }, WIDE), ANNOTATION_RED)
   await controls(page).getByRole('button', { name: strings.screenShare.exitFullscreen }).click()
   await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull()
+})
+
+test('exporting a share: the frame and the marks, in a real PNG and a real PDF (AC-7.5)', async ({
+  page,
+}) => {
+  await open(page, '?w=1600&h=900')
+  // A stroke along the top: the tools out, then a line
+  await controls(page).getByRole('button', { name: strings.screenShare.annotate }).click()
+  await expect(canvas(page)).toBeVisible()
+  const from = await expectedAt(page, { x: 0.4, y: 0.5 }, { width: 1600, height: 900 })
+  const to = await expectedAt(page, { x: 0.6, y: 0.5 }, { width: 1600, height: 900 })
+  await page.mouse.move(from.x, from.y)
+  await page.mouse.down()
+  await page.mouse.move(to.x, to.y, { steps: 5 })
+  await page.mouse.up()
+  // Zoomed in: the file still has the whole picture
+  await tile(page).focus()
+  await page.keyboard.press('+')
+
+  const save = async (choice: string) => {
+    await controls(page).getByRole('button', { name: strings.annotation.exportButton }).click()
+    const dialog = page.getByRole('dialog', { name: strings.annotation.exporting.shareTitle })
+    await expect(dialog).toBeVisible()
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      dialog.getByRole('button', { name: choice }).click(),
+    ])
+    await expect(dialog).toBeHidden()
+    return { name: download.suggestedFilename(), bytes: readFileSync(await download.path()) }
+  }
+
+  const png = await save(strings.annotation.exporting.framePng)
+  expect(png.name).toContain('週會')
+  expect(png.name).toMatch(/\d{4}-\d{2}-\d{2} \d{2}-\d{2}\.png$/)
+  expect([...png.bytes.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  expect([png.bytes.readUInt32BE(16), png.bytes.readUInt32BE(20)]).toEqual([1600, 900])
+  // Decoded by the browser, as anything opening it would: the picture's square and the line
+  const colours = await page.evaluate(async (base64) => {
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }))
+    const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext('2d')!
+    context.drawImage(bitmap, 0, 0)
+    const at = (x: number, y: number) => {
+      const [r, g, b] = context.getImageData(x, y, 1, 1).data
+      return { r, g, b }
+    }
+    return { square: at(400, 225), line: at(800, 450), plain: at(800, 200) }
+  }, png.bytes.toString('base64'))
+  expect(near(colours.square, MARK_GREEN)).toBe(true)
+  expect(colours.line.r).toBeGreaterThan(colours.line.g)
+  expect(near(colours.plain, BACKGROUND)).toBe(true)
+
+  const pdf = await save(strings.annotation.exporting.framePdf)
+  expect(pdf.name).toMatch(/\.pdf$/)
+  const text = pdf.bytes.toString('latin1')
+  expect(text.startsWith('%PDF-1.4\n')).toBe(true)
+  expect(text.endsWith('%%EOF\n')).toBe(true)
+  expect(text).toContain('/Count 1')
+  expect(text).toContain('/Width 1600 /Height 900')
+  const xref = Number(/startxref\n(\d+)\n/.exec(text)![1])
+  expect(text.slice(xref, xref + 5)).toBe('xref\n')
 })
 
 test('the tile and its controls have no axe violations', async ({ page }) => {

@@ -210,7 +210,19 @@ export class AnnotationDrawer {
     return true
   }
 
+  /**
+   * Someone cleared what we are drawing, or the room took it back (J4): it stays gone. The room
+   * refuses it too (worker/room-annotations.ts); this only keeps it off our own screen and history
+   */
+  private abandonedLost(): boolean {
+    const { current } = this
+    if (!current || !this.store.lost(this.share, current.stroke.id)) return false
+    this.current = null
+    return true
+  }
+
   move(at: Point, aspect: number): void {
+    if (this.abandonedLost()) return
     const { current } = this
     if (!current) return
     const next = extendStroke(current.stroke, at, aspect, this.space)
@@ -226,6 +238,7 @@ export class AnnotationDrawer {
 
   /** The pointer lifted: the stroke is kept, simplified, or goes if it came to nothing */
   end(aspect: number): void {
+    if (this.abandonedLost()) return
     const { current } = this
     if (!current) return
     this.current = null

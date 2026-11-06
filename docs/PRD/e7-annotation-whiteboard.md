@@ -46,6 +46,10 @@ depends_on: [E3, E4]
 - J2 定案：錄影畫面（I4）包含分享上的筆跡（`Scene.share.marks`，每幀讀；還沒同意錄影的人畫的不錄），不含雷射筆。
 - J1 定案的數字：顏色八種（`tokens.ts` 的 `annotation`：玫瑰、琥珀、綠、藍綠、藍、紫、白、墨），線寬三段是畫面短邊的 0.3／0.6／1.2%（隨畫面與縮放變大，大家看到的比例一樣）；一筆最多 800 點（一則訊息放得下，畫到上限自動抽稀、不會停筆），每個分享 2000 筆（`putStroke` 目前丟掉最舊的，點陣合併由 J2 決定）。
 - 全部 lazy 載入；工具列按下才載。
+- J4 定案：**匯出**（`e7-t07`）全部在瀏覽器裡，什麼都不上傳，所以看得到的人都能匯出（等於截圖）。白板：目前畫面 PNG（畫面大小 × pixel ratio）、全部內容 PNG（筆跡的範圍加邊距，100% 大小，超過 4096 px 邊長或 1600 萬像素就縮小）、全部內容 PDF。分享：現在這一幀＋筆跡，以收到的解析度（和畫面上的縮放無關）；分享者把畫面藏起來時（J3 防鏡像）只有筆跡，不把他選擇不看的東西寫進檔案。雷射筆、名字標籤、格線不進檔案。**PDF 手寫**（`buildImagePdf`，不到一百行）：每頁一張 JPEG（DCTDecode，品質 0.92），頁面是圖的形狀、長邊 A4（842 pt），沒有函式庫就沒有授權與體積的問題；一頁放得下（橫 A4 比例、100% 時 1600 × 1131）就一頁，放不下切成格子、跳過空白頁，超過 20 頁就整體縮小。頁面以 2 倍像素畫。檔名 `LongTalk <房名> 白板 YYYY-MM-DD HH-mm.png`（過 `sanitizeFileName`）。匯出鈕在控制列，連只能看的人都有；對話框在格子裡，全螢幕照樣用。
+- J4 定案：**跨場保留**（`e7-t08`）。`boards/<slug>/<建立時間>.json` 在 `longtalk-files`（`uploads/` 之外，所以 24 小時的 sweep 看不到）；key 含建立時間，slug 被刪了再被別人用不會拿到舊白板。**只有固定會議室**，一般房間照舊跟著會議消失。存：最後一個人離開時、會議結束或空房關閉時、會議中有變動時最多每 5 分鐘（排程器的 `board`，一間房畫一小時 12 個 Class A）；讀：每場會議第一個人到時（在升級 WebSocket 之前，所以在第一份快照裡；同時到的共用一次讀取）。**白板關著**：下一場不會自己打開，打開才看到（`whiteboard` 是這場會議的狀態）。**不存 `by`**：成員 id 跟著會議結束，存成 `PAST_AUTHOR`，所以舊筆跡沒有人能用橡皮擦或復原拿掉，只有能清除的人能清（「清除標註…」列成「之前的會議」）。**每人的筆數上限不算舊筆跡**，整塊白板的上限照算。**帳本**：寫入前向 `FileLedgerDO` 保留增加的量，滿了就不存（留著舊的，log 寫原因），縮小時退回；sweep 把 `boards/` 加進校正的總數。**讀失敗**：會議照開、沒有舊白板，下一個到的人或下一次 `board` 工作再試，讀到之前絕不覆蓋；一直讀不到就在關閉時把這場畫的疊上去（`merge`）。**存失敗**：隔一秒重試共三次，再失敗等下一次；關閉時那一次也失敗就只剩上一次存的（最多少 5 分鐘）。**刪除**：`RoomDO.destroy` 等 R2 刪完才回；失敗不擋（房間與帳號照刪），每小時的 sweep 比對 D1 的 `rooms`（slug 與建立時間都要一樣）把孤兒刪掉，問不到 D1 就什麼都不刪。
+- J4 定案：**觸控與鍵盤**（`e7-t09`）。一指畫、第二指一落下這筆就取消並變成捏合與平移（J2 就有，現在有測試）；文字工具在觸控上**放開才算點一下**（落下可能是捏合）；分享格與白板 `touch-action: none`、`overscroll-behavior: contain`、`user-select: none`、`-webkit-touch-callout: none`，再加 Safari 的 `gesturestart`／`gesturechange`。iOS 從邊緣滑回上一頁網頁擋不了（系統手勢）。工具列在窄格子（< 720 px）是**一列可以左右滑**（三列 44 px 會蓋掉手機半張白板），顏色與粗細收進一顆鈕；控制列也是一列可滑。**鍵盤**：用鍵盤選工具（`click` 的 `detail` 是 0）會出現一個游標（`role="application"`），方向鍵移動 10 px（Shift 40 px），Enter 或空白鍵是落筆與提筆，Esc 取消這一筆、再一次回工具列；橡皮擦是 Enter 擦掉這裡自己的，雷射筆跟著方向鍵；文字直接開輸入框。提示文字在一直存在的 `role="status"`。**筆跡本身沒有文字替代**：畫出來的圖對螢幕閱讀器只有畫布的名字，這是畫圖本身的限制，匯出也一樣；文字標註之後可以另外列出來。
+- J4 定案：**清除時還在畫的那一筆**（J3 記下的問題）不會再回來：`RoomAnnotations` 記下「最後一次 `add` 說還在畫」的筆跡，別人清除時把它們記成清除過，之後那筆的 `add`（包括最後完整的那個）被拒、回 `remove` 給作者；作者的 `AnnotationDrawer` 發現筆跡不見了也停筆，不留在畫面與復原紀錄。只存在記憶體：DO 剛好被逐出的那一筆可能回來。
 - J3 定案：**權限三態**是 `RoomInfo.annotationPolicy`（`everyone`／`sharer`／`off`），主持人、共同主持人在參與者面板設定，分享畫面與白板共用一個設定。判斷在 `shared/roles.ts` 的 `mayDraw`：`everyone` 所有在會議裡的人；`sharer` 主持人、共同主持人與這一層的主人（分享者；白板是打開它的人）；`off` **沒有人**，主持人也不行。伺服器逐個操作判斷：`add`、`update`、`laser` 被擋就回 `forbidden`，被拒的筆跡大家一起拿掉；**拿回自己的**（`remove`、清除自己的）不需要畫圖權限，所以畫到一半被關掉不會留下半筆。已經畫的留著。
 - J3 定案：**清除他人**是新訊息 `clearAnnotations`（`by` null 是全部），`shared/roles.ts` 的 `mayClearLayer`：主持人、共同主持人、這一層的主人（分享者可以清掉主持人畫的）；權限關掉時照樣能清，所以按鈕在控制列（「清除標註…」）而不是會消失的工具列。先選全部或某人（附筆數），再確認一次；不能復原。少了筆跡的人與分享者收到 `notice`（`annotationsCleared`），動手的人不用。**橡皮擦還是只擦自己的**：別人的筆跡只透過這條有確認的路消失，不會被誤拖掉。
 - J3 定案：**白板是另一層**（`WHITEBOARD_LAYER`），同一套 `annotate`／`annotation`／`annotations` 訊息、同一個 `AnnotationDrawer`、畫布與工具列，差別只在座標空間（`shared/annotation.ts` 的 `CoordSpace`）。世界座標：`shared/boardGeometry.ts` 把白板的「畫面」定義成一個世界單位見方的正方形，100% 時 1000 px，點可以在正方形外（±1000 單位，約一百萬像素，當作無限）；畫面比例是 1，所以線寬、字級、橡皮的距離都不用改。每個人自己平移縮放（25%–400%），只有筆跡同步；大家一開始都在世界中央，所以不同螢幕也看到同一個地方。
@@ -59,8 +63,8 @@ depends_on: [E3, E4]
 - [x] AC-7.1 — 畫筆、螢光筆、箭頭、矩形、文字、橡皮、清除、顏色與寬度、復原；雷射筆；高 DPI 清晰。（J2 #45：`e2e/local/annotation.spec.ts` 在真的瀏覽器裡讀畫面像素，高 DPI 是 `deviceScaleFactor: 2`；橡皮與清除目前只動自己的，清除他人屬於 AC-7.3；手機手指的細節是 `e7-t09`）
 - [ ] AC-7.2 — 多人同時畫互相即時可見（< 300 ms）；筆跡對齊分享畫面且在任何格子尺寸下對齊；新進者重播全部筆跡；分享停止後清空。（J2 #45：`e2e/annotation.spec.ts` 在 PR 預覽經真的 RoomDO 與 SFU 都驗過，延遲量測見 #45；**不勾**：媒體相關要兩台不同裝置實測（CLAUDE.md 規則 7），`DEPLOY.md` §5 第 30 步）
 - [x] AC-7.3 — 權限三態；分享者與主持人可清除全部或某人；被禁止時工具列不出現。（J3 #47：伺服器的判斷在 `tests/worker/room-j3.test.ts` 逐格測過；`e2e/annotation.spec.ts` 在 PR 預覽經真的 RoomDO 與 SFU 驗過工具列消失、偽造筆跡被拒、分享者清除並通知；權限不涉及媒體品質，實機外觀在 `DEPLOY.md` §5 第 31 步）
-- [ ] AC-7.4 — 白板分頁：無限畫布、平移縮放、格線、多人同步；持久房間跨場保留。（J3 #47：前四項做完，`e2e/local/whiteboard.spec.ts` 讀真的像素、`e2e/annotation.spec.ts` 在 PR 預覽驗過；**不勾**：持久房間跨場保留是 J4 `e7-t08`）
-- [ ] AC-7.5 — 匯出 PNG（目前視窗／全部）與多頁 PDF；檔名含房名與日期。
+- [x] AC-7.4 — 白板分頁：無限畫布、平移縮放、格線、多人同步；持久房間跨場保留。（J3 #47：前四項，`e2e/local/whiteboard.spec.ts` 讀真的像素、`e2e/annotation.spec.ts` 在 PR 預覽驗過；J4 #48：跨場保留，`e2e/whiteboard-j4.spec.ts` 在 PR 預覽經真的 R2：畫、結束會議、回來還在、清除後也清掉、刪帳號；`tests/worker/room-j4.test.ts` 假時鐘測存、讀、刪、cron、帳本；白板不是媒體，實機外觀在 `DEPLOY.md` §5 第 32 步）
+- [x] AC-7.5 — 匯出 PNG（目前視窗／全部）與多頁 PDF；檔名含房名與日期。（J4 #48：`e2e/whiteboard-j4.spec.ts` 在真的瀏覽器下載檔案、逐位元組讀 PNG 與 PDF 的標頭與尺寸，`tests/app/exportFile.test.ts` 比對 PDF 結構與多頁；分享畫面的匯出（現在的畫面＋筆跡）在 `e2e/local/annotation.spec.ts` 讀過）
 
 ## Task 拆分（M2；動工前再細拆）
 
@@ -70,9 +74,9 @@ depends_on: [E3, E4]
 - [x] `e7-t04` RoomDO 同步：節流、增量、快照重播、分享停止清空 · AC-7.2 · #45（`worker/room-annotations.ts`、`src/room/annotationStore.ts`、協定 v20）
 - [x] `e7-t05` 權限三態與清除他人 · AC-7.3 · #47（`shared/roles.ts`、`RoomHost.annotate`／`clearAnnotations`、協定 v21；另外補上 J2 的缺口：分享者看得到筆跡，`ShareTile` 的 `own`）
 - [x] `e7-t06` 白板分頁：無限畫布、平移縮放、格線、同步 · AC-7.4 · #47（`src/annotate/Whiteboard.tsx`、`shared/boardGeometry.ts`）
-- [ ] `e7-t07` 匯出 PNG／PDF · AC-7.5 · S · ← e7-t06
-- [ ] `e7-t08` 持久房間白板保留（R2 JSON） · AC-7.4 · S · ← e7-t06, e1-t13
-- [ ] `e7-t09` 標註與白板的無障礙與觸控（手機手指畫、雙指平移） · AC-7.1 · S · ← e7-t06
+- [x] `e7-t07` 匯出 PNG／PDF · AC-7.5 · #48（`src/annotate/ExportMarks.tsx`、`exportFile.ts`、`exportRender.ts`；手寫 PDF，沒有新相依）
+- [x] `e7-t08` 持久房間白板保留（R2 JSON） · AC-7.4 · #48（`worker/board-store.ts`、`RoomHost.prepareBoard`／`saveBoard`、`worker/sweep.ts`）
+- [x] `e7-t09` 標註與白板的無障礙與觸控（手機手指畫、雙指平移） · AC-7.1 · #48（鍵盤畫筆、手機工具列一列可滑、點一下才放文字、頁面手勢；順便修 J3 的清除競態）；真的手指在 `DEPLOY.md` §5 第 32 步
 
 ## 風險與對策
 
