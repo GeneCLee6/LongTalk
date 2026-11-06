@@ -50,7 +50,7 @@
 | CI job | 瀏覽器 | 測什麼 |
 | --- | --- | --- |
 | `Preview / e2e` | Chromium × 3 | 經 SFU 互看互聽、開關、分享（替身）與分享音訊、simulcast 選層、聊天、主持人控制、等候室、進階噪音抑制、純音訊（`e2e/interop.spec.ts`） |
-| `Preview / e2e-firefox` | Firefox ＋ Chromium；WebKit ＋ Chromium | 不同引擎經 SFU 互看互聽、靜音、互相看分享（替身），並記下各自送出幾層 simulcast（`e2e/crossbrowser.spec.ts`） |
+| `Preview / e2e-firefox` | Firefox ＋ Chromium；WebKit ＋ Chromium | 不同引擎經 SFU 互看互聽、靜音、互相看分享（替身；WebKit 分享時鏡頭先關，§3），並記下各自送出幾層 simulcast（`e2e/crossbrowser.spec.ts`） |
 | `UI checks / browsers` | Chromium、Firefox、WebKit | 偵測結果對這張表、首頁、預先加入（假裝置、拒絕權限、沒有裝置）、兩人進房與聊天、參與者面板、手機大小的視窗（`e2e/local/browsers.spec.ts`；不需要部署、沒有 SFU） |
 | `UI checks / a11y`、`visual` | Chromium | axe、鍵盤、Lighthouse、進階噪音抑制、視覺回歸 |
 
@@ -63,6 +63,7 @@ CI 不能代替實機的：真的鏡頭與麥克風、螢幕選擇器與分頁�
 - **Firefox 的聊天輸入框把送出鈕擠出面板**（H6 修正）：聊天欄的表單是一欄的 grid，Firefox 依 textarea 預設 20 欄的寬度撐開那一欄，送出鈕跑到視窗外。改成 `grid-template-columns: minmax(0, 1fr)`（`src/components/ChatPanel.tsx`），`browsers.spec.ts` 檢查送出鈕整個在畫面內。
 - **Firefox simulcast**：送出 `f`／`h`／`q` 三層 VP8，和 Chromium 一樣；Chromium 看 Firefox、Firefox 看 Chromium 都順（每秒約 20–30 幀）。
 - **WebKit（Safari 的引擎）simulcast**：三層都協商成功、沒有退回單層，但剛加入時只有 `f` 有畫面（`h`、`q` 還是 0×0）；Chromium 照樣收得到 WebKit 的畫面與聲音。真的 Safari 會不會一直只送一層、別人選小格時拿到什麼，要實機確認（`DEPLOY.md` §5「Mac」那段）；風險表（`PRD/e2-media-core-webrtc-sfu.md`）的退路「Safari 退化為單層」仍成立，別人一定看得到。
+- **WebKit 同時送鏡頭與分享會出事**（2026-11-06，#42；Playwright 的 Linux WebKit，真的 Safari 還不知道）：鏡頭開著時，別人鏡頭格子看到的是分享的畫面（每次都這樣），分享本身約四成多解不出來（14／31；發送端不理 PLI，沒有新的關鍵幀，SFU 有照送）；先關鏡頭 0／7。不是選層也不是 simulcast（只送一層照樣發生）。`e2e/crossbrowser.spec.ts` 因此在 WebKit 分享時先關鏡頭，**CI 不測 WebKit「鏡頭＋分享」**。細節在 ADR-001「WebKit 同時送鏡頭與分享」；要實機確認（`DEPLOY.md` §5「Mac」）。
 - **Firefox 的 `getVideoPlaybackQuality()`** 對 MediaStream 的影片一直是 0（不是 LongTalk 的問題），測試改用 `requestVideoFrameCallback` 數幀。Playwright 在 Firefox 的 `fill()` 會觸發輸入法的 composition 事件，緊接著的 Enter 照設計只選字不送出（`chatText.ts` 的 `COMPOSITION_GRACE_MS`），測試改成逐字打。在 WebKit，從 init script 改 `navigator.mediaDevices` 上的方法沒有作用，測試的替身改放在 `MediaDevices.prototype`。
 - **Firefox 的 console 警告**「Using five or more STUN/TURN servers slows down discovery」：Cloudflare TURN 回的 ICE 網址（濾掉 port 53 之後）有 5 個以上。目前不影響連線（CI 互通正常）；要不要少給幾個（例如只留 UDP 3478 與 TLS 443），等實機量過連線時間再決定。
 - **安全標頭（I1，`public/_headers`）**：`UI checks / browsers` 的三個引擎都在這組 CSP（含 `script-src … 'wasm-unsafe-eval'`，RNNoise 的 wasm 要它；Chrome 97+、Firefox 102+、Safari 16+ 認得）、`Permissions-Policy`、`Cross-Origin-Opener-Policy: same-origin` 底下跑，首頁、預先加入、聊天、假裝置都正常，console 沒有警告。`Permissions-Policy` 只有 Chromium 真的照它做；Firefox 不認這個標頭（鏡頭、麥克風、分享照它自己的權限提示），Safari 只認一部分，所以 `camera=(self)` 這類限制在那兩個瀏覽器只是沒效果、不會擋到 LongTalk 自己。Turnstile（`challenges.cloudflare.com` 的 iframe）在 PR 預覽用 Cloudflare 的測試 key；Firefox、WebKit 經首頁開房都通過（`e2e-firefox`）。
