@@ -22,5 +22,5 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["playwright.config.ts", "playwright.local.config.ts", "e2e", "src/strings.ts"],
-  "exclude": ["e2e/local/harness"]
+  "exclude": ["e2e/local/harness", "e2e/local/harness-media"]
 }

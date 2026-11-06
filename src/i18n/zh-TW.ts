@@ -256,6 +256,24 @@ export const zhTWRoom = {
     powerSavingHint: '別人的視訊改收最低畫質、鏡頭每秒 15 格且不送 HD、關掉動畫與進階噪音抑制',
     powerSavingHd: '省電模式開著，不送 HD。',
     batteryLow: '電量不多了：可以在「更多 › 設定 › 效能」開啟省電模式',
+    // L4 (e6-t06, e6-t07)
+    blur: '背景模糊',
+    blurHint: '在你的裝置上算出人的輪廓、模糊其他部分，畫面不會送到別的地方；比較耗電，第一次開要下載約 4 MB',
+    blurLoading: '正在準備背景模糊…',
+    blurPowerSaving: '省電模式開著，背景模糊暫停。',
+    blurMonthLow: '本月流量快用完，鏡頭改送低畫質，背景模糊暫停。',
+    blurOverloaded: '你的裝置忙不過來，已關閉背景模糊：現在別人看得到你的背景',
+    blurFailed: '無法開啟背景模糊：現在別人看得到你的背景',
+    mirror: '鏡像顯示我的畫面',
+    mirrorHint: '只影響你自己看到的；別人看到的永遠不是鏡像',
+    selfView: '自拍格',
+    selfViewHint: '你的畫面浮在舞台上、不占版面，可以拖到任何位置',
+  },
+  // The floating self-view tile (e6-t07)
+  selfView: {
+    label: '自拍格',
+    move: '移動自拍格',
+    moveHint: '用方向鍵移動，按住 Shift 移得比較遠；也可以直接拖曳',
   },
   // Speaking while muted (e6-t03, AC-6.3)
   mutedSpeech: {
@@ -346,6 +364,11 @@ export const zhTWRoom = {
     // The side panel's switch between chat and participants (DESIGN.md mockup)
     tabs: '側欄內容',
     tabParticipants: (count: number) => `參與者 ${count}`,
+    // Each person's volume (e6-t08): only on this computer
+    volumeOf: (name: string) => `${name} 的音量（只有你聽到的）`,
+    shareVolumeOf: (name: string) => `${name} 分享的聲音（只有你聽到的）`,
+    volumeValue: (percent: number) => `${percent}%`,
+    volumeUnsupported: '這個瀏覽器不能個別調整每個人的音量（iPhone、iPad 只能用裝置的音量鍵）。',
     list: '參與者名單',
     host: '主持人',
     cohost: '共同主持人',
@@ -1213,6 +1236,13 @@ export const zhTWRoom = {
       on: '開',
     },
     noiseLoad: (percent: string, latency: string) => `開・處理器 ${percent}・延遲 ${latency}`,
+    blur: '背景模糊',
+    blurStates: {
+      off: '關',
+      loading: '載入中',
+      on: '開',
+    },
+    blurLoad: (fps: number, mask: string) => `開・每秒 ${fps} 格・遮罩 ${mask}`,
     export: '匯出 JSON',
     exportHint: '給除錯用的檔案：含成員名字，不含密碼、權杖與 SDP。',
     exported: '已下載連線統計',

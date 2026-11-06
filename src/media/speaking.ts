@@ -50,6 +50,8 @@ interface Watch {
   meter: LevelMeter | null
   state: SpeakingState
   listeners: Set<(speaking: boolean) => void>
+  /** Who wants the level itself, each reading (the participants panel's meters, e6-t08) */
+  levels: Set<(level: number) => void>
 }
 
 const pageHidden = () => typeof document !== 'undefined' && document.hidden
@@ -79,26 +81,55 @@ export class SpeakingMonitor {
 
   /** Calls `listener` whenever `track` starts or stops speaking; returns the unsubscribe */
   watch(track: MediaStreamTrack, listener: (speaking: boolean) => void): () => void {
-    let watch = this.watches.get(track)
-    if (!watch) {
-      if (typeof MediaStream === 'undefined') return () => {}
-      const stream = new MediaStream([track])
-      watch = { stream, meter: null, state: QUIET, listeners: new Set() }
-      this.watches.set(track, watch)
-      const context = this.ensureContext()
-      if (context) watch.meter = attachLevelMeter(context, stream)
-      this.ensureTimer()
-    }
+    const watch = this.ensureWatch(track)
+    if (!watch) return () => {}
     watch.listeners.add(listener)
     if (watch.state.speaking) listener(true)
-    const current = watch
     return () => {
-      current.listeners.delete(listener)
-      if (current.listeners.size > 0 || this.watches.get(track) !== current) return
-      current.meter?.close()
-      this.watches.delete(track)
-      if (this.watches.size === 0) this.stop()
+      watch.listeners.delete(listener)
+      this.release(track, watch)
     }
+  }
+
+  /**
+   * Calls `listener` with `track`'s level (0–1) at every reading: the same analyser and timer as
+   * the speaking outline, so a panel of meters adds no audio work; only while someone listens
+   */
+  watchLevel(track: MediaStreamTrack, listener: (level: number) => void): () => void {
+    const watch = this.ensureWatch(track)
+    if (!watch) return () => {}
+    watch.levels.add(listener)
+    return () => {
+      watch.levels.delete(listener)
+      this.release(track, watch)
+    }
+  }
+
+  private ensureWatch(track: MediaStreamTrack): Watch | null {
+    const existing = this.watches.get(track)
+    if (existing) return existing
+    if (typeof MediaStream === 'undefined') return null
+    const stream = new MediaStream([track])
+    const watch: Watch = {
+      stream,
+      meter: null,
+      state: QUIET,
+      listeners: new Set(),
+      levels: new Set(),
+    }
+    this.watches.set(track, watch)
+    const context = this.ensureContext()
+    if (context) watch.meter = attachLevelMeter(context, stream)
+    this.ensureTimer()
+    return watch
+  }
+
+  private release(track: MediaStreamTrack, watch: Watch): void {
+    if (watch.listeners.size > 0 || watch.levels.size > 0) return
+    if (this.watches.get(track) !== watch) return
+    watch.meter?.close()
+    this.watches.delete(track)
+    if (this.watches.size === 0) this.stop()
   }
 
   /** Reads every level once (the timer calls this) */
@@ -110,6 +141,7 @@ export class SpeakingMonitor {
       const next = nextSpeaking(watch.state, level, now)
       const changed = next.speaking !== watch.state.speaking
       watch.state = next
+      for (const listener of watch.levels) listener(level)
       if (changed) for (const listener of watch.listeners) listener(next.speaking)
     }
   }

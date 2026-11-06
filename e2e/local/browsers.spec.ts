@@ -32,7 +32,11 @@ const ENGINE_DIFFERENCES: Record<string, Partial<Record<Capability, string>>> = 
   chromium: {
     webShare: 'Chrome has navigator.share on Windows, macOS and ChromeOS, not in headless Chromium',
   },
-  firefox: {},
+  firefox: {
+    // L4: no WebGL in Playwright's headless Linux Firefox, which MediaPipe needs. Firefox itself and
+    // the canvas path ran on Playwright's Windows Firefox; real Firefox: DEPLOY.md §5 step 33
+    backgroundBlur: "Depends on WebGL, which this machine's headless Firefox may not have",
+  },
   webkit: {
     webShare: "Safari's share sheet is Safari's own; Playwright's WebKit may not have it",
     // I4: Playwright's Linux WebKit (GTK) does not write any of src/record/format.ts' types;
@@ -41,6 +45,7 @@ const ENGINE_DIFFERENCES: Record<string, Partial<Record<Capability, string>>> = 
     // I2: Playwright's Linux WebKit (GTK) has no WebAuthn; Safari 13+ has passkeys (DEPLOY.md §5
     // step 26)
     passkeys: "Playwright's Linux WebKit has no WebAuthn; Safari does",
+    backgroundBlur: "Depends on WebGL, which Playwright's Linux WebKit may not have; Safari does",
   },
 }
 
@@ -116,6 +121,68 @@ test('what LongTalk detects agrees with docs/BROWSER-SUPPORT.md', async ({
     if (value !== expected) disagreements.push(`${key}: detected ${value}, doc says ${mark}`)
   }
   expect(disagreements, `${column} column of docs/BROWSER-SUPPORT.md`).toEqual([])
+})
+
+test('背景模糊 runs where it is offered (e6-t06)', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  test.skip(!(await hasWebRtc(page)), 'this build of the engine has no WebRTC')
+  await joinRoom(page, await newRoom(page), 'Ada')
+  const toolbar = page.getByRole('toolbar', { name: strings.devices.controls })
+  await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
+  await page.getByRole('menuitem', { name: strings.settings.menu }).click()
+  const settings = page.getByRole('dialog', { name: strings.settings.title })
+  await settings.getByRole('tab', { name: strings.settings.video }).click()
+  const toggle = settings.getByRole('switch', { name: strings.settings.blur })
+  // Where this machine's engine has no WebGL it must not be offered at all: that is the hiding
+  if ((await toggle.count()) === 0) {
+    const detected = await detect(page)
+    expect(detected.backgroundBlur).toBe(false)
+    await report(testInfo, 'blur', { project: testInfo.project.name, offered: false })
+    return
+  }
+  const tile = page.getByRole('figure', { name: strings.room.tileYou('Ada') }).locator('video')
+  await expect(tile).toBeVisible()
+  await toggle.check()
+  await expect(settings.getByText(strings.settings.blurLoading)).toHaveCount(0, { timeout: 60_000 })
+  // Playwright's Linux WebKit has WebGL on the page but not in the worker, which detection cannot
+  // ask without a worker of its own: there it must fail the honest way, said aloud and with the
+  // camera back. Everywhere else a failure is a failure. Real Safari: DEPLOY.md §5 step 33
+  const failed = page.getByText(strings.settings.blurFailed)
+  // A failure to start shows up at the first picture, a moment after it has loaded; its notice
+  // goes after a few seconds, so look as soon as the switch turns itself off
+  await toggle
+    .evaluate(
+      (input: HTMLInputElement) =>
+        new Promise<void>((resolve) => {
+          const end = performance.now() + 5_000
+          const check = () => {
+            if (!input.isConnected || !input.checked || performance.now() > end) resolve()
+            else requestAnimationFrame(check)
+          }
+          check()
+        }),
+    )
+    .catch(() => undefined)
+  if (!(await toggle.isChecked())) {
+    expect(testInfo.project.name).toBe('webkit')
+    await expect(failed).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(tile).toBeVisible()
+    await report(testInfo, 'blur', { project: testInfo.project.name, failedToStart: true })
+    return
+  }
+  await expect(failed).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  // The picture moves through it (whichever way this engine takes frames in and out)
+  const moving = await tile.evaluate(async (video: HTMLVideoElement) => {
+    const started = video.currentTime
+    await new Promise((resolve) => setTimeout(resolve, 3_000))
+    return { size: video.videoWidth, advanced: video.currentTime - started }
+  })
+  await report(testInfo, 'blur', { project: testInfo.project.name, ...moving })
+  expect(moving.size).toBeGreaterThan(0)
+  expect(moving.advanced).toBeGreaterThan(1)
+  await expect(page.getByText(strings.settings.blurFailed)).toHaveCount(0)
 })
 
 test('home page, and a room made from it', async ({ page }) => {

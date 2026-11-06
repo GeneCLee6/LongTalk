@@ -96,6 +96,7 @@ export const SESSION_STORAGE_KEYS = [
   'longtalk.session.<room>',
   'longtalk.password.<room>',
   'longtalk:mainShare:<room>',
+  'longtalk:volumes:<room>',
 ] as const
 
 export type StorageKey =

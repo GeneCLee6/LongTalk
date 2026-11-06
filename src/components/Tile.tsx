@@ -30,8 +30,10 @@ import { useVideoDemand } from './useVideoDemand.ts'
 
 export interface TileProps {
   name: string
-  /** This browser's own tile: mirrored, marked 「你」 */
+  /** This browser's own tile: marked 「你」 */
   you?: boolean
+  /** Our own tile's picture mirrored (e6-t07, a setting; on unless turned off). Only ever ours. */
+  mirrored?: boolean
   /** The member dropped and may come back (RoomDO keeps them 60 s), or we are reconnecting */
   reconnecting?: boolean
   /** The member's camera (received, or our own local track); null when it is off */
@@ -77,6 +79,7 @@ export interface TileProps {
 export function Tile({
   name,
   you = false,
+  mirrored = true,
   reconnecting = false,
   video,
   micMuted = false,
@@ -130,7 +133,7 @@ export function Tile({
           autoPlay
           muted
           playsInline
-          $mirrored={you}
+          $mirrored={you && mirrored}
         />
       ) : (
         <Avatar aria-hidden="true" style={{ background: avatarColor(name) }}>

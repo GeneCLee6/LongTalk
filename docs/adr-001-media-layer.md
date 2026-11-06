@@ -337,6 +337,19 @@ interface MediaTransport {
 
 **沒有驗證的**：真的 Safari 會不會這樣。CI 的是 Playwright 的 Linux WebKit，不是 Safari。`e2e/crossbrowser.spec.ts` 現在按分享時鏡頭開著，靠上面這個機制，所以測到的是「使用者開著鏡頭按分享」這條路，但不是「兩個編碼器一起跑」：app 不會那樣送。要知道 Safari 需不需要這個機制，要實機（`DEPLOY.md` §5「Mac」）。如果將來要讓 Safari 同時送兩個，再回來做：發送端看 `pliCount` 漲而 `keyFramesEncoded` 不動（能力偵測，不看 user agent）的處理。
 
+## 背景模糊（L4，2026-11-06，`e6-t06`，#50）
+
+做法與決定在 `PRD/e6-audio-video-quality.md`「L4 的做法與決定」。媒體層相關的兩點：**處理後的軌和別的軌一樣經 `MediaTransport.replaceTrack` 換上去**，沒有新的 transceiver、不重新協商；**simulcast 是 sender 的參數**，換軌不影響。`e2e/local/blur.spec.ts` 用兩個 PeerConnection 量過：換上去後 `f`／`h`／`q` 三層（1280、640、320 寬）都繼續出幀，`negotiationneeded` 0 次；關掉換回原本的軌也一樣。CI 的互通測試（`e2e/interop.spec.ts`）再經真的 SFU 跑一次。
+
+量測（2026-11-06，Windows、headless Chromium，**沒有 GPU，2D canvas 與 WebGL 都是軟體**；720p 假畫面、編碼三層 VP8；`BLUR_MEASURE=1`，`e2e/local/blur.spec.ts`）：
+
+| | 全部行程 CPU（一核 = 100 %） | 三層 fps | 其他 |
+| --- | --- | --- | --- |
+| 鏡頭 | 82 % | 30 | |
+| 背景模糊 | 195 % | 21 | 每秒 12 張遮罩、一張 19 ms（worker）；畫圖占頁面時間 78 % |
+
+沒有編碼器、用真的 Y4M／MJPEG 假鏡頭的會議室頁：64 % → 95 %，29 fps。**這是最壞的情況，不代表真的筆電**：有 GPU 時 canvas 的畫圖大部分在 GPU；反過來，真的筆電同時還在解別人的視訊。要實機量（`DEPLOY.md` §5 第 33 步）。
+
 ## 後果
 
 - **要自己做的**：房間與軌清單（RoomDO，A3／B1）、desired／actual 訂閱對齊（`e2-t04`）、重連（`e2-t08`）、選層策略（`e2-t12`、`e2-t15`）、統計（`e2-t13`）。這些 LiveKit SDK 會送，Realtime 不會；已經排進 E2 的 task。

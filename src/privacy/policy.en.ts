@@ -21,7 +21,9 @@ const STORAGE: StorageDescriptions = {
   'longtalk.deviceLabels': 'Those devices’ names, to find them again when an id changes',
   'longtalk.view': 'Your layout and “hide myself”',
   'longtalk.prefs': 'Sounds on or off, reactions hidden or shown',
-  'longtalk.media': 'Microphone processing, HD, advanced noise suppression, power saving',
+  'longtalk.media':
+    'Microphone processing, HD, advanced noise suppression, power saving, background blur, mirroring, the self-view tile and where it sits',
+  'longtalk:volumes:<room>': 'The volume you set for each person in that room',
   'longtalk.account':
     'The name of the account signed in here, only so the home page’s link can say so. It is not what signs you in',
   'longtalk.locale': 'Your language',
@@ -168,6 +170,7 @@ export const policy = (f: Facts): PolicyDocument => ({
           kind: 'list',
           items: [
             ['Audio, video and screen sharing go from your browser through Cloudflare’s Realtime media servers to the others, and through Cloudflare’s TURN relay when a direct route is blocked. The connection is encrypted on the way, as WebRTC requires, but it is not end-to-end encrypted: Cloudflare’s servers handle the media.'],
+            ['Background blur is computed entirely in your browser (the model and code load from LongTalk’s own site and connect nowhere else); the picture goes nowhere, and others only receive the blurred video.'],
             ['LongTalk has no server-side recording: no code stores audio or video on any server. The only recording is a local one, in the recorder’s own browser (see “Recording”).'],
             ['LongTalk’s own storage holds network addresses only as hashes, never the address itself. Cloudflare still sees your address, because that is how the connection works (see “Who else handles your data”).'],
             ['Room passwords are stored only as a salted hash. A link with a password in it carries the password in its address on the first page load, through Cloudflare; the page then removes it from the address bar.'],

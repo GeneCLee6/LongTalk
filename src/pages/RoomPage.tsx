@@ -59,6 +59,7 @@ import {
   useReducedMotion,
 } from '../components/layoutContext.ts'
 import { MemberAudio } from '../components/MemberAudio.tsx'
+import { SelfView } from '../components/SelfView.tsx'
 import type { MenuItem } from '../components/Menu.tsx'
 import { NameDialog } from '../components/NameDialog.tsx'
 import { OfflineScreen } from '../components/OfflineScreen.tsx'
@@ -106,6 +107,7 @@ import {
   canChooseSpeaker,
   canRecordLocally,
   canShareScreen,
+  canSetMemberVolume,
   canSuppressNoise,
   canWebShare,
   shareStopsCamera,
@@ -142,6 +144,9 @@ import { useLocalPreview } from '../room/useLocalPreview.ts'
 import { useMediaSettings } from '../room/useMediaSettings.ts'
 import { useBatteryHint } from '../room/useBatteryHint.ts'
 import { useNoiseSuppression, type NoiseStatus } from '../room/useNoiseSuppression.ts'
+import { useBackgroundBlur, type BlurStatus } from '../room/useBackgroundBlur.ts'
+import { shareVolumeKey, useMemberVolumes } from '../room/memberVolumes.ts'
+import { floatsSelf } from '../room/selfView.ts'
 import { useMutedSpeechHint } from '../room/useMutedSpeechHint.ts'
 import { useMicSilence } from '../room/useMicSilence.ts'
 import { useMediaPermissions } from '../room/usePermissions.ts'
@@ -550,9 +555,15 @@ function PreJoinScreen({
           onAdvancedNoise={mediaSettings.setAdvancedNoise}
           powerSaving={mediaSettings.powerSaving}
           onPowerSaving={mediaSettings.setPowerSaving}
+          blurSupported={mediaSettings.blurSupported}
+          blur={mediaSettings.blur}
+          onBlur={mediaSettings.setBlur}
+          mirror={mediaSettings.mirror}
+          onMirror={mediaSettings.setMirror}
         />
       )}
       <PreJoin
+        mirror={mediaSettings.mirror}
         onSettings={() => setSettingsOpen(true)}
         audioOnly={audioOnly}
         roomId={roomId}
@@ -1175,7 +1186,29 @@ function Room({
   useBatteryHint(!powerSaving, () => show(strings.settings.batteryLow))
   // Sent while unmuted: RNNoise's track once it runs, the microphone itself until then
   const micSending = local.mic.on ? (noise.track ?? local.mic.track) : null
-  const camSending = local.cam.on ? local.cam.track : null
+  // 背景模糊 (e6-t06) runs where it can, while chosen; 省電模式 holds it off (the choice stays), and
+  // so does a month past the low-quality threshold: the low-resolution camera is what saves the
+  // allowance, and RoomMedia asks the camera itself for it. Off, by any road: the camera again.
+  const blurRuns =
+    mediaSettings.blurSupported &&
+    mediaSettings.blur &&
+    !powerSaving &&
+    (state.view?.usage ?? 'normal') === 'normal'
+  const blur = useBackgroundBlur({
+    camera: local.cam.on ? local.cam.track : null,
+    on: blurRuns,
+    onStop: (reason) => {
+      mediaSettings.setBlur(false)
+      show(
+        reason === 'overloaded' ? strings.settings.blurOverloaded : strings.settings.blurFailed,
+        'warn',
+      )
+    },
+  })
+  const camSending = blur.send
+  // Each person's receive volume (e6-t08): local, for this tab's session
+  const memberVolumes = useMemberVolumes(roomId)
+  const [volumeSupported] = useState(canSetMemberVolume)
   const sending = useMemo<LocalTracks | null>(
     () => (local.ready ? { mic: micSending, cam: camSending } : null),
     [local.ready, micSending, camSending],
@@ -1566,7 +1599,7 @@ function Room({
   const handPlace = new Map(handQueue(members).map((member, index) => [member.id, index + 1]))
   // Each member's camera as their tile shows it: ours while it sends, theirs while it is on
   const videoOf = (member: (typeof members)[number]): MediaStreamTrack | null => {
-    if (member.id === state.you) return media.videoRefused || audioOnly ? null : camSending
+    if (member.id === state.you) return media.videoRefused || audioOnly ? null : blur.preview
     const cam = member.tracks.find((t) => t.kind === 'cam')
     return (cam && !cam.muted && media.received[trackKey(cam)]?.track) || null
   }
@@ -1887,6 +1920,21 @@ function Room({
       onRole={onRole}
       recorderIds={recorders.map((entry) => entry.memberId)}
       onRecordAction={onRecordAction}
+      audio={{
+        levelOf: (id) => {
+          if (id === state.you) return micSending
+          const member = state.view?.members[id]
+          const mic = member?.tracks.find((t) => t.kind === 'mic')
+          return member && mic && !mic.muted ? remoteAudio(member) : null
+        },
+        volumeSupported,
+        volumeOf: memberVolumes.volumeOf,
+        onVolume: memberVolumes.setVolume,
+        sharesSound: (id) => {
+          const member = state.view?.members[id]
+          return member ? receivedOf(member, 'screenAudio') !== null : false
+        },
+      }}
     />
   )
   // Whose a received track is, for the stats panel (e2-t14)
@@ -1904,6 +1952,7 @@ function Room({
         describe={describeTrack}
         onExported={() => show(strings.stats.exported)}
         noise={noiseSupported ? { status: noise.status, load: noise.load } : null}
+        blur={mediaSettings.blurSupported ? { status: blur.status, load: blur.load } : null}
       />
     </Suspense>
   )
@@ -2058,6 +2107,54 @@ function Room({
           saving: recording.phase === 'saving',
         }
       : null
+  // The floating self-view (e6-t07): our tile over the stage, one place fewer in the layout
+  const floatSelf = floatsSelf({
+    wanted: mediaSettings.selfView,
+    you: state.you,
+    shown: shown.ids,
+    focus: focus?.id ?? null,
+  })
+  const floating = floatSelf ? stageMembers.find((member) => member.id === state.you) : undefined
+  const gridMembers = floating
+    ? stageMembers.filter((member) => member !== floating)
+    : stageMembers
+  const tileOf = (member: Member) => {
+    const you = member.id === state.you
+    const mic = member.tracks.find((t) => t.kind === 'mic')
+    const audio = you ? null : remoteAudio(member)
+    return (
+      <MemberTile
+        key={member.id}
+        name={member.name}
+        you={you}
+        mirrored={mediaSettings.mirror}
+        role={member.role}
+        reconnecting={you ? selfReconnecting : member.reconnecting}
+        relayed={you && media.usingRelay}
+        // Ours from our own stats while connected; theirs as they report it (e2-t13)
+        signal={you ? (media.status === 'connected' ? media.signal : null) : member.signal}
+        videoPaused={videoPaused(member)}
+        video={videoOf(member)}
+        pinned={member.id === pinnedId}
+        spotlighted={member.id === spotlight}
+        // Pinning is for others (we know what we look like). The room decides who
+        // may spotlight (worker/roles.ts); the button only shows for them.
+        onTogglePin={you ? undefined : () => togglePin(member.id)}
+        onToggleSpotlight={
+          maySpotlight
+            ? () => setSpotlight(spotlight === member.id ? null : member.id)
+            : undefined
+        }
+        // The speaking outline follows our own microphone while it sends, theirs
+        // while it is on
+        hand={handPlace.get(member.id) ?? null}
+        reactions={reactions[member.id]}
+        level={you ? micSending : mic && !mic.muted ? audio : null}
+        micMuted={you ? micSending === null : (mic?.muted ?? true)}
+        onHeard={you ? undefined : () => setLastHeard(member.id)}
+      />
+    )
+  }
   return (
     <RoomContexts phone={phone} demand={media.demand} motionOff={powerSaving}>
       {/* The recording question makes everything else inert (CLAUDE.md rule 4) */}
@@ -2127,49 +2224,17 @@ function Room({
                   stripSide={phone === null ? 'bottom' : 'auto'}
                   speaker={Math.max(
                     0,
-                    stageMembers.findIndex((member) => member.id === focus?.id),
+                    gridMembers.findIndex((member) => member.id === focus?.id),
                   )}
                 >
                   {stripShares}
-                  {stageMembers.map((member) => {
-                    const you = member.id === state.you
-                    const mic = member.tracks.find((t) => t.kind === 'mic')
-                    const audio = you ? null : remoteAudio(member)
-                    return (
-                      <MemberTile
-                        key={member.id}
-                        name={member.name}
-                        you={you}
-                        role={member.role}
-                        reconnecting={you ? selfReconnecting : member.reconnecting}
-                        relayed={you && media.usingRelay}
-                        // Ours from our own stats while connected; theirs as they report it (e2-t13)
-                        signal={
-                          you ? (media.status === 'connected' ? media.signal : null) : member.signal
-                        }
-                        videoPaused={videoPaused(member)}
-                        video={videoOf(member)}
-                        pinned={member.id === pinnedId}
-                        spotlighted={member.id === spotlight}
-                        // Pinning is for others (we know what we look like). The room decides who
-                        // may spotlight (worker/roles.ts); the button only shows for them.
-                        onTogglePin={you ? undefined : () => togglePin(member.id)}
-                        onToggleSpotlight={
-                          maySpotlight
-                            ? () => setSpotlight(spotlight === member.id ? null : member.id)
-                            : undefined
-                        }
-                        // The speaking outline follows our own microphone while it sends, theirs
-                        // while it is on
-                        hand={handPlace.get(member.id) ?? null}
-                        reactions={reactions[member.id]}
-                        level={you ? micSending : mic && !mic.muted ? audio : null}
-                        micMuted={you ? micSending === null : (mic?.muted ?? true)}
-                        onHeard={you ? undefined : () => setLastHeard(member.id)}
-                      />
-                    )
-                  })}
+                  {gridMembers.map(tileOf)}
                 </Stage>
+              )}
+              {inRoom && floatSelf && floating && (
+                <SelfView at={mediaSettings.selfViewAt} onMove={mediaSettings.setSelfViewAt}>
+                  {tileOf(floating)}
+                </SelfView>
               )}
               {inRoom && (
                 // Reactions from someone whose tile is not on the stage (hidden): beside it
@@ -2411,6 +2476,14 @@ function Room({
             onAdvancedNoise={mediaSettings.setAdvancedNoise}
             powerSaving={powerSaving}
             onPowerSaving={mediaSettings.setPowerSaving}
+            blurSupported={mediaSettings.blurSupported}
+            blur={mediaSettings.blur}
+            blurNote={blurNote(blur.status, state.view?.usage ?? 'normal')}
+            onBlur={mediaSettings.setBlur}
+            mirror={mediaSettings.mirror}
+            onMirror={mediaSettings.setMirror}
+            selfView={mediaSettings.selfView}
+            onSelfView={mediaSettings.setSelfView}
           />
         )}
         {confirmLeave && (
@@ -2463,6 +2536,7 @@ function Room({
                 name={member.name}
                 track={remoteAudio(member)}
                 speaker={local.chosen.speaker}
+                volume={memberVolumes.volumeOf(member.id)}
               />
             ),
           )}
@@ -2474,6 +2548,7 @@ function Room({
               track={receivedOf(sharer, 'screenAudio')}
               speaker={local.chosen.speaker}
               source="share"
+              volume={memberVolumes.volumeOf(shareVolumeKey(sharer.id))}
             />
           ))}
         </div>
@@ -2693,6 +2768,14 @@ function MemberTile({
   }, [speaking])
   return <Tile {...tile} speaking={speaking} />
 }
+
+/** What the settings say about 背景模糊 now (a function: the language chosen now, strings.ts) */
+const blurNote = (status: BlurStatus, usage: UsageState): string | null =>
+  usage !== 'normal'
+    ? strings.settings.blurMonthLow
+    : status === 'loading'
+      ? strings.settings.blurLoading
+      : null
 
 const trackDevice = (track: MediaStreamTrack | null): string | null =>
   track?.getSettings?.().deviceId ?? null

@@ -276,9 +276,26 @@ export const enRoom: RoomStrings = {
     powerSavingHint:
       'Receives others’ video at the lowest quality, sends your camera at 15 fps without HD, and turns off animations and advanced noise suppression',
     powerSavingHd: 'Power saving is on, so HD isn’t sent.',
+    blur: 'Background blur',
+    blurHint:
+      'Finds your outline on this device and blurs the rest; the picture goes nowhere else. Uses more battery; the first time downloads about 4 MB',
+    blurLoading: 'Getting background blur ready…',
+    blurPowerSaving: 'Power saving is on, so background blur is paused.',
+    blurMonthLow: 'This month’s allowance is nearly used: the camera sends low quality, and background blur is paused.',
+    blurOverloaded: 'Your device couldn’t keep up, so background blur is off: others can see your background now',
+    blurFailed: 'Background blur couldn’t start: others can see your background now',
+    mirror: 'Mirror my picture',
+    mirrorHint: 'Only what you see; others never get a mirrored picture',
+    selfView: 'Self view',
+    selfViewHint: 'Your picture floats over the stage without taking a place, and you can drag it anywhere',
     batteryLow: 'Battery is low: you can turn on power saving in More › Settings › Performance',
   },
   // Speaking while muted (e6-t03, AC-6.3)
+  selfView: {
+    label: 'Self view',
+    move: 'Move self view',
+    moveHint: 'Use the arrow keys to move it, Shift for bigger steps; or drag it',
+  },
   mutedSpeech: {
     text: 'You’re muted',
     unmute: 'Unmute',
@@ -354,6 +371,11 @@ export const enRoom: RoomStrings = {
   participants: {
     title: 'Participants',
     close: 'Close participants',
+    volumeOf: (name: string) => `${name}’s volume (only for you)`,
+    shareVolumeOf: (name: string) => `Sound of ${name}’s share (only for you)`,
+    volumeValue: (percent: number) => `${percent}%`,
+    volumeUnsupported:
+      'This browser can’t set each person’s volume (on iPhone and iPad, use the device’s volume buttons).',
     tabs: 'Side panel',
     tabParticipants: (count: number) => `Participants ${count}`,
     list: 'Participant list',
@@ -1221,6 +1243,13 @@ export const enRoom: RoomStrings = {
       on: 'On',
     },
     noiseLoad: (percent: string, latency: string) => `On · CPU ${percent} · delay ${latency}`,
+    blur: 'Background blur',
+    blurStates: {
+      off: 'Off',
+      loading: 'Loading',
+      on: 'On',
+    },
+    blurLoad: (fps: number, mask: string) => `On · ${fps} fps · mask ${mask}`,
     export: 'Export JSON',
     exportHint: 'A file for debugging: it has members’ names, no passwords, tokens or SDP.',
     exported: 'Connection stats downloaded',

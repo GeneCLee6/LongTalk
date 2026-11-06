@@ -109,7 +109,14 @@ describe('LocalDevices: processing switches (e6-t01)', () => {
 
 describe('remembered media settings (H3)', () => {
   it('keeps the switches and HD, and defaults HD by device', () => {
-    const fresh = { advancedNoise: false, powerSaving: false }
+    const fresh = {
+      advancedNoise: false,
+      powerSaving: false,
+      blur: false,
+      mirror: true,
+      selfView: false,
+      selfViewAt: { x: 1, y: 1 },
+    }
     expect(loadMediaPrefs()).toEqual({ processing: DEFAULT_PROCESSING, hd: null, ...fresh })
     saveMediaPrefs({
       processing: { ...DEFAULT_PROCESSING, noiseSuppression: false },
