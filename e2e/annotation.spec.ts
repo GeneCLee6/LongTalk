@@ -155,7 +155,9 @@ test('Alice shares, Bob draws, Carol sees it, Dave replays it, the share stops a
 
   await test.step('Bob brings out the tools; Carol has no canvas until there is a mark', async () => {
     await shareTile(bob, alice).hover()
-    await shareTile(bob, alice).getByRole('button', { name: strings.screenShare.annotate }).click()
+    await shareTile(bob, alice)
+      .getByRole('button', { name: strings.screenShare.annotate, exact: true })
+      .click()
     await expect(tools).toBeVisible()
     await expect(marks(carol, alice)).toHaveCount(0)
   })
@@ -182,15 +184,22 @@ test('Alice shares, Bob draws, Carol sees it, Dave replays it, the share stops a
     // for it on her canvas every frame
     const steps = Array.from({ length: 16 }, (_, i) => 0.2 + (i * 0.6) / 15)
     const y = 0.3
-    const box = (await shareTile(carol, alice).boundingBox())!
+    // Worked out on every frame from the canvas as it is then: Carol's tile may still be settling
+    // from the resizes above (its size has a 200 ms transition), and a position measured once
+    // would miss the line altogether
     await marks(carol, alice).evaluate(
-      (element: HTMLCanvasElement, targets) => {
-        const seen: (number | null)[] = targets.map(() => null)
+      (element: HTMLCanvasElement, { xs, y, source }) => {
+        const seen: (number | null)[] = xs.map(() => null)
         const paint = element.getContext('2d')!
         const look = () => {
-          targets.forEach((target, index) => {
+          const { clientWidth: width, clientHeight: height } = element
+          const fit = Math.min(width / source.width, height / source.height)
+          const ratio = element.width / width
+          xs.forEach((x, index) => {
             if (seen[index] !== null) return
-            const data = paint.getImageData(target.x - 2, target.y - 2, 5, 5).data
+            const px = (width / 2 + (x - 0.5) * source.width * fit) * ratio
+            const py = (height / 2 + (y - 0.5) * source.height * fit) * ratio
+            const data = paint.getImageData(Math.round(px) - 2, Math.round(py) - 2, 5, 5).data
             for (let i = 3; i < data.length; i += 4) {
               if (data[i] > 0) {
                 seen[index] = Date.now()
@@ -203,11 +212,7 @@ test('Alice shares, Bob draws, Carol sees it, Dave replays it, the share stops a
         look()
         ;(window as unknown as { seenAt: (number | null)[] }).seenAt = seen
       },
-      // A pixel ratio of 1 in these contexts: tile px are canvas pixels
-      steps.map((x) => {
-        const at = contentToTile(box, x, y)
-        return { x: Math.round(at.x), y: Math.round(at.y) }
-      }),
+      { xs: steps, y, source: SOURCE },
     )
     const sent: number[] = []
     const first = await contentToPage(bob, alice, steps[0], y)

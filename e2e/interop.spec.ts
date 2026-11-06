@@ -555,7 +555,11 @@ interop(
       await expect
         .poll(() => shareFramesPerSecond(alice, bob))
         .toBeGreaterThanOrEqual(SHARE_FRAMES_PER_SECOND)
-      const annotate = share.getByRole('button', { name: strings.screenShare.annotate })
+      // Exact: 清除我的標註 on the toolbar has the word in it
+      const annotate = share.getByRole('button', {
+        name: strings.screenShare.annotate,
+        exact: true,
+      })
       await annotate.click()
       await expect(canvas).toBeVisible()
       const box = (await share.boundingBox())!
