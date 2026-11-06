@@ -334,6 +334,8 @@ async function drawOnShare(viewer: Member, sharer: Member) {
   const tile = shareTile(viewer, sharer)
   await tile.hover()
   await tile.getByRole('button', { name: strings.screenShare.annotate, exact: true }).click()
+  // The canvas is a lazy chunk: a stroke begun before it arrives lands on nothing
+  await expect(viewer.page.getByRole('toolbar', { name: strings.annotation.toolbar })).toBeVisible()
   const from = await contentToPage(viewer, sharer, 0.2, LINE_Y)
   const to = await contentToPage(viewer, sharer, 0.8, LINE_Y)
   await viewer.page.mouse.move(from.x, from.y)
