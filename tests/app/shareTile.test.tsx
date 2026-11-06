@@ -136,6 +136,7 @@ describe('gestures', () => {
       clientX: x,
       clientY: y,
       button: 0,
+      buttons: 1,
       pointerType: 'mouse',
       isPrimary: true,
     })
@@ -155,6 +156,18 @@ describe('gestures', () => {
     // Moving after the release does nothing
     fireEvent.pointerMove(figure(), pointer(100, 500))
     expect(video().style.transform).toBe(after)
+  })
+
+  it('a mouse whose release went missing is not dragging when it comes back', () => {
+    renderTile()
+    fireEvent.click(button('放大'))
+    fireEvent.click(button('放大'))
+    const press = { pointerId: 1, button: 0, pointerType: 'mouse', isPrimary: true }
+    fireEvent.pointerDown(figure(), { ...press, clientX: 500, clientY: 500, buttons: 1 })
+    const before = video().style.transform
+    fireEvent.pointerMove(figure(), { ...press, clientX: 300, clientY: 500, buttons: 0 })
+    fireEvent.pointerMove(figure(), { ...press, clientX: 100, clientY: 500, buttons: 0 })
+    expect(video().style.transform).toBe(before)
   })
 
   it('two fingers pinch: spreading them zooms in', () => {

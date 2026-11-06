@@ -15,6 +15,7 @@
 | `worker/scheduled.ts`（I5） | Cron：`sweep.ts` 刪到期檔案、`backup.ts` D1 備份 | 帶任何 secret（只用綁定） |
 | `worker/index.ts` | Worker 入口：匯出 handler（`fetch`、`scheduled`）與 DO class | 其他邏輯 |
 | `src/media/` | `MediaTransport` 介面與實作（A2 起） | 元件直接碰 `RTCPeerConnection` 或 SFU API |
+| `src/annotate/`（J1） | 標註畫布與繪製，全部 lazy（只有 `ShareTile` 的 `lazy()` 指向這裡）；模型與規則在 `shared/annotation.ts`，對齊問 `useShareGeometry()` | 被會議室的初始 JS 靜態匯入；自己換算分享畫面的位置 |
 | `src/pages/` | 組合：取狀態、接路由 | 樣式細節以外的規則判斷 |
 | `src/components/` | 展示與互動 | 直接呼叫 API 或 WebSocket（由 props 傳入 callback） |
 | `src/styles/tokens.ts` | 顏色、字體、間距 | — |

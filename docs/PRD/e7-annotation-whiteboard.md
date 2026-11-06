@@ -1,7 +1,7 @@
 ---
 title: E7 — 畫筆標註與白板
 date: 2026-10-28
-status: planned
+status: in progress
 epic: E7
 owner: GeneCLee6
 milestones: [M2]
@@ -37,7 +37,8 @@ depends_on: [E3, E4]
 
 ## 設計方向
 
-- `src/annotate/`：`model.ts`（純函式：加點、簡化、正規化）、`Canvas.tsx`、`Toolbar.tsx`、`sync.ts`；白板複用同一套，底圖為空、座標系為畫布座標而非 0–1。
+- J1 定案：模型在 `shared/annotation.ts`（純函式：加點、簡化、正規化、命中測試、驗證；RoomDO 也要用），畫布在 `src/annotate/`（`AnnotationCanvas.tsx`、`draw.ts`），之後加 `Toolbar.tsx`、`sync.ts`；白板複用同一套，底圖為空、座標系為畫布座標而非 0–1。
+- J1 定案的數字：顏色八種（`tokens.ts` 的 `annotation`：玫瑰、琥珀、綠、藍綠、藍、紫、白、墨），線寬三段是畫面短邊的 0.3／0.6／1.2%（隨畫面與縮放變大，大家看到的比例一樣）；一筆最多 800 點（一則訊息放得下，畫到上限自動抽稀、不會停筆），每個分享 2000 筆（`putStroke` 目前丟掉最舊的，點陣合併由 J2 決定）。
 - 全部 lazy 載入；工具列按下才載。
 
 ## 驗收條件
@@ -50,8 +51,8 @@ depends_on: [E3, E4]
 
 ## Task 拆分（M2；動工前再細拆）
 
-- [ ] `e7-t01` 標註資料模型與純函式（正規化、簡化、命中測試）＋測試 · AC-7.1 · S
-- [ ] `e7-t02` 標註畫布疊在分享格、座標映射、高 DPI、平滑 · AC-7.1, AC-7.2 · M · ← e3-t11
+- [x] `e7-t01` 標註資料模型與純函式（正規化、簡化、命中測試）＋測試 · AC-7.1 · #44（`shared/annotation.ts`：放 `shared/` 而不是 `src/annotate/`，J2 的 RoomDO 也要用；含給 J2 的 `parseStroke`）
+- [x] `e7-t02` 標註畫布疊在分享格、座標映射、高 DPI、平滑 · AC-7.1, AC-7.2 · #44（`src/annotate/`，lazy；只有本機，入口是控制列的「標註」鈕，關掉就清除；平滑用中點二次曲線，沒有加 perfect-freehand；AC 等 J2）
 - [ ] `e7-t03` 工具列（工具、顏色、寬度、復原、清除）、雷射筆 · AC-7.1 · M · ← e7-t02
 - [ ] `e7-t04` RoomDO 同步：節流、增量、快照重播、分享停止清空 · AC-7.2 · M · ← e7-t02
 - [ ] `e7-t05` 權限三態與清除他人 · AC-7.3 · S · ← e7-t04, e1-t06

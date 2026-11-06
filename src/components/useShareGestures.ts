@@ -61,13 +61,19 @@ export function useShareGestures(
     onPointerDown: (event: PointerEvent<HTMLElement>) => {
       if (event.pointerType === 'mouse' && event.button !== 0) return
       pointers.current.set(event.pointerId, toTile(event.clientX, event.clientY))
-      if (drawing || geometry.view.zoom <= 1) return
-      setDragging(true)
+      if (drawing) return
+      // Held even at 100%: released outside the tile, the release must still reach us
       event.currentTarget.setPointerCapture?.(event.pointerId)
+      if (geometry.view.zoom > 1) setDragging(true)
     },
     onPointerMove: (event: PointerEvent<HTMLElement>) => {
       const before = pointers.current.get(event.pointerId)
       if (!before) return
+      // A mouse with no button down: its release went missing, so this is not a drag
+      if (event.pointerType === 'mouse' && event.buttons === 0) {
+        lift(event.pointerId)
+        return
+      }
       const now = toTile(event.clientX, event.clientY)
       const others = [...pointers.current.entries()].filter(([id]) => id !== event.pointerId)
       pointers.current.set(event.pointerId, now)
