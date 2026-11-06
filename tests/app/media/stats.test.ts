@@ -115,6 +115,7 @@ function report(n: number, options: { relay?: boolean; lost?: number; freezes?: 
       jitterBufferDelay: 6 * n,
       jitterBufferEmittedCount: 100 * n,
       concealedSamples: 480 * n,
+      silentConcealedSamples: 0,
       totalSamplesReceived: 96_000 * n,
     },
   ]
@@ -208,5 +209,39 @@ describe('sampleStats (e2-t13)', () => {
       readStatsReport(report(1), owners, 2000),
     )
     expect(again.inbound.find((t) => t.trackName === 'cam-b')?.bps).toBeNull()
+  })
+})
+
+describe('a muted microphone (L1)', () => {
+  const report = (packets: number, concealed: number, silent: number, samples: number) =>
+    readStatsReport(
+      [
+        {
+          type: 'inbound-rtp',
+          kind: 'audio',
+          mid: '1',
+          packetsReceived: packets,
+          concealedSamples: concealed,
+          silentConcealedSamples: silent,
+          totalSamplesReceived: samples,
+        },
+      ],
+      { published: new Map(), subscribed: new Map([['1', { sessionId: 's', trackName: 'mic' }]]) },
+      samples,
+    )
+
+  it('is not concealment: nothing arrives, and the browser fills it with silence', () => {
+    const sample = sampleStats(report(100, 0, 0, 96_000), report(100, 96_000, 96_000, 192_000))
+    expect(sample.inbound[0].concealedRatio).toBeNull()
+  })
+
+  it('the interval it was muted in does not count its silence either', () => {
+    const sample = sampleStats(report(100, 0, 0, 96_000), report(103, 48_000, 47_000, 192_000))
+    expect(sample.inbound[0].concealedRatio).toBeCloseTo(1_000 / 96_000)
+  })
+
+  it('real concealment still counts', () => {
+    const sample = sampleStats(report(100, 0, 0, 96_000), report(150, 48_000, 0, 192_000))
+    expect(sample.inbound[0].concealedRatio).toBeCloseTo(0.5)
   })
 })

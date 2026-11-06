@@ -150,6 +150,8 @@ export interface InboundTrackStats extends TrackRef {
   jitterBufferEmittedCount: number
   /** Audio: samples the decoder made up for lost packets, and all samples */
   concealedSamples: number
+  /** Those of them that are silence: nothing was being sent, a muted microphone (0 if unknown) */
+  silentConcealedSamples: number
   totalSamplesReceived: number
 }
 

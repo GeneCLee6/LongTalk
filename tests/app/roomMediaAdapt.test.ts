@@ -49,6 +49,7 @@ function simulateDownlink(transport: FakeTransport, link: { loss: number }) {
         jitterBufferDelay: (was?.jitterBufferDelay ?? 0) + n * 0.05,
         jitterBufferEmittedCount: (was?.jitterBufferEmittedCount ?? 0) + n,
         concealedSamples: 0,
+        silentConcealedSamples: 0,
         totalSamplesReceived: (was?.totalSamplesReceived ?? 0) + (media ? 0 : 96_000),
       }
       counters.set(key, next)

@@ -165,6 +165,7 @@ export function readStatsReport(
       jitterBufferDelay: count(entry.jitterBufferDelay),
       jitterBufferEmittedCount: count(entry.jitterBufferEmittedCount),
       concealedSamples: count(entry.concealedSamples),
+      silentConcealedSamples: count(entry.silentConcealedSamples),
       totalSamplesReceived: count(entry.totalSamplesReceived),
     }
     stats.inbound.push(inbound)
@@ -317,8 +318,20 @@ export function sampleStats(prev: TransportStats | null, next: TransportStats): 
       jitterBufferMs:
         emitted > 0 ? ((track.jitterBufferDelay - was!.jitterBufferDelay) / emitted) * 1000 : null,
       concealedRatio:
-        track.media === 'audio' && samples > 0
-          ? ratio(track.concealedSamples - was!.concealedSamples, samples)
+        // A muted microphone sends nothing, and the browser "conceals" all of it with silence:
+        // not a sign of trouble. Read as trouble, one muted member held the verdict at `fair` for
+        // good, and a downlink that had once cut cameras never came back (found on the PR preview,
+        // L1: 15 muted microphones, one camera for 7 minutes)
+        track.media === 'audio' && samples > 0 && received > 0
+          ? ratio(
+              Math.max(
+                0,
+                track.concealedSamples -
+                  was!.concealedSamples -
+                  (track.silentConcealedSamples - was!.silentConcealedSamples),
+              ),
+              samples,
+            )
           : null,
     }
   })
