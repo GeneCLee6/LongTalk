@@ -59,9 +59,9 @@ E2 讓媒體送到；E6 讓它好聽好看。Zoom 的「背景雜音抑制」「
 
 ### M2
 
-- [x] `e6-t06` 背景模糊：segmentation 模型 lazy、管線、自動關閉 · M · #PRNUM
-- [x] `e6-t07` 鏡像設定與可拖曳自拍格 · S · #PRNUM
-- [x] `e6-t08` 音量條與每人接收音量 · S · #PRNUM
+- [x] `e6-t06` 背景模糊：segmentation 模型 lazy、管線、自動關閉 · M · #50
+- [x] `e6-t07` 鏡像設定與可拖曳自拍格 · S · #50
+- [x] `e6-t08` 音量條與每人接收音量 · S · #50
 
 ## H3 的做法與決定（#32）
 
@@ -86,7 +86,7 @@ E2 讓媒體送到；E6 讓它好聽好看。Zoom 的「背景雜音抑制」「
 - **電量提示**：有 Battery Status API 的瀏覽器（Chromium）電量 ≤ 20 % 且沒在充電時，一場會議提示一次「電量不多了：可以在…開啟省電模式」；**不自動打開**（可能馬上就插電，或比起電量更在意畫面）。其他瀏覽器不提示（`capabilities.ts` `battery`）。
 - **統計面板**多一段「模式」：HD（開／關／暫停（上傳不夠）／關（省電模式））、省電模式、純音訊模式、進階噪音抑制（開・處理器 %・延遲）。
 
-## L4 的做法與決定（#PRNUM）
+## L4 的做法與決定（#50）
 
 - **模型與套件**：npm `@mediapipe/tasks-vision` **0.10.35**（Apache-2.0，**鎖定版本**）；wasm 11.15 MB（gzip 3.3 MB）、載入器 322 kB、worker 135 kB（內含套件），模型 `selfie_segmenter.tflite` 250 kB（Apache-2.0，放在 `src/media/models/`），都在我們自己的 `/assets/`。**為什麼不是最新版**：1.0.0 起套件會把使用統計送到 Google（`odml.pa.googleapis.com`，README 的 Privacy Notice 要 app 自己取得同意），和 LongTalk 的隱私權政策與 CSP 都不合；0.10.35 是最後一個沒有這段的版本，`tests/app/l4Blur.test.tsx` 擋升版。沒有 CSP 變更（`'wasm-unsafe-eval'` 本來就有，載入器沒有 `eval`）；只有 SIMD 版（目標瀏覽器都有）。比較過 `@mediapipe/selfie_segmentation`（舊版、2023 後沒更新）。
 - **管線**（`src/media/backgroundBlur.ts`）：模型在 worker（`blurWorker.ts`，CPU delegate），吃 256×256 的小圖，最多每 60 ms 一張、一次一張；每一幀在頁面上用最新的遮罩畫：遮罩 → `source-in` 畫人 → `destination-over` 畫縮到 320 寬再模糊的背景。所以影片維持鏡頭的幀率，模型慢只讓輪廓慢。**第一個遮罩之前不送出任何一幀**。輸出經 `RoomMedia.setLocal` → `replaceTrack`，**不重新協商**，simulcast 三層是 sender 的事（實測三層都帶處理後的軌，`e2e/local/blur.spec.ts`）。換鏡頭、關開鏡頭只換輸入，送出的軌不變。

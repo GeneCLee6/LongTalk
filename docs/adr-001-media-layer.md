@@ -331,7 +331,7 @@ interface MediaTransport {
 
 **沒有驗證的**：真的 Safari 會不會這樣。CI 的是 Playwright 的 Linux WebKit，不是 Safari；真的出現就是嚴重的產品問題（別人看不到分享、鏡頭格子變成分享的畫面），所以要實機確認（`DEPLOY.md` §5「Mac」）。如果 Safari 也中，再回來做：發送端看 `pliCount` 漲而 `keyFramesEncoded` 不動（能力偵測，不看 user agent）的處理。
 
-## 背景模糊（L4，2026-11-06，`e6-t06`，#PRNUM）
+## 背景模糊（L4，2026-11-06，`e6-t06`，#50）
 
 做法與決定在 `PRD/e6-audio-video-quality.md`「L4 的做法與決定」。媒體層相關的兩點：**處理後的軌和別的軌一樣經 `MediaTransport.replaceTrack` 換上去**，沒有新的 transceiver、不重新協商；**simulcast 是 sender 的參數**，換軌不影響。`e2e/local/blur.spec.ts` 用兩個 PeerConnection 量過：換上去後 `f`／`h`／`q` 三層（1280、640、320 寬）都繼續出幀，`negotiationneeded` 0 次；關掉換回原本的軌也一樣。CI 的互通測試（`e2e/interop.spec.ts`）再經真的 SFU 跑一次。
 
