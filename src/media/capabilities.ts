@@ -84,6 +84,11 @@ export interface Capabilities {
    * everything else works without an account
    */
   passkeys: boolean
+  /**
+   * document.fullscreenEnabled (e3-t11): a share can fill the screen. Not on iPhone Safari, where
+   * only <video> has its own player; there the fullscreen button is left out (zoom still works)
+   */
+  fullscreen: boolean
 }
 
 export type Capability = keyof Capabilities
@@ -110,6 +115,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'battery',
   'localRecording',
   'passkeys',
+  'fullscreen',
 ]
 
 /** Where detection looks: the browser's globals, or a stand-in in tests */
@@ -125,6 +131,7 @@ export interface CapabilityEnv {
   indexedDB?: unknown
   PublicKeyCredential?: unknown
   onbeforeinstallprompt?: unknown
+  document?: { fullscreenEnabled?: boolean }
   navigator?: {
     serviceWorker?: object | null
     standalone?: boolean
@@ -291,6 +298,11 @@ export function canUsePasskeys(env: CapabilityEnv = browser()): boolean {
   )
 }
 
+/** Whether an element can fill the screen (document.fullscreenEnabled) */
+export function canFullscreen(env: CapabilityEnv = browser()): boolean {
+  return env.document?.fullscreenEnabled === true
+}
+
 /** Everything at once (the doc's table, for this browser) */
 export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities {
   const devices = env.navigator?.mediaDevices
@@ -316,5 +328,6 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     battery: canReadBattery(env),
     localRecording: canRecordLocally(env),
     passkeys: canUsePasskeys(env),
+    fullscreen: canFullscreen(env),
   }
 }

@@ -79,7 +79,7 @@ M2 的畫筆標註（E7）疊在分享畫面上，所以 E3 要在 M0 就把「�
 
 ### M2
 
-- [ ] `e3-t11` 分享格全螢幕與縮放；`useShareGeometry()` 給 E7 標註對齊 · M
+- [x] `e3-t11` 分享格全螢幕與縮放；`useShareGeometry()` 給 E7 標註對齊 · #44（主區分享格右下的控制列；滾輪、雙指、拖曳、鍵盤；最高 400%；`shared/shareGeometry.ts` 是純函式；縮放時 `useVideoDemand` 回報畫出的大小）
 
 ## 風險與對策
 

@@ -99,7 +99,7 @@ export function isTypingTarget(target: EventTarget | null): boolean {
  * Focus is inside something with keys of its own: a menu (type-ahead, arrows), a dialog or a
  * drawer (their own Escape and Tab), a list box. The shortcuts wait until it closes.
  */
-function insideWidget(target: EventTarget | null): boolean {
+export function insideWidget(target: EventTarget | null): boolean {
   const element = asElement(target)
   return !!element?.closest(
     '[role="menu"],[role="menubar"],[role="listbox"],[role="dialog"],[role="alertdialog"],[aria-modal="true"]',
@@ -110,6 +110,14 @@ function insideWidget(target: EventTarget | null): boolean {
 export function modalOpen(doc: Pick<Document, 'querySelector'> = document): boolean {
   return !!doc.querySelector('[aria-modal="true"]')
 }
+
+/**
+ * Whether an action shows something on the page (a panel, a dialog, the sharing bar). A fullscreen
+ * share covers the page, so it has to step aside; the microphone, the camera and a raised hand
+ * just happen.
+ */
+export const showsOnPage = (action: ShortcutAction): boolean =>
+  action !== 'mic' && action !== 'cam' && action !== 'hand' && action !== 'close'
 
 const IME = (event: KeyInput) => event.isComposing || event.keyCode === 229
 

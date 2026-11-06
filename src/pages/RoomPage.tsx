@@ -1010,6 +1010,10 @@ function Room({
     unanswered.length > 0 && unanswered.every((entry) => agreedBefore.includes(recordingKey(entry)))
   const consentAsked = unanswered.length > 0 && !coveredByPrejoin
   const unansweredKey = unanswered.map(recordingKey).join(',')
+  // A fullscreen share would hide the recording question (CLAUDE.md rule 4)
+  useEffect(() => {
+    if (consentAsked && document.fullscreenElement) void document.exitFullscreen?.()
+  }, [consentAsked])
   useEffect(() => {
     if (coveredByPrejoin) send({ t: 'consent' })
   }, [coveredByPrejoin, unansweredKey, send])
@@ -1802,12 +1806,22 @@ function Room({
       />
     </Suspense>
   )
+  // The red light (CLAUDE.md rule 4): who records, in words; while we record it is 停止錄影
+  const otherRecorders = recorders.filter((entry) => entry.memberId !== state.you)
+  const recordingLabel =
+    otherRecorders.length === 0
+      ? strings.record.byYou
+      : recorders.length > 1
+        ? strings.record.byMany(recorders.length)
+        : strings.record.byOne(viewMembers?.[otherRecorders[0].memberId]?.name ?? '')
   const mainSharer = otherSharers.find((sharer) => sharer.id === slots.main)
   const shareTile = mainSharer ? (
     <ShareTile
       key={`${mainSharer.id}-share`}
       name={mainSharer.name}
       video={receivedOf(mainSharer, 'screen')}
+      annotator={can(role, 'annotate') ? state.you : null}
+      recording={recorders.length > 0 || weRecord ? recordingLabel : null}
       picker={
         otherSharers.length > 1 ? (
           <SharePicker
@@ -1836,14 +1850,6 @@ function Room({
   const stageMembers = (shareTile ? focusFirst(shown.ids, focus) : shown.ids).flatMap(
     (id) => byId.get(id) ?? [],
   )
-  // The red light (CLAUDE.md rule 4): who records, in words; while we record it is 停止錄影
-  const otherRecorders = recorders.filter((entry) => entry.memberId !== state.you)
-  const recordingLabel =
-    otherRecorders.length === 0
-      ? strings.record.byYou
-      : recorders.length > 1
-        ? strings.record.byMany(recorders.length)
-        : strings.record.byOne(viewMembers?.[otherRecorders[0].memberId]?.name ?? '')
   const recordingLight =
     recorders.length > 0 || weRecord
       ? {
