@@ -55,7 +55,11 @@ function fullBrowser(): CapabilityEnv {
     AudioWorkletNode: class {},
     WebAssembly: { instantiate() {}, validate: () => true },
     Worker: class {},
-    OffscreenCanvas: class {},
+    OffscreenCanvas: class {
+      getContext() {
+        return {}
+      }
+    },
     MediaStreamTrackProcessor: class {},
     MediaStreamTrackGenerator: class {},
     VideoFrame: class {},

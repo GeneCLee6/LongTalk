@@ -32,7 +32,11 @@ const ENGINE_DIFFERENCES: Record<string, Partial<Record<Capability, string>>> = 
   chromium: {
     webShare: 'Chrome has navigator.share on Windows, macOS and ChromeOS, not in headless Chromium',
   },
-  firefox: {},
+  firefox: {
+    // L4: no WebGL in Playwright's headless Linux Firefox, which MediaPipe needs. Firefox itself and
+    // the canvas path ran on Playwright's Windows Firefox; real Firefox: DEPLOY.md §5 step 33
+    backgroundBlur: "Depends on WebGL, which this machine's headless Firefox may not have",
+  },
   webkit: {
     webShare: "Safari's share sheet is Safari's own; Playwright's WebKit may not have it",
     // I4: Playwright's Linux WebKit (GTK) does not write any of src/record/format.ts' types;
@@ -41,6 +45,7 @@ const ENGINE_DIFFERENCES: Record<string, Partial<Record<Capability, string>>> = 
     // I2: Playwright's Linux WebKit (GTK) has no WebAuthn; Safari 13+ has passkeys (DEPLOY.md §5
     // step 26)
     passkeys: "Playwright's Linux WebKit has no WebAuthn; Safari does",
+    backgroundBlur: "Depends on WebGL, which Playwright's Linux WebKit may not have; Safari does",
   },
 }
 
@@ -128,7 +133,13 @@ test('背景模糊 runs where it is offered (e6-t06)', async ({ page }, testInfo
   const settings = page.getByRole('dialog', { name: strings.settings.title })
   await settings.getByRole('tab', { name: strings.settings.video }).click()
   const toggle = settings.getByRole('switch', { name: strings.settings.blur })
-  await expect(toggle).toBeVisible()
+  // Where this machine's engine has no WebGL it must not be offered at all: that is the hiding
+  if ((await toggle.count()) === 0) {
+    const detected = await detect(page)
+    expect(detected.backgroundBlur).toBe(false)
+    await report(testInfo, 'blur', { project: testInfo.project.name, offered: false })
+    return
+  }
   const tile = page.getByRole('figure', { name: strings.room.tileYou('Ada') }).locator('video')
   await expect(tile).toBeVisible()
   await toggle.check()

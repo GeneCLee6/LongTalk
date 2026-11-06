@@ -50,9 +50,14 @@ afterEach(() => {
 
 describe('capabilities', () => {
   const simd = { validate: () => true }
+  const glCanvas = class {
+    getContext() {
+      return {}
+    }
+  }
   const base = (changes: Partial<CapabilityEnv> = {}): CapabilityEnv => ({
     Worker: class {},
-    OffscreenCanvas: class {},
+    OffscreenCanvas: glCanvas,
     WebAssembly: simd,
     MediaStreamTrackProcessor: class {},
     MediaStreamTrackGenerator: class {},
@@ -75,6 +80,13 @@ describe('capabilities', () => {
     expect(canBlurBackground(base({ OffscreenCanvas: undefined }))).toBe(false)
     expect(canBlurBackground(base({ WebAssembly: { validate: () => false } }))).toBe(false)
     expect(canBlurBackground(base({ WebAssembly: undefined }))).toBe(false)
+    // MediaPipe needs WebGL even on its CPU delegate
+    const noGl = class {
+      getContext() {
+        return null
+      }
+    }
+    expect(canBlurBackground(base({ OffscreenCanvas: noGl }))).toBe(false)
     expect(
       canBlurBackground(
         base({ MediaStreamTrackProcessor: undefined, HTMLCanvasElement: { prototype: {} } }),

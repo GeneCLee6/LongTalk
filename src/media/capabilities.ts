@@ -90,9 +90,9 @@ export interface Capabilities {
    */
   fullscreen: boolean
   /**
-   * 背景模糊 (e6-t06): a worker, OffscreenCanvas and WebAssembly with SIMD for the model, and a way
-   * to take the camera's frames in and send drawn ones out (blurPath). Without it the switch is
-   * not shown.
+   * 背景模糊 (e6-t06): a worker, OffscreenCanvas with WebGL (MediaPipe converts its pictures with
+   * it, even on its CPU delegate) and WebAssembly with SIMD for the model, and a way to take the
+   * camera's frames in and send drawn ones out (blurPath). Without it the switch is not shown.
    */
   backgroundBlur: boolean
   /**
@@ -342,6 +342,22 @@ const SIMD_PROBE = new Uint8Array([
   253, 98, 11,
 ])
 
+interface GlProbeCanvas {
+  getContext(kind: string): { getExtension?(name: string): { loseContext(): void } | null } | null
+}
+
+/** Whether an OffscreenCanvas gives WebGL here; the probe's context is given back at once */
+function offscreenWebGl(OffscreenCanvasClass: unknown): boolean {
+  try {
+    const canvas = new (OffscreenCanvasClass as new (w: number, h: number) => GlProbeCanvas)(1, 1)
+    const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl')
+    gl?.getExtension?.('WEBGL_lose_context')?.loseContext()
+    return gl !== null
+  } catch {
+    return false
+  }
+}
+
 /** How this browser would run 背景模糊; null where it cannot */
 export function blurPath(env: CapabilityEnv = browser()): BlurPath | null {
   if (typeof env.Worker !== 'function' || typeof env.OffscreenCanvas !== 'function') return null
@@ -350,6 +366,7 @@ export function blurPath(env: CapabilityEnv = browser()): BlurPath | null {
   } catch {
     return null
   }
+  if (!offscreenWebGl(env.OffscreenCanvas)) return null
   if (
     typeof env.MediaStreamTrackProcessor === 'function' &&
     typeof env.MediaStreamTrackGenerator === 'function' &&
