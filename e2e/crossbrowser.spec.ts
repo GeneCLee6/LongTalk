@@ -86,9 +86,7 @@ async function join(
   const context = await browser.newContext({ locale: 'zh-TW', ...options })
   await context.addInitScript(stubScreen)
   await context.addInitScript(keepPeerConnections)
-  await context.addInitScript(diagScript) // TEMP-DIAG
   const page = await context.newPage()
-  const diagLog = diagEvents(page) // TEMP-DIAG
   page.on('console', (message) => {
     if (message.type() === 'error')
       console.log(`[${name} ${engine}] ${message.text().slice(0, 300)}`)
@@ -103,18 +101,7 @@ async function join(
   })
   await page.goto(url)
   await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill(name)
-  // TEMP-DIAG
-  await page
-    .getByRole('button', { name: strings.prejoin.join, exact: true })
-    .click()
-    .catch(async (error: unknown) => {
-      await diagDump(page, `STUCK real ${name}`, diagLog)
-      await test.info().attach(`stuck-${name}.png`, {
-        body: await page.screenshot({ fullPage: true }),
-        contentType: 'image/png',
-      })
-      throw error
-    })
+  await page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
   await expect(page.getByRole('region', { name: strings.room.grid })).toBeVisible()
   return { name, engine, context, page }
 }
@@ -369,103 +356,6 @@ async function leave(members: Member[], testInfo: TestInfo) {
   }
 }
 
-// TEMP-DIAG-START
-function diagScript() {
-  const log: string[] = []
-  ;(window as unknown as { __diag: string[] }).__diag = log
-  const add = (text: string) => log.push(`${Math.round(performance.now())} ${text}`)
-  const loads = Number(sessionStorage.getItem('__loads') ?? 0) + 1
-  sessionStorage.setItem('__loads', String(loads))
-  add(`load #${loads} vendor=${navigator.vendor} online=${navigator.onLine}`)
-  const describe = (t: EventTarget | null) => {
-    const e = t as HTMLElement | null
-    if (!e || !e.tagName) return String(t)
-    return `${e.tagName}[${e.getAttribute?.('type') ?? ''}]#conn=${e.isConnected}`
-  }
-  for (const type of ['beforeinput', 'input', 'change', 'focusin', 'focusout', 'compositionstart', 'compositionend', 'keydown']) {
-    document.addEventListener(
-      type,
-      (event) => {
-        const target = event.target as HTMLInputElement
-        add(`${type} ${describe(event.target)} value=${JSON.stringify(target.value ?? null)} data=${JSON.stringify((event as InputEvent).data ?? null)} composing=${(event as InputEvent).isComposing ?? ''}`)
-      },
-      true,
-    )
-  }
-  for (const type of ['pagehide', 'beforeunload', 'error', 'unhandledrejection', 'online', 'offline', 'focus', 'blur', 'pageshow']) {
-    window.addEventListener(type, (event) => add(`window ${type} ${(event as ErrorEvent).message ?? ''} ${String((event as PromiseRejectionEvent).reason ?? '')}`), true)
-  }
-  document.addEventListener('visibilitychange', () => add(`visibility ${document.visibilityState}`))
-  new MutationObserver((records) => {
-    for (const record of records) {
-      for (const node of record.removedNodes) {
-        const e = node as HTMLElement
-        if (e.nodeType !== 1) continue
-        if (e.tagName === 'INPUT' || e.querySelector?.('input')) add(`REMOVED ${e.tagName} with input`)
-      }
-      for (const node of record.addedNodes) {
-        const e = node as HTMLElement
-        if (e.nodeType !== 1) continue
-        if (e.tagName === 'INPUT' || e.querySelector?.('input')) {
-          const input = (e.tagName === 'INPUT' ? e : e.querySelector('input')) as HTMLInputElement
-          add(`ADDED ${e.tagName} with input value=${JSON.stringify(input.value)}`)
-        }
-      }
-    }
-  }).observe(document, { childList: true, subtree: true })
-}
-
-async function diagDump(page: Page, label: string, extra: string[]) {
-  const state = await page
-    .evaluate(() => {
-      const inputs = [...document.querySelectorAll('input')] as HTMLInputElement[]
-      const buttons = [...document.querySelectorAll('button[type=submit]')] as HTMLButtonElement[]
-      const props = (e: Element) => {
-        const key = Object.keys(e).find((k) => k.startsWith('__reactProps'))
-        const p = key ? (e as unknown as Record<string, Record<string, unknown>>)[key] : null
-        return p ? { value: p.value, disabled: p.disabled, required: p.required } : null
-      }
-      const tracker = (e: Element) =>
-        (e as unknown as { _valueTracker?: { getValue(): string } })._valueTracker?.getValue()
-      const active = document.activeElement as HTMLElement | null
-      return {
-        url: location.href,
-        visibility: document.visibilityState,
-        hasFocus: document.hasFocus(),
-        active: active ? active.tagName : null,
-        activeIsInput: active === inputs[0],
-        inputs: inputs.map((e) => ({
-          type: e.type,
-          value: e.value,
-          react: props(e),
-          tracker: tracker(e),
-        })),
-        buttons: buttons.map((e) => ({ text: e.textContent, disabled: e.disabled, react: props(e) })),
-        name: localStorage.getItem('longtalk.name'),
-        loads: sessionStorage.getItem('__loads'),
-        body: document.body.innerText.slice(0, 500),
-        controller: navigator.serviceWorker?.controller?.state ?? null,
-        log: (window as unknown as { __diag: string[] }).__diag,
-      }
-    })
-    .catch((error: unknown) => ({ evaluateFailed: String(error) }))
-  console.log(`[DIAG ${label}] ${JSON.stringify(state)} events=${JSON.stringify(extra)}`)
-}
-
-function diagEvents(page: Page) {
-  const events: string[] = []
-  const start = Date.now()
-  page.on('framenavigated', (frame) => {
-    if (frame === page.mainFrame()) events.push(`+${Date.now() - start} nav ${frame.url()}`)
-  })
-  page.on('pageerror', (error) => events.push(`+${Date.now() - start} pageerror ${error.message}`))
-  page.on('console', (m) => events.push(`+${Date.now() - start} ${m.type()} ${m.text().slice(0, 200)}`))
-  page.on('crash', () => events.push(`+${Date.now() - start} crash`))
-  return events
-}
-
-// TEMP-DIAG-END
-
 test('Firefox and Chromium in one room see and hear each other, a mute and each other’s screen', async ({
   browser,
 }, testInfo) => {
@@ -482,66 +372,6 @@ test('Firefox and Chromium in one room see and hear each other, a mute and each 
     await meet(members[0], members[1], testInfo)
   } finally {
     await leave(members, testInfo)
-    await other.close()
-  }
-})
-
-test('TEMP join probe under load', async ({ browser }, testInfo) => {
-  test.setTimeout(480_000)
-  const { spawn } = await import('node:child_process')
-  let url = await openRoom(browser)
-  const other = await chromium.launch({ args: chromiumFakeMedia })
-  const started = Date.now()
-  const counts = { 0: [0, 0], 8: [0, 0], 16: [0, 0] } as Record<number, number[]>
-  let tried = 0
-  try {
-    while (Date.now() - started < 400_000) {
-      const hogs = 0
-      if (tried < 8) url = await openRoom(browser)
-      tried += 1
-      const children = Array.from({ length: hogs }, () =>
-        spawn(process.execPath, ['-e', 'for(;;){}'], { stdio: 'ignore' }),
-      )
-      const safari = await webkit.launch()
-      let chris: Member | null = null
-      try {
-        const probe = await safari.newPage()
-        await probe.goto(new URL('/', String(testInfo.project.use.baseURL)).href)
-        await probe.close()
-        chris = await join(other, 'chromium', url, 'Chris', {
-          permissions: ['camera', 'microphone'],
-        })
-        const context = await safari.newContext({
-          locale: 'zh-TW',
-          permissions: ['camera', 'microphone'],
-        })
-        await context.addInitScript(stubScreen)
-        await context.addInitScript(keepPeerConnections)
-        await context.addInitScript(diagScript)
-        const page = await context.newPage()
-        const events = diagEvents(page)
-        await page.goto(url)
-        await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill('Wes')
-        const button = page.getByRole('button', { name: strings.prejoin.join, exact: true })
-        const ok = await expect(button)
-          .toBeEnabled({ timeout: 8_000 })
-          .then(() => true)
-          .catch(() => false)
-        counts[hogs][0] += 1
-        if (!ok) {
-          counts[hogs][1] += 1
-          await diagDump(page, `STUCK ${tried} hogs=${hogs}`, events)
-        }
-      } catch (error) {
-        console.log(`[DIAG other failure ${tried} hogs=${hogs}] ${String(error).slice(0, 300)}`)
-      } finally {
-        for (const child of children) child.kill('SIGKILL')
-        await chris?.context.close().catch(() => undefined)
-        await safari.close().catch(() => undefined)
-      }
-    }
-  } finally {
-    console.log(`[DIAG summary] tried=${tried} [joins, stuck] by hogs ${JSON.stringify(counts)}`)
     await other.close()
   }
 })
