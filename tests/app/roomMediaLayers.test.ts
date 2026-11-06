@@ -187,8 +187,7 @@ describe('RoomMedia: simulcast layers (e2-t11, e2-t12)', () => {
     demand.report(cam, {}, drawn(1280, 720))
     await debounced()
     // The first try failed and was forgotten; the retry after retryDelayMs got through
-    await debounced()
-    expect(bobTransport.preferredLayers.get(camKey)).toBe('high')
+    await vi.waitFor(() => expect(bobTransport.preferredLayers.get(camKey)).toBe('high'))
     expect(bob.getState().layers[camKey]).toBe('high')
   })
 })
