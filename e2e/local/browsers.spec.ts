@@ -144,8 +144,21 @@ test('背景模糊 runs where it is offered (e6-t06)', async ({ page }, testInfo
   await expect(tile).toBeVisible()
   await toggle.check()
   await expect(settings.getByText(strings.settings.blurLoading)).toHaveCount(0, { timeout: 60_000 })
-  await expect(page.getByText(strings.settings.blurFailed)).toHaveCount(0)
-  await expect(toggle).toBeChecked()
+  // Playwright's Linux WebKit has WebGL on the page but not in the worker, which detection cannot
+  // ask without a worker of its own: there it must fail the honest way, said aloud and with the
+  // camera back. Everywhere else a failure is a failure. Real Safari: DEPLOY.md §5 step 33
+  const failed = page.getByText(strings.settings.blurFailed)
+  // A failure to start shows up at the first picture, a moment after it has loaded
+  await page.waitForTimeout(5_000)
+  if (!(await toggle.isChecked())) {
+    expect(testInfo.project.name).toBe('webkit')
+    await expect(failed).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(tile).toBeVisible()
+    await report(testInfo, 'blur', { project: testInfo.project.name, failedToStart: true })
+    return
+  }
+  await expect(failed).toHaveCount(0)
   await page.keyboard.press('Escape')
   // The picture moves through it (whichever way this engine takes frames in and out)
   const moving = await tile.evaluate(async (video: HTMLVideoElement) => {
