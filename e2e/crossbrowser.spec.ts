@@ -464,6 +464,64 @@ function diagEvents(page: Page) {
   return events
 }
 
+test('TEMP join probe under load', async ({ browser }, testInfo) => {
+  test.setTimeout(480_000)
+  const { spawn } = await import('node:child_process')
+  const url = await openRoom(browser)
+  const other = await chromium.launch({ args: chromiumFakeMedia })
+  const started = Date.now()
+  const counts = { 0: [0, 0], 8: [0, 0], 16: [0, 0] } as Record<number, number[]>
+  let tried = 0
+  try {
+    while (Date.now() - started < 400_000) {
+      const hogs = [0, 8, 16][tried % 3]
+      tried += 1
+      const children = Array.from({ length: hogs }, () =>
+        spawn(process.execPath, ['-e', 'for(;;){}'], { stdio: 'ignore' }),
+      )
+      const safari = await webkit.launch()
+      let chris: Member | null = null
+      try {
+        const probe = await safari.newPage()
+        await probe.goto(new URL('/', String(testInfo.project.use.baseURL)).href)
+        await probe.close()
+        chris = await join(other, 'chromium', url, 'Chris', {
+          permissions: ['camera', 'microphone'],
+        })
+        const context = await safari.newContext({
+          locale: 'zh-TW',
+          permissions: ['camera', 'microphone'],
+        })
+        await context.addInitScript(stubScreen)
+        await context.addInitScript(keepPeerConnections)
+        await context.addInitScript(diagScript)
+        const page = await context.newPage()
+        const events = diagEvents(page)
+        await page.goto(url)
+        await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill('Wes')
+        const button = page.getByRole('button', { name: strings.prejoin.join, exact: true })
+        const ok = await expect(button)
+          .toBeEnabled({ timeout: 8_000 })
+          .then(() => true)
+          .catch(() => false)
+        counts[hogs][0] += 1
+        if (!ok) {
+          counts[hogs][1] += 1
+          await diagDump(page, `STUCK ${tried} hogs=${hogs}`, events)
+        }
+      } catch (error) {
+        console.log(`[DIAG other failure ${tried} hogs=${hogs}] ${String(error).slice(0, 300)}`)
+      } finally {
+        for (const child of children) child.kill('SIGKILL')
+        await chris?.context.close().catch(() => undefined)
+        await safari.close().catch(() => undefined)
+      }
+    }
+  } finally {
+    console.log(`[DIAG summary] tried=${tried} [joins, stuck] by hogs ${JSON.stringify(counts)}`)
+    await other.close()
+  }
+})
 // TEMP-DIAG-END
 
 test('Firefox and Chromium in one room see and hear each other, a mute and each other’s screen', async ({
