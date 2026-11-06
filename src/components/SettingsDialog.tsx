@@ -48,6 +48,18 @@ export interface SettingsDialogProps {
   /** 省電模式 (e6-t05) */
   powerSaving?: boolean
   onPowerSaving?: (on: boolean) => void
+  /** 背景模糊 (e6-t06): shown only where it can run (useMediaSettings blurSupported) */
+  blurSupported?: boolean
+  blur?: boolean
+  /** Where it stands now, when worth saying (loading, held off) */
+  blurNote?: string | null
+  onBlur?: (on: boolean) => void
+  /** Our own picture mirrored for us (e6-t07) */
+  mirror?: boolean
+  onMirror?: (on: boolean) => void
+  /** Our own tile floats over the stage (e6-t07); only in the room */
+  selfView?: boolean
+  onSelfView?: (on: boolean) => void
 }
 
 const FOCUSABLE =
@@ -198,6 +210,37 @@ function VideoTab(props: SettingsDialogProps) {
                 : null
           }
         />
+        {props.blurSupported && props.onBlur && (
+          <Toggle
+            label={strings.settings.blur}
+            hint={strings.settings.blurHint}
+            checked={props.blur === true}
+            onChange={props.onBlur}
+            note={
+              props.blur && props.powerSaving
+                ? strings.settings.blurPowerSaving
+                : props.blur
+                  ? (props.blurNote ?? null)
+                  : null
+            }
+          />
+        )}
+        {props.onMirror && (
+          <Toggle
+            label={strings.settings.mirror}
+            hint={strings.settings.mirrorHint}
+            checked={props.mirror !== false}
+            onChange={props.onMirror}
+          />
+        )}
+        {props.onSelfView && (
+          <Toggle
+            label={strings.settings.selfView}
+            hint={strings.settings.selfViewHint}
+            checked={props.selfView === true}
+            onChange={props.onSelfView}
+          />
+        )}
       </Group>
     </>
   )

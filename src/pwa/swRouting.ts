@@ -88,14 +88,24 @@ export function cachesToDelete(keys: string[], current: string, previous: string
 }
 
 /**
+ * 背景模糊's worker and MediaPipe's loader (e6-t06), half a megabyte nobody needs until they turn
+ * the blur on: fetched then, and cached like any /assets/ file from that moment (the wasm and the
+ * model too)
+ */
+const NOT_PRECACHED = /^assets\/(blurWorker|vision_wasm_internal)-/
+
+/**
  * What the shell precaches, from the build's output file names: the shell itself, every
  * JavaScript and CSS file under assets/ (the home page, the room, the lazy chunks: the whole
- * current version) and a few files of public/. Sorted and unique, so the same build always
- * gives the same list (and the same sw.js).
+ * current version, but for NOT_PRECACHED) and a few files of public/. Sorted and unique, so the
+ * same build always gives the same list (and the same sw.js).
  */
 export function precacheUrls(files: readonly string[]): string[] {
   const built = files
-    .filter((file) => file.startsWith('assets/') && /\.(js|css)$/.test(file))
+    .filter(
+      (file) =>
+        file.startsWith('assets/') && /\.(js|css)$/.test(file) && !NOT_PRECACHED.test(file),
+    )
     .map((file) => `/${file}`)
   return [...new Set([SHELL_URL, ...STATIC_PRECACHE, ...built])].sort()
 }

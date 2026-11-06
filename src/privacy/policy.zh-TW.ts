@@ -20,7 +20,8 @@ const STORAGE: StorageDescriptions = {
   'longtalk.deviceLabels': '這些裝置的名稱，裝置 id 變了時用來找回',
   'longtalk.view': '你的版面與「隱藏自己」',
   'longtalk.prefs': '音效開關、隱藏表情反應',
-  'longtalk.media': '麥克風處理、HD、進階噪音抑制、省電模式',
+  'longtalk.media': '麥克風處理、HD、進階噪音抑制、省電模式、背景模糊、鏡像、自拍格與它的位置',
+  'longtalk:volumes:<room>': '你在那間會議室替每個人調的音量',
   'longtalk.account': '在這裡登入的帳號名稱，只讓首頁的連結知道該怎麼寫；登入靠的不是它',
   'longtalk.locale': '你選的語言',
   'longtalk.theme': '淺色或深色',
@@ -161,6 +162,7 @@ export const policy = (f: Facts): PolicyDocument => ({
           kind: 'list',
           items: [
             ['聲音、影像與螢幕分享從你的瀏覽器經過 Cloudflare 的 Realtime 媒體伺服器送給其他人；直接的路徑被擋時會經過 Cloudflare 的 TURN 轉送。傳輸途中有加密（WebRTC 的要求），但不是端對端加密：Cloudflare 的伺服器會經手媒體。'],
+            ['背景模糊完全在你的瀏覽器裡計算（模型與程式都從 LongTalk 自己的網站載入，不連到別的網站）；畫面不會送到任何地方，別人只收到模糊後的視訊。'],
             ['LongTalk 沒有伺服器端錄影：沒有任何程式把聲音或影像存到伺服器。唯一的錄影是本機錄影，存在錄影者自己的瀏覽器（見「錄影」）。'],
             ['LongTalk 自己的儲存裡，網路位址只有雜湊值，沒有位址本身。Cloudflare 還是看得到你的位址，連線就是這樣運作的（見「還有誰會經手你的資料」）。'],
             ['會議室密碼只存加鹽的雜湊值。帶密碼的連結在第一次載入頁面時，密碼會出現在網址裡經過 Cloudflare，之後頁面會從網址列拿掉。'],

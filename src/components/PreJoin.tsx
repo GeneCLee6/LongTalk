@@ -41,6 +41,8 @@ export interface PasswordFieldProps {
 
 export interface PreJoinProps {
   roomId: string
+  /** Our own picture mirrored for us (e6-t07); on unless turned off */
+  mirror?: boolean
   /** Null while unknown */
   memberCount: number | null
   /** A notice under the room line (the summary could not be loaded) */
@@ -128,8 +130,12 @@ export function PreJoin(props: PreJoinProps) {
         <Frame data-theme="dark">
           {showVideo ? (
             <>
-              <VideoPreview stream={stream} label={strings.prejoin.preview} />
-              <Badge>{strings.prejoin.mirrored}</Badge>
+              <VideoPreview
+                stream={stream}
+                label={strings.prejoin.preview}
+                mirrored={props.mirror !== false}
+              />
+              {props.mirror !== false && <Badge>{strings.prejoin.mirrored}</Badge>}
             </>
           ) : (
             <Placeholder>
