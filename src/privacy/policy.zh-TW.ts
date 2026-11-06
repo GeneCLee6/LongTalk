@@ -29,7 +29,7 @@ const STORAGE: StorageDescriptions = {
   'longtalk.recording.pending': '這個瀏覽器可能有一段沒完成的錄影',
   'longtalk.session.<room>': '你在那間會議室的成員 token，重新整理時回到同一個成員',
   'longtalk.password.<room>': '你輸入或設定的那間會議室密碼（明文），給「複製含密碼的連結」用',
-  'longtalk:mainShare:<room>': '你選了誰的分享畫面放在主區',
+  'longtalk:mainShare:<room>': '你選了誰的分享畫面（或白板）放在主區',
 }
 
 export const policy = (f: Facts): PolicyDocument => ({
@@ -84,7 +84,7 @@ export const policy = (f: Facts): PolicyDocument => ({
               key: 'room',
               cells: [
                 '會議室（Cloudflare Durable Object，每間一個）',
-                `會議進行期間：房名；每位成員的顯示名稱、角色、成員 token、瀏覽器的亂數 id、麥克風、鏡頭與舉手狀態；最近 ${f.chatMessages} 則聊天；聊天檔案的檔名、大小、類型與哪位成員傳的；誰在錄影、誰同意了；分享畫面上的標註（筆跡、文字與畫的人）；等候室裡的名字；被移出的瀏覽器 id。有設密碼的話還有密碼的加鹽雜湊；猜錯密碼時還有瀏覽器的亂數 id 與網路的摘要值。`,
+                `會議進行期間：房名；每位成員的顯示名稱、角色、成員 token、瀏覽器的亂數 id、麥克風、鏡頭與舉手狀態；最近 ${f.chatMessages} 則聊天；聊天檔案的檔名、大小、類型與哪位成員傳的；誰在錄影、誰同意了；分享畫面與白板上的標註（筆跡、文字與畫的人）；等候室裡的名字；被移出的瀏覽器 id。有設密碼的話還有密碼的加鹽雜湊；猜錯密碼時還有瀏覽器的亂數 id 與網路的摘要值。`,
               ],
             },
             {
@@ -193,9 +193,9 @@ export const policy = (f: Facts): PolicyDocument => ({
             {
               key: 'annotations',
               cells: [
-                '分享畫面上的標註（筆跡、文字與畫的人；雷射筆不存）',
+                '分享畫面與白板上的標註（筆跡、文字與畫的人；雷射筆不存）',
                 '會議室',
-                '那個人停止分享時就刪除，會議結束時也會。',
+                '分享畫面上的：那個人停止分享時就刪除。白板上的：關閉白板時留著，有人清除時或會議結束時刪除。分享畫面上的也有人能清除；會議結束時全部刪除。',
               ],
             },
             {

@@ -1,5 +1,6 @@
-// The strokes on a room's shares (J2, e7-t04): one layer per share, keyed by the sharer. The limits
-// are shared/annotation-limits.ts; RoomHost decides who may do what, this only keeps the strokes.
+// The strokes on a room's shares (J2, e7-t04): one layer per share, keyed by the sharer, and one for
+// the whiteboard (J3, e7-t06, WHITEBOARD_LAYER), with its own limits. The limits are
+// shared/annotation-limits.ts; RoomHost decides who may do what, this only keeps the strokes.
 //
 // In memory they are the truth, and every change is cheap: a stroke being drawn changes ten times a
 // second and nothing is written. Storage gets them in segments: each stroke belongs to a segment
@@ -9,18 +10,13 @@
 // brings back the same order.
 import {
   applyStrokeUpdate,
+  limitsOf,
+  spaceOf,
   strokeCost,
   type NormPoint,
   type Stroke,
 } from '../shared/annotation.ts'
-import {
-  MAX_MEMBER_COST,
-  MAX_MEMBER_STROKES,
-  MAX_SHARE_COST,
-  MAX_STROKES,
-  SEGMENT_CHARS,
-  SNAPSHOT_FRAME_CHARS,
-} from '../shared/annotation-limits.ts'
+import { SEGMENT_CHARS, SNAPSHOT_FRAME_CHARS } from '../shared/annotation-limits.ts'
 import type { AnnotationsMessage } from '../shared/protocol.ts'
 
 /** One stored batch of a share's strokes, oldest first */
@@ -124,6 +120,37 @@ export class RoomAnnotations {
   }
 
   /**
+   * Whether this stroke, as new or as a change to the member's own, would take a layer that refuses
+   * past its limits (the whiteboard) over them. A stroke that shrinks always fits, so finishing one
+   * (simplified, shorter) is never what goes over. A layer that evicts is never full.
+   */
+  overflows(share: string, stroke: Stroke): boolean {
+    const limits = limitsOf(share)
+    if (limits.whenFull !== 'refuse') return false
+    const layer = this.layers.get(share)
+    const existing = layer?.entries.get(stroke.id)
+    const change = strokeCost(stroke) - (existing?.cost ?? 0)
+    if (existing && change <= 0) return false
+    const tally = layer?.tallies.get(stroke.by)
+    const added = existing ? 0 : 1
+    return (
+      (layer?.entries.size ?? 0) + added > limits.strokes ||
+      (layer?.cost ?? 0) + change > limits.cost ||
+      (tally?.strokes ?? 0) + added > limits.memberStrokes ||
+      (tally?.cost ?? 0) + change > limits.memberCost
+    )
+  }
+
+  /** Who has strokes on a layer, and how many */
+  authors(share: string): Map<string, number> {
+    const counts = new Map<string, number>()
+    for (const [member, tally] of this.layers.get(share)?.tallies ?? []) {
+      if (tally.strokes > 0) counts.set(member, tally.strokes)
+    }
+    return counts
+  }
+
+  /**
    * Adds a stroke (stamped with its member in `by`), or replaces the member's own with its id,
    * keeping its place. Null when the id is someone else's. Past the limits older strokes fall out,
    * the member's own first when it is the member's limit.
@@ -160,6 +187,9 @@ export class RoomAnnotations {
 
   /** Makes room, never taking `keep`, the stroke just touched */
   private enforce(share: string, layer: Layer, member: string, keep: string): string[] {
+    const limits = limitsOf(share)
+    // Nothing falls out of a board: `overflows` refused what would not fit
+    if (limits.whenFull === 'refuse') return []
     const evicted: string[] = []
     const memberTally = layer.tally(member)
     const oldest = (mine: boolean): string | null => {
@@ -175,10 +205,10 @@ export class RoomAnnotations {
       evicted.push(id)
       return true
     }
-    while (memberTally.strokes > MAX_MEMBER_STROKES || memberTally.cost > MAX_MEMBER_COST) {
+    while (memberTally.strokes > limits.memberStrokes || memberTally.cost > limits.memberCost) {
       if (!take(true)) break
     }
-    while (layer.entries.size > MAX_STROKES || layer.cost > MAX_SHARE_COST) {
+    while (layer.entries.size > limits.strokes || layer.cost > limits.cost) {
       if (!take(false)) break
     }
     return evicted
@@ -199,8 +229,9 @@ export class RoomAnnotations {
     const layer = this.layers.get(share)
     const existing = layer?.entries.get(id)
     if (!layer || !existing || existing.stroke.by !== member) return null
-    const stroke = applyStrokeUpdate(existing.stroke, at, points)
-    return stroke && this.replace(share, layer, existing, stroke)
+    const stroke = applyStrokeUpdate(existing.stroke, at, points, spaceOf(share))
+    if (!stroke || this.overflows(share, stroke)) return null
+    return this.replace(share, layer, existing, stroke)
   }
 
   /** The member's own stroke goes; false when there is no such stroke of theirs */

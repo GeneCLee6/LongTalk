@@ -152,19 +152,25 @@ export function drawNameTag(
   ctx.restore()
 }
 
-/** The whole canvas: cleared, then the strokes in order, clipped to the picture */
+/**
+ * The whole canvas: cleared, then the strokes in order, clipped to the picture. The whiteboard has
+ * no picture to stay on: `clip` false (its rectangle is only the world's unit square, J3)
+ */
 export function drawStrokes(
   ctx: CanvasRenderingContext2D,
   strokes: readonly Stroke[],
   rect: Rect,
   ratio: number,
   canvasSize: { width: number; height: number },
+  clip = true,
 ): void {
   ctx.clearRect(0, 0, canvasSize.width, canvasSize.height)
   ctx.save()
-  ctx.beginPath()
-  ctx.rect(rect.x * ratio, rect.y * ratio, rect.width * ratio, rect.height * ratio)
-  ctx.clip()
+  if (clip) {
+    ctx.beginPath()
+    ctx.rect(rect.x * ratio, rect.y * ratio, rect.width * ratio, rect.height * ratio)
+    ctx.clip()
+  }
   for (const stroke of strokes) drawStroke(ctx, stroke, rect, ratio)
   ctx.restore()
 }

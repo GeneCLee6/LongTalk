@@ -4,7 +4,18 @@
 // the decision is only ever made here.
 import { PERMISSIONS, can, canActOn, type Action, type Role } from '../shared/roles.ts'
 
-export { ACTIONS, PERMISSIONS, RANK, ROLES, can, canActOn } from '../shared/roles.ts'
+export {
+  ACTIONS,
+  PERMISSIONS,
+  RANK,
+  ROLES,
+  can,
+  canActOn,
+  mayClearLayer,
+  mayCloseBoard,
+  mayDraw,
+  mayOpenBoard,
+} from '../shared/roles.ts'
 export type { Action, Role, Rule } from '../shared/roles.ts'
 
 /** The member on the other end of a `member` action */

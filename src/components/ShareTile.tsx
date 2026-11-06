@@ -1,19 +1,11 @@
-import {
-  Suspense,
-  lazy,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-  type RefObject,
-} from 'react'
-import styled, { css } from 'styled-components'
+import { Suspense, lazy, useRef, useState, type ReactNode } from 'react'
+import styled from 'styled-components'
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, videoTransform } from '../../shared/shareGeometry.ts'
 import { canFullscreen } from '../media/capabilities.ts'
 import type { AnnotationStore } from '../room/annotationStore.ts'
 import { strings } from '../strings.ts'
-import { color, fontSize, media, motion, radius, space } from '../styles/tokens.ts'
+import { color, fontSize, radius, space } from '../styles/tokens.ts'
+import { Button } from './Button.tsx'
 import {
   FullscreenExitIcon,
   FullscreenIcon,
@@ -22,6 +14,16 @@ import {
   ZoomInIcon,
   ZoomOutIcon,
 } from './icons.tsx'
+import {
+  Control,
+  Controls,
+  Frame,
+  Percent,
+  PickerSlot,
+  RecordingTag,
+  Tag,
+} from './shareChrome.tsx'
+import { useFullscreen, useMarked } from './useShareChrome.ts'
 import { useTrack } from './useTrack.ts'
 import { useVideoDemand } from './useVideoDemand.ts'
 import { ShareGeometryContext, useShareViewport } from './useShareGeometry.ts'
@@ -32,14 +34,17 @@ import { useShareGestures } from './useShareGestures.ts'
  * 標註, or when there is a mark to show
  */
 const AnnotationLayer = lazy(() => import('../annotate/AnnotationLayer.tsx'))
+const ClearMarks = lazy(() => import('../annotate/ClearMarks.tsx'))
 
 /** The marks on this share (J2, e7-t04) */
 export interface ShareAnnotations {
   store: AnnotationStore
   /** The sharer: which share's layer */
   share: string
-  /** Our member id where we may annotate (shared/roles.ts `annotate`); null: no 標註 button */
+  /** Our member id where the room lets us draw (shared/roles.ts mayDraw); null: no 標註 button */
   me: string | null
+  /** We may clear it, all of it or one person's (shared/roles.ts mayClearLayer) */
+  manage?: boolean
   /** A member's name for the tag beside what they draw */
   nameOf: (memberId: string) => string | null
 }
@@ -63,21 +68,12 @@ export interface ShareTileProps {
    * tile says it itself (CLAUDE.md rule 4)
    */
   recording?: string | null
-}
-
-/** This element in the browser's fullscreen, and the way in and out */
-function useFullscreen(ref: RefObject<HTMLElement | null>) {
-  const [active, setActive] = useState(false)
-  useEffect(() => {
-    const onChange = () => setActive(!!ref.current && document.fullscreenElement === ref.current)
-    document.addEventListener('fullscreenchange', onChange)
-    return () => document.removeEventListener('fullscreenchange', onChange)
-  }, [ref])
-  const toggle = () => {
-    if (document.fullscreenElement === ref.current) void document.exitFullscreen?.()
-    else void ref.current?.requestFullscreen?.()?.catch(() => undefined)
-  }
-  return { active, toggle }
+  /**
+   * The sharer's own share, from their own capture and never from the SFU (J3): it says what a
+   * browser cannot do. `mirrorRisk`: a whole screen or the meeting itself is shared, so the picture
+   * would show itself over and over (e3-t09); it starts hidden, leaving the marks on a blank sheet.
+   */
+  own?: { mirrorRisk: boolean } | null
 }
 
 /**
@@ -91,6 +87,8 @@ function useFullscreen(ref: RefObject<HTMLElement | null>) {
  * and useShareGeometry tells anything inside it where the picture ended up. The controls also
  * bring out the annotation tools (J2, e7-t03). The marks on a share show on any tile that shows
  * it, the strip's too, whether or not the tools are out.
+ *
+ * The sharer can open their own share here too (J3, `own`), to see and add to the marks.
  */
 export function ShareTile({
   name,
@@ -99,6 +97,7 @@ export function ShareTile({
   picker,
   annotations = null,
   recording = null,
+  own = null,
 }: ShareTileProps) {
   const videoRef = useTrack<HTMLVideoElement>(video)
   const frameRef = useRef<HTMLElement>(null)
@@ -113,8 +112,11 @@ export function ShareTile({
   const fullscreen = useFullscreen(frameRef)
   const fullscreenable = canFullscreen()
   const annotator = annotations?.me ?? null
-  const [annotating, setAnnotating] = useState(false)
-  const marked = useMarked(annotations)
+  const [toolsOut, setToolsOut] = useState(false)
+  // The room may take the tools away while they are out (J3): the button goes, and so do they
+  const annotating = toolsOut && annotator !== null
+  const marked = useMarked(annotations?.store, annotations?.share)
+  const [pictureOn, setPictureOn] = useState(!own?.mirrorRisk)
   // Stays once there has been something to show: nothing flickers as the last mark fades
   const [hasMarks, setHasMarks] = useState(false)
   if (marked && !hasMarks) setHasMarks(true)
@@ -124,12 +126,15 @@ export function ShareTile({
     onToggleFullscreen: fullscreenable ? fullscreen.toggle : undefined,
   })
   const percent = Math.round(zoom * 100)
+  const text = strings.screenShare
+  const region = own ? text.ownRegion : text.region(name)
   return (
     <ShareGeometryContext.Provider value={geometry}>
       <Frame
         ref={frameRef}
-        aria-label={strings.screenShare.region(name)}
+        aria-label={region}
         data-share-tile=""
+        data-own-share={own ? '' : undefined}
         data-zoom={ready ? zoom : undefined}
         tabIndex={ready ? 0 : undefined}
         $grab={ready && zoom > 1 && !annotating}
@@ -139,10 +144,11 @@ export function ShareTile({
         {video ? (
           <Video
             ref={videoRef}
-            aria-label={strings.screenShare.region(name)}
+            aria-label={region}
             autoPlay
             muted
             playsInline
+            $hidden={own !== null && !pictureOn}
             style={{ transform: videoTransform(geometry.box, geometry.source, geometry.view) }}
           />
         ) : (
@@ -156,22 +162,42 @@ export function ShareTile({
             <AnnotationLayer {...annotations} editing={ready && annotating} />
           </Suspense>
         )}
-        <Tag>{strings.screenShare.label(name)}</Tag>
+        <Tag>{own ? text.ownLabel : text.label(name)}</Tag>
         {fullscreen.active && recording && <RecordingTag>{recording}</RecordingTag>}
         {picker && <PickerSlot>{picker}</PickerSlot>}
+        {own && (
+          <OwnNote>
+            <p>{text.ownLimit}</p>
+            {own.mirrorRisk && !pictureOn && <p>{text.ownHidden}</p>}
+            {own.mirrorRisk && (
+              <Button variant="secondary" onClick={() => setPictureOn((on) => !on)}>
+                {pictureOn ? text.ownHidePicture : text.ownShowPicture}
+              </Button>
+            )}
+          </OwnNote>
+        )}
         {ready && (
           <Controls
             role="group"
             aria-label={strings.screenShare.viewControls}
             $pinned={zoom > 1 || annotating}
           >
+            {annotations?.manage && marked && (
+              <Suspense fallback={null}>
+                <ClearMarks
+                  store={annotations.store}
+                  layer={annotations.share}
+                  nameOf={annotations.nameOf}
+                />
+              </Suspense>
+            )}
             {annotator !== null && (
               <Control
                 type="button"
                 aria-label={strings.screenShare.annotate}
                 title={strings.screenShare.annotateHint}
                 aria-pressed={annotating}
-                onClick={() => setAnnotating((on) => !on)}
+                onClick={() => setToolsOut((on) => !on)}
               >
                 <PenIcon />
               </Control>
@@ -235,53 +261,14 @@ export function ShareTile({
   )
 }
 
-const noMarks = () => () => undefined
-const never = () => false
-
-/** Whether this share has anything to show (the store, not React state: see AnnotationStore) */
-function useMarked(annotations: ShareAnnotations | null): boolean {
-  const { store, share } = annotations ?? {}
-  return useSyncExternalStore(
-    store && share ? (listener) => store.subscribe(share, listener) : noMarks,
-    store && share ? () => store.marked(share) : never,
-  )
-}
-
-const Frame = styled.figure<{ $grab: boolean; $interactive: boolean; $dragging?: boolean }>`
-  position: relative;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  overflow: hidden;
-  border-radius: ${radius.tile};
-  background: ${color.tileTo};
-  display: grid;
-  place-items: center;
-  color: ${color.fg};
-
-  &:fullscreen {
-    border-radius: 0;
-  }
-
-  ${({ $interactive }) =>
-    $interactive &&
-    css`
-      /* The tile's own pinch and drag, not the browser's */
-      touch-action: none;
-    `}
-  ${({ $grab, $dragging }) =>
-    $grab &&
-    css`
-      cursor: ${$dragging ? 'grabbing' : 'grab'};
-    `}
-`
-
-const Video = styled.video`
+const Video = styled.video<{ $hidden: boolean }>`
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
+  /* Still playing, so the tile knows the picture's shape: only never painted (no mirror) */
+  ${({ $hidden }) => ($hidden ? 'visibility: hidden;' : '')}
 `
 
 const Waiting = styled.p`
@@ -300,123 +287,29 @@ const Waiting = styled.p`
   }
 `
 
-/** DESIGN.md §1: 分享＝藍色標籤 (the brand colour), with the name, never colour alone */
-const Tag = styled.figcaption`
+/** The limit, bottom left and away from the controls: never over what is being pointed at for long */
+const OwnNote = styled.div`
   position: absolute;
-  top: ${space(2.5)};
-  left: ${space(2.5)};
-  max-width: calc(100% - ${space(5)});
-  padding: ${space(1)} ${space(2.5)};
-  border-radius: ${radius.pill};
-  background: ${color.primary};
-  color: ${color.onPrimary};
-  font-size: ${fontSize.nameplate};
-  font-weight: 700;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  pointer-events: none;
-`
-
-/** The top bar's red light where fullscreen hides it: words, and a dot */
-const RecordingTag = styled.p`
-  position: absolute;
-  top: ${space(10)};
-  left: ${space(2.5)};
-  margin: 0;
-  padding: ${space(1)} ${space(2.5)};
-  border-radius: ${radius.pill};
-  background: ${color.danger};
-  color: ${color.onDanger};
-  font-size: ${fontSize.nameplate};
-  font-weight: 700;
-  pointer-events: none;
-
-  &::before {
-    content: '● ';
-  }
-`
-
-const PickerSlot = styled.div`
-  position: absolute;
-  top: ${space(2)};
-  right: ${space(2)};
-  max-width: calc(100% - ${space(4)});
-`
-
-/**
- * Bottom right, out of the way of the name and the picker on top (and J2's toolbar, DESIGN.md
- * §4.3: 分享格上緣). Shown on hover or focus, always on touch and while the view is changed.
- */
-const Controls = styled.div<{ $pinned: boolean }>`
-  position: absolute;
-  right: ${space(2)};
+  left: ${space(2)};
   bottom: ${space(2)};
-  display: flex;
-  align-items: center;
-  gap: ${space(0.5)};
-  padding: ${space(0.5)};
-  border-radius: ${radius.pill};
+  display: grid;
+  justify-items: start;
+  gap: ${space(1)};
+  max-width: min(46%, 360px);
+  padding: ${space(1.5)} ${space(2.5)};
+  border-radius: ${radius.button};
   background: ${color.overlay};
-  cursor: default;
-  opacity: ${({ $pinned }) => ($pinned ? 1 : 0)};
-  transition: opacity ${motion.fast} ease-out;
-
-  figure:hover &,
-  &:focus-within,
-  figure:focus-visible & {
-    opacity: 1;
-  }
-  @media ${media.touchPrimary} {
-    opacity: 1;
-  }
-`
-
-const controlStyle = css`
-  display: inline-grid;
-  place-items: center;
-  height: 32px;
-  padding: 0;
-  border: none;
-  border-radius: ${radius.pill};
-  background: transparent;
   color: ${color.fg};
-  cursor: pointer;
-
-  &:hover:not(:disabled) {
-    background: ${color.hover};
-  }
-  &:disabled {
-    color: ${color.muted};
-    cursor: default;
-  }
-  &[aria-pressed='true'] {
-    background: ${color.primary};
-    color: ${color.onPrimary};
-  }
-  @media ${media.touchPrimary} {
-    height: 44px;
-  }
-`
-
-const Control = styled.button`
-  ${controlStyle}
-  width: 32px;
-
-  svg {
-    width: 18px;
-    height: 18px;
-  }
-  @media ${media.touchPrimary} {
-    width: 44px;
-  }
-`
-
-const Percent = styled.button`
-  ${controlStyle}
-  min-width: 44px;
   font-size: ${fontSize.nameplate};
-  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  pointer-events: none;
+
+  p {
+    margin: 0;
+  }
+  button {
+    pointer-events: auto;
+  }
 `
 
 /** The strip share's whole surface: one click (or Enter) brings it to the main area */

@@ -29,6 +29,8 @@ const state = {
     passwordSetAt: null,
     spotlight: null,
     recordings: {},
+    annotationPolicy: 'everyone' as const,
+    whiteboard: null,
   },
   members: {
     m1: {

@@ -498,6 +498,10 @@ export const en: Strings = {
       `${actor} stopped your recording. The file has been downloaded.`,
     recordAllowed: (actor: string) =>
       `${actor} allowed you to record. Start from More › Start recording; everyone will see “Recording”.`,
+    annotationPolicy: (actor: string, value: string) =>
+      `${actor} changed who can annotate to: ${value}.`,
+    annotationsCleared: (name: string, all: boolean, board: boolean) =>
+      `${name} cleared ${all ? 'all the' : 'your'} marks on the ${board ? 'whiteboard' : 'shared screen'}.`,
     recordRevoked: (actor: string) => `${actor} took back your permission to record.`,
   },
   annotation: {
@@ -534,6 +538,42 @@ export const en: Strings = {
     unfold: 'Unfold the toolbar',
     textLabel: 'Annotation text',
     textPlaceholder: 'Type, then press Enter',
+    policy: {
+      label: 'Who can annotate',
+      options: { everyone: 'Everyone', sharer: 'Host and sharer', off: 'Off' },
+      hint: {
+        everyone: 'Everyone can draw on shared screens and the whiteboard',
+        sharer: 'Only the host, co-hosts and the sharer (on the whiteboard, whoever opened it)',
+        off: 'Nobody can draw. What is already drawn stays, and can be cleared',
+      },
+      changed: (value: string) => `Who can annotate: ${value}`,
+    },
+    clearOthers: 'Clear annotations…',
+    clearAll: (count: number) => `Clear everything (${count})`,
+    clearOne: (name: string, count: number) => `Clear ${name}'s (${count})`,
+    departed: 'Someone who left',
+    clearAllTitle: 'Clear all annotations?',
+    clearAllBody: 'Everything anyone drew goes, for everyone at once. This cannot be undone.',
+    clearOneTitle: (name: string) => `Clear ${name}'s annotations?`,
+    clearOneBody: (name: string) =>
+      `Everything ${name} drew goes, for everyone at once. This cannot be undone.`,
+    clearConfirm: 'Clear',
+  },
+  whiteboard: {
+    section: 'Whiteboard',
+    open: 'Open the whiteboard',
+    show: 'Show the whiteboard in the main area',
+    close: 'Close the whiteboard',
+    closeHint: 'Close the whiteboard (for everyone; what is on it stays until the meeting ends)',
+    label: 'Whiteboard',
+    region: 'Whiteboard',
+    opened: (name: string) => `${name} opened the whiteboard`,
+    viewControls: 'Whiteboard view',
+    pen: 'Draw',
+    penHint: 'Draw (turn it off to drag the whiteboard around)',
+    grid: 'Grid',
+    home: (percent: number) => `${percent}%, back to the middle of the whiteboard`,
+    viewOnly: 'You cannot draw on the whiteboard right now, only watch'
   },
   screenShare: {
     stop: 'Stop sharing',
@@ -556,7 +596,18 @@ export const en: Strings = {
     annotate: 'Annotate',
     annotateHint: 'Annotate (everyone sees it; it clears when the share ends)',
     annotationCanvas: 'Annotation canvas',
-    annotationLimit: 'Drawing too fast: one mark was not sent',
+    annotationLimit: 'One mark was not sent: drawing too fast, or the whiteboard is full (clear some first)',
+    ownOpen: 'See my screen and its marks',
+    ownOpenMarked: 'Someone drew on your screen: take a look',
+    ownClose: 'Hide my screen',
+    ownRegion: 'Your shared screen and its marks',
+    ownLabel: 'Your screen',
+    ownLimit:
+      'Marks only show in the meeting. A browser cannot draw on your real desktop, so they do not appear on your own screen.',
+    ownHidden:
+      'Sharing a whole screen: the picture is hidden so it does not repeat endlessly. Only the marks show here.',
+    ownShowPicture: 'Show the picture',
+    ownHidePicture: 'Hide the picture',
     mode: 'Sharing mode',
     modeText: 'Text',
     modeMotion: 'Motion',

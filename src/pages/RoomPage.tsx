@@ -34,6 +34,7 @@ import {
   focusFirst,
   pickSpeaker,
   shareSlots,
+  stageSources,
   stageFocus,
   stageLayout,
   visibleTiles,
@@ -73,8 +74,18 @@ import type { PermissionGuideProps } from '../components/PermissionGuide.tsx'
 import { SharingBar } from '../components/SharingBar.tsx'
 import { ShortcutsDialog } from '../components/ShortcutsDialog.tsx'
 import { ShareTile } from '../components/ShareTile.tsx'
+import { WHITEBOARD_LAYER } from '../../shared/annotation.ts'
+import {
+  DEFAULT_ANNOTATION_POLICY,
+  mayClearLayer,
+  mayCloseBoard,
+  mayDraw,
+  mayOpenBoard,
+  type AnnotationPolicy,
+} from '../../shared/roles.ts'
 import { useAnnotationStore } from '../room/useAnnotationStore.ts'
 import { SharePicker } from '../components/SharePicker.tsx'
+import { BoardStripTile } from '../components/BoardStripTile.tsx'
 import { SettingsDialog } from '../components/SettingsDialog.tsx'
 import { PanelTabs, SidePanel } from '../components/SidePanel.tsx'
 import type { DeviceChoice } from '../components/DeviceSelect.tsx'
@@ -1231,6 +1242,7 @@ function Room({
   // The share's sound (e3-t04): sent with the screen while the bar's switch is on
   const sharingAudio = sharePhase === 'sharing' && screenShare.audioOn ? screenShare.audio : null
   useShareStartedNotice(sharerIds, state.you, memberName, show)
+  useBoardOpenedNotice(roomInfo?.whiteboard?.by ?? null, state.you, memberName, show)
   // This tab says it is a meeting tab, so a share of it is recognised (e3-t09, Capture Handle)
   useEffect(() => announceMeetingTab(roomId), [roomId])
   // The presenter view's thumbnail and the dynamic-content hint (e3-t06, e3-t08): our own
@@ -1243,7 +1255,11 @@ function Room({
     selfCaptureKind !== null && selfCaptureDismissed !== sharingScreen ? selfCaptureKind : null
   // Whose share this viewer keeps in the main area (e3-t07): the latest unless they chose one
   const [chosenShare, setChosenShare] = useState(() => loadMainShare(roomId))
+  // Our own share in the main area, where its marks show (J3): only while we share
+  const [ownViewWanted, setOwnViewWanted] = useState(false)
+  if (ownViewWanted && sharingScreen === null) setOwnViewWanted(false)
   const chooseShare = (memberId: string) => {
+    setOwnViewWanted(false)
     setChosenShare(memberId)
     saveMainShare(roomId, memberId)
   }
@@ -1349,6 +1365,25 @@ function Room({
       case 'recordRevoked':
         show(strings.hostNotice.recordRevoked(who))
         return
+      // J3 (e7-t05)
+      case 'annotationPolicy':
+        if (notice.policy) {
+          show(
+            strings.hostNotice.annotationPolicy(who, strings.annotation.policy.options[notice.policy]),
+          )
+        }
+        return
+      case 'annotationsCleared':
+        // Maybe a sharer, not only a host: the name alone
+        show(
+          strings.hostNotice.annotationsCleared(
+            actor?.name ?? '',
+            notice.all === true,
+            notice.layer === WHITEBOARD_LAYER,
+          ),
+          'warn',
+        )
+        return
     }
   })
   useEffect(() => onHostControl((notice) => onHostNotice(notice)), [onHostControl])
@@ -1431,6 +1466,12 @@ function Room({
   const onWaitingRoom = (on: boolean) => {
     send({ t: 'host', action: 'waitingRoom', on })
     show(on ? strings.participants.waitingOnNow : strings.participants.waitingOffNow)
+  }
+  // Who may annotate (J3, e7-t05): RoomDO decides and tells everyone else
+  const annotationPolicy: AnnotationPolicy = roomInfo?.annotationPolicy ?? DEFAULT_ANNOTATION_POLICY
+  const onAnnotationPolicy = (policy: AnnotationPolicy) => {
+    send({ t: 'host', action: 'annotationPolicy', policy })
+    show(strings.annotation.policy.changed(strings.annotation.policy.options[policy]))
   }
   const onAdmit = (memberId: string) => send({ t: 'host', action: 'admit', memberId })
   const onDeny = (memberId: string) => {
@@ -1755,9 +1796,19 @@ function Room({
   // this viewer chose, else the latest, and the others go first in the strip (e3-t07). Our own
   // share is never shown back to us big (it would mirror endlessly): the presenter view is the
   // bar's thumbnail (e3-t08).
+  // The whiteboard is one more thing that can take the main area (J3, e7-t06), and our own share
+  // comes to it only when asked for (J3): the bar's button, never by itself.
   const sharers = sharerIds.flatMap((id) => state.view?.members[id] ?? [])
   const otherSharers = sharers.filter((sharer) => sharer.id !== state.you)
-  const slots = shareSlots(sharerIds, state.you, chosenShare)
+  const board = roomInfo?.whiteboard ?? null
+  const ownView = ownViewWanted && sharingScreen !== null && state.you !== null
+  const sources = stageSources(
+    shareOrder(roomInfo?.shares),
+    board && { layer: WHITEBOARD_LAYER, since: board.since },
+  )
+  const slots = ownView
+    ? shareSlots(sources, null, state.you)
+    : shareSlots(sources, state.you, chosenShare)
   const receivedOf = (member: Member, kind: 'screen' | 'screenAudio') => {
     const track = member.tracks.find((t) => t.kind === kind)
     return (track && media.received[trackKey(track)]?.track) || null
@@ -1784,6 +1835,8 @@ function Room({
       waiting={waitingList}
       locked={roomInfo?.locked ?? false}
       waitingRoom={roomInfo?.waitingRoom ?? false}
+      annotationPolicy={annotationPolicy}
+      onAnnotationPolicy={onAnnotationPolicy}
       onLock={onLock}
       onWaitingRoom={onWaitingRoom}
       onAdmit={onAdmit}
@@ -1824,41 +1877,130 @@ function Room({
         : strings.record.byOne(viewMembers?.[otherRecorders[0].memberId]?.name ?? '')
   const mainSharer = otherSharers.find((sharer) => sharer.id === slots.main)
   const nameOnMarks = (memberId: string) => viewMembers?.[memberId]?.name ?? null
-  const shareTile = mainSharer ? (
-    <ShareTile
-      key={`${mainSharer.id}-share`}
-      name={mainSharer.name}
-      video={receivedOf(mainSharer, 'screen')}
-      annotations={{
-        store: annotationStore,
-        share: mainSharer.id,
-        me: can(role, 'annotate') ? state.you : null,
-        nameOf: nameOnMarks,
-      }}
-      recording={recorders.length > 0 || weRecord ? recordingLabel : null}
-      picker={
-        otherSharers.length > 1 ? (
-          <SharePicker
-            shares={otherSharers.map(({ id, name }) => ({ id, name }))}
-            main={mainSharer.id}
-            onPick={chooseShare}
-          />
-        ) : undefined
-      }
-    />
-  ) : undefined
-  // The other shares, first in the strip; each brings itself to the main area (e3-t07)
-  const stripShares = otherSharers
-    .filter((sharer) => slots.strip.includes(sharer.id))
-    .map((sharer) => (
+  const recordingText = recorders.length > 0 || weRecord ? recordingLabel : null
+  const mainChoices = [
+    ...otherSharers.map(({ id, name }) => ({ id, name })),
+    ...(board
+      ? [{ id: WHITEBOARD_LAYER, name: strings.whiteboard.label, label: strings.whiteboard.label }]
+      : []),
+  ].sort((a, b) => sources.indexOf(a.id) - sources.indexOf(b.id))
+  const mainPicker =
+    mainChoices.length > 1 ? (
+      <SharePicker shares={mainChoices} main={slots.main ?? ''} onPick={chooseShare} />
+    ) : undefined
+  const boardOwner = board !== null && board.by === state.you
+  const mayCloseThisBoard = board !== null && mayCloseBoard(role, boardOwner)
+  const closeBoard = () => send({ t: 'whiteboard', open: false })
+  const shareTile =
+    slots.main === WHITEBOARD_LAYER ? (
+      <Suspense fallback={null}>
+        <Whiteboard
+          key={WHITEBOARD_LAYER}
+          store={annotationStore}
+          me={mayDraw(annotationPolicy, role, boardOwner) ? state.you : null}
+          manage={mayClearLayer(role, boardOwner)}
+          nameOf={nameOnMarks}
+          picker={mainPicker}
+          recording={recordingText}
+          onClose={mayCloseThisBoard ? closeBoard : undefined}
+        />
+      </Suspense>
+    ) : ownView && state.you ? (
       <ShareTile
-        key={`${sharer.id}-share`}
-        name={sharer.name}
-        video={receivedOf(sharer, 'screen')}
-        annotations={{ store: annotationStore, share: sharer.id, me: null, nameOf: nameOnMarks }}
-        onShowMain={() => chooseShare(sharer.id)}
+        key={`${state.you}-own-share`}
+        name={self?.name ?? ''}
+        video={sharingScreen}
+        annotations={{
+          store: annotationStore,
+          share: state.you,
+          me: mayDraw(annotationPolicy, role, true) ? state.you : null,
+          manage: mayClearLayer(role, true),
+          nameOf: nameOnMarks,
+        }}
+        recording={recordingText}
+        picker={mainPicker}
+        own={{
+          // Not known to be a window or a tab: it may be everything, the meeting included
+          mirrorRisk:
+            selfCaptureKind !== null ||
+            (screenShare.surface?.surface !== 'window' &&
+              screenShare.surface?.surface !== 'browser'),
+        }}
       />
-    ))
+    ) : mainSharer ? (
+      <ShareTile
+        key={`${mainSharer.id}-share`}
+        name={mainSharer.name}
+        video={receivedOf(mainSharer, 'screen')}
+        annotations={{
+          store: annotationStore,
+          share: mainSharer.id,
+          me: mayDraw(annotationPolicy, role, false) ? state.you : null,
+          manage: mayClearLayer(role, false),
+          nameOf: nameOnMarks,
+        }}
+        recording={recordingText}
+        picker={mainPicker}
+      />
+    ) : undefined
+  // The other shares, first in the strip; each brings itself to the main area (e3-t07)
+  const stripShares = [
+    ...otherSharers
+      .filter((sharer) => slots.strip.includes(sharer.id))
+      .map((sharer) => (
+        <ShareTile
+          key={`${sharer.id}-share`}
+          name={sharer.name}
+          video={receivedOf(sharer, 'screen')}
+          annotations={{ store: annotationStore, share: sharer.id, me: null, nameOf: nameOnMarks }}
+          onShowMain={() => chooseShare(sharer.id)}
+        />
+      )),
+    ...(slots.strip.includes(WHITEBOARD_LAYER)
+      ? [
+          <BoardStripTile
+            key={WHITEBOARD_LAYER}
+            onShowMain={() => chooseShare(WHITEBOARD_LAYER)}
+          />,
+        ]
+      : []),
+  ]
+  // 更多 › 白板: open it (and bring it to our own main area), look at it, close it for everyone
+  const boardItems: MenuItem[] = [
+    ...(board === null && mayOpenBoard(annotationPolicy, role)
+      ? [
+          {
+            id: 'whiteboard-open',
+            label: strings.whiteboard.open,
+            section: strings.whiteboard.section,
+            onSelect: () => {
+              send({ t: 'whiteboard', open: true })
+              chooseShare(WHITEBOARD_LAYER)
+            },
+          },
+        ]
+      : []),
+    ...(board !== null && slots.main !== WHITEBOARD_LAYER
+      ? [
+          {
+            id: 'whiteboard-show',
+            label: strings.whiteboard.show,
+            section: strings.whiteboard.section,
+            onSelect: () => chooseShare(WHITEBOARD_LAYER),
+          },
+        ]
+      : []),
+    ...(mayCloseThisBoard
+      ? [
+          {
+            id: 'whiteboard-close',
+            label: strings.whiteboard.close,
+            section: strings.whiteboard.section,
+            onSelect: closeBoard,
+          },
+        ]
+      : []),
+  ]
   // The tiles in the stage's order; in the share's strip the pinned or spotlighted one first
   // (a share keeps the main area)
   const byId = new Map(members.map((member) => [member.id, member]))
@@ -1911,6 +2053,16 @@ function Room({
                   // A whole screen (or the meeting itself) would show the preview inside itself
                   off: screenShare.surface?.surface === 'monitor' || selfCaptureKind !== null,
                 }}
+                ownView={
+                  state.you
+                    ? {
+                        open: ownView,
+                        onToggle: () => setOwnViewWanted((open) => !open),
+                        store: annotationStore,
+                        layer: state.you,
+                      }
+                    : null
+                }
                 selfCapture={
                   selfCaptureShown
                     ? {
@@ -2105,7 +2257,7 @@ function Room({
             onToggleChat={() => togglePanel('chat')}
             participantsOpen={panel === 'participants'}
             onToggleParticipants={() => togglePanel('participants')}
-            moreItems={[...moreItems, ...mediaItems]}
+            moreItems={[...moreItems, ...boardItems, ...mediaItems]}
             onLeave={onLeave}
             micOn={local.mic.on}
             camOn={local.cam.on}
@@ -2413,6 +2565,22 @@ function useShareStartedNotice(
   }, [sharerIds, you, name, show])
 }
 
+/** Someone else opened the whiteboard (J3): it may have just taken the main area */
+function useBoardOpenedNotice(
+  by: string | null,
+  you: string | null,
+  name: { current: (id: string) => string },
+  show: (text: string) => void,
+) {
+  const previous = useRef(by)
+  useEffect(() => {
+    if (by !== null && by !== you && previous.current !== by) {
+      show(strings.whiteboard.opened(name.current(by)))
+    }
+    previous.current = by
+  }, [by, you, name, show])
+}
+
 /**
  * What the room's components read from context: the phone layout (e4-t07), and where received
  * videos report their drawn size for the layer choice (e2-t12, useVideoDemand)
@@ -2588,6 +2756,9 @@ function mediaErrorText(error: MediaTransportErrorCode | null): string | null {
  */
 /** 連線統計 (e2-t14): its own chunk, loaded when the panel first opens */
 const StatsPanel = lazy(() => import('../components/StatsPanel.tsx'))
+
+/** The whiteboard (J3, e7-t06): its own chunk, loaded when someone first looks at it (rule 6) */
+const Whiteboard = lazy(() => import('../annotate/Whiteboard.tsx'))
 
 /** 錄影設定 (I4, e8-t03): its own chunk, like the recorder */
 const RecordDialog = lazy(() => import('../components/RecordDialog.tsx'))

@@ -54,6 +54,8 @@ export interface AnnotationToolbarProps {
   drawer: AnnotationDrawer
   mode: AnnotationMode
   onMode: (mode: AnnotationMode, byKeyboard: boolean) => void
+  /** The colours on offer (the whiteboard leaves out white, J3) */
+  colors?: readonly AnnotationColor[]
   color: AnnotationColor
   onColor: (color: AnnotationColor) => void
   width: AnnotationWidth
@@ -72,6 +74,7 @@ export function AnnotationToolbar({
   drawer,
   mode,
   onMode,
+  colors = ANNOTATION_COLORS,
   color,
   onColor,
   width,
@@ -100,7 +103,7 @@ export function AnnotationToolbar({
   const style = (
     <>
       <Group role="group" aria-label={text.colorGroup}>
-        {ANNOTATION_COLORS.map((name) => (
+        {colors.map((name) => (
           <Swatch
             key={name}
             type="button"

@@ -15,7 +15,7 @@
 | `worker/scheduled.ts`（I5） | Cron：`sweep.ts` 刪到期檔案、`backup.ts` D1 備份 | 帶任何 secret（只用綁定） |
 | `worker/index.ts` | Worker 入口：匯出 handler（`fetch`、`scheduled`）與 DO class | 其他邏輯 |
 | `src/media/` | `MediaTransport` 介面與實作（A2 起） | 元件直接碰 `RTCPeerConnection` 或 SFU API |
-| `src/annotate/`（J1、J2） | 標註畫布、工具列、繪製與送出的節奏，全部 lazy（只有 `ShareTile` 的 `lazy()` 指向這裡；錄影的 lazy chunk 也用 `draw.ts`）；模型在 `shared/annotation.ts`，數字在 `shared/annotation-limits.ts`，對齊問 `useShareGeometry()`；收房間訊息的是初始 JS 裡的 `src/room/annotationStore.ts` | 被會議室的初始 JS 靜態匯入；自己換算分享畫面的位置 |
+| `src/annotate/`（J1、J2、J3） | 標註畫布、工具列、清除對話框、白板、繪製與送出的節奏，全部 lazy（只有 `ShareTile` 與 `RoomPage`（白板）的 `lazy()` 指向這裡；錄影的 lazy chunk 也用 `draw.ts`）；模型在 `shared/annotation.ts`，數字在 `shared/annotation-limits.ts`，白板的座標在 `shared/boardGeometry.ts`，對齊問 `useShareGeometry()`；誰能畫、誰能清除在 `shared/roles.ts`（`mayDraw`、`mayClearLayer`），伺服器判斷；收房間訊息的是初始 JS 裡的 `src/room/annotationStore.ts` | 被會議室的初始 JS 靜態匯入；自己換算分享畫面的位置 |
 | `src/pages/` | 組合：取狀態、接路由 | 樣式細節以外的規則判斷 |
 | `src/components/` | 展示與互動 | 直接呼叫 API 或 WebSocket（由 props 傳入 callback） |
 | `src/styles/tokens.ts` | 顏色、字體、間距 | — |
@@ -46,7 +46,7 @@
 - 會變的狀態要讓螢幕閱讀器知道，但不要吵：一直在頁面上的 live region（toast 的 `role="status"`、會議室的 `useAnnouncer`），**不要**用「出現時才掛上去的 `role="status"`」（常常念不出來）；說話中的變化不念。格子的名字就是名字，狀態（主持人、麥克風、鏡頭、舉手、釘選…）放在 `aria-describedby`。
 - 每個操作都要能用鍵盤：自訂的按鈕、選單、抽屜用 `button`／`role="menu"`，Esc 關、焦點回原處；只在 hover 出現的按鈕在 `:focus-within` 時也要出現。焦點外框用全域的 `:focus-visible`（`color.focus`，2 px），不要 `outline: none`。
 - 動畫在 `prefers-reduced-motion` 時要停（`GlobalStyle` 全域處理；JS 的動畫看 `useReducedMotion`）。
-- 新的畫面或打開的狀態（對話框、抽屜）加進 `e2e/local/a11y.spec.ts`，axe 一個違規都不能有；顏色 token 的對比在 `tests/tokensContrast.test.ts`。
+- 新的畫面或打開的狀態（對話框、抽屜）加進 `e2e/local/a11y.spec.ts`（要真的 `<video>` 或白板的，在 `annotation.spec.ts`、`whiteboard.spec.ts`），axe 一個違規都不能有；顏色 token 的對比在 `tests/tokensContrast.test.ts`。
 
 ## 2. 程式風格
 

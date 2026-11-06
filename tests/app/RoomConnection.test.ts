@@ -53,6 +53,8 @@ const room = {
   passwordSetAt: null,
   spotlight: null,
   recordings: {},
+  annotationPolicy: 'everyone' as const,
+  whiteboard: null,
 }
 const member = (id: string) => ({
   id,

@@ -1,4 +1,5 @@
-import type { AnnotationOp, Stroke } from '../shared/annotation.ts'
+import { WHITEBOARD_LAYER, isWhiteboard, type AnnotationOp, type Stroke } from '../shared/annotation.ts'
+import { DEFAULT_ANNOTATION_POLICY } from '../shared/roles.ts'
 import {
   ANNOTATION_FLUSH_MS,
   ANNOTATION_FRAME_RATE,
@@ -74,7 +75,14 @@ import {
   type GuessRecord,
   type PasswordRecord,
 } from './password.ts'
-import { authorize, type Action } from './roles.ts'
+import {
+  authorize,
+  mayClearLayer,
+  mayCloseBoard,
+  mayDraw,
+  mayOpenBoard,
+  type Action,
+} from './roles.ts'
 import { RoomAnnotations, type AnnotationSegment, type AnnotationWrite } from './room-annotations.ts'
 import { Scheduler, type Schedule } from './scheduler.ts'
 import type { PersistentRoomInfo } from '../shared/account.ts'
@@ -165,6 +173,8 @@ const HOST_RULE: Readonly<Record<HostMessage['action'], Action>> = {
   // I4 (e8-t02): stopping someone's recording is the host's `record`; allowing it is its own
   stopRecording: 'record',
   allowRecord: 'allowRecord',
+  // J3 (e7-t05)
+  annotationPolicy: 'annotationPolicy',
 }
 
 const NO_CONNS: ReadonlySet<string> = new Set()
@@ -286,6 +296,9 @@ function restoredInfo(info: StoredRoomInfo): RoomInfo {
     spotlight: null,
     // Rooms stored before v17 record nothing (I4)
     recordings: {},
+    // Rooms stored before v21 have neither (J3)
+    annotationPolicy: DEFAULT_ANNOTATION_POLICY,
+    whiteboard: null,
     ...rest,
     shares: storedShares(info),
   }
@@ -548,11 +561,12 @@ export class RoomHost {
     if (JSON.stringify(recording) !== JSON.stringify(recordings)) {
       this.info = { ...this.info!, recordings: recording }
     }
-    // Strokes of a share that ended before they left storage go now (J2)
+    // Strokes of a share that ended before they left storage go now (J2). The whiteboard's stay,
+    // open or closed, until someone clears them or the meeting ends (J3)
     const sharing = this.info?.shares ?? {}
     this.annotations = new RoomAnnotations(
       info ? (extras.annotations ?? []) : [],
-      (share) => sharing[share] !== undefined,
+      (share) => share === WHITEBOARD_LAYER || sharing[share] !== undefined,
     )
     this.flushAnnotations()
     const restoredAt = this.deps.now()
@@ -614,6 +628,8 @@ export class RoomHost {
       persistent: false,
       spotlight: null,
       recordings: {},
+      annotationPolicy: DEFAULT_ANNOTATION_POLICY,
+      whiteboard: null,
     }
     this.deps.storage.saveRoom(this.info)
     this.usageAt = this.deps.now()
@@ -914,24 +930,35 @@ export class RoomHost {
       case 'annotate':
         this.annotate(connId, conn.member!, message.share, message.ops)
         return
+      case 'clearAnnotations':
+        this.clearAnnotations(connId, conn.member!, message.share, message.by)
+        return
+      case 'whiteboard':
+        this.setWhiteboard(connId, conn.member!, message.open)
+        return
     }
   }
 
-  /**
-   * Who may mark a share (J2, e7-t04). Today the table's row alone; J3's three-state policy
-   * (`annotationPolicy`) belongs here, with the sharer known
-   */
-  private mayAnnotate(memberId: string, _share: string): boolean {
-    return this.allowed(memberId, 'annotate')
+  /** Whose a layer is (J3): the sharer's their share, the whiteboard whoever opened it */
+  private ownsLayer(memberId: string, share: string): boolean {
+    return isWhiteboard(share) ? this.info?.whiteboard?.by === memberId : share === memberId
+  }
+
+  /** Who may draw on a layer (J3, e7-t05): the room's policy and the table (worker/roles.ts) */
+  private mayDrawOn(memberId: string, share: string): boolean {
+    const member = this.members.get(memberId)
+    if (!member || !this.info) return false
+    return mayDraw(this.info.annotationPolicy, member.role, this.ownsLayer(memberId, share))
   }
 
   /**
-   * `annotate` (J2, e7-t03, e7-t04): one frame of what a member did to a share's layer. Decided here
-   * (CLAUDE.md rule 1): the member may annotate, the share exists, a stroke they change or take
-   * away is theirs (J3 adds clearing others'), and they are within the limits
-   * (shared/annotation-limits.ts). What is accepted goes to everyone else in the room as one frame;
-   * the sender hears only about what it must take back. A share that just stopped is not an error:
-   * the sender is told the layer is gone.
+   * `annotate` (J2, e7-t03, e7-t04): one frame of what a member did to a layer. Decided here
+   * (CLAUDE.md rule 1): the member is in the meeting, the layer exists, what they draw the policy
+   * allows (J3), a stroke they change or take away is theirs, and they are within the limits
+   * (shared/annotation-limits.ts). Taking back one's own marks needs no permission to draw, so a
+   * policy turned off mid-stroke leaves nothing half-drawn. What is accepted goes to everyone else
+   * in the room as one frame; the sender hears only about what it must take back. A share that just
+   * stopped is not an error: the sender is told the layer is gone.
    */
   private annotate(connId: string, memberId: string, share: string, ops: AnnotationOp[]): void {
     const now = this.deps.now()
@@ -941,11 +968,17 @@ export class RoomHost {
       if (ids.length === 0) return
       this.sendLayer([connId], share, null, ids.map((id) => ({ op: 'remove', id })))
     }
-    if (!this.mayAnnotate(memberId, share)) {
+    if (!this.allowed(memberId, 'annotate')) {
       refuse('forbidden', added)
       return
     }
-    if (!this.info?.shares[share]) {
+    if (isWhiteboard(share)) {
+      // A closed board keeps its strokes: refused, but not "the layer is gone"
+      if (!this.info?.whiteboard) {
+        refuse('forbidden', added)
+        return
+      }
+    } else if (!this.info?.shares[share]) {
       this.sendLayer([connId], share, null, [{ op: 'clear' }])
       return
     }
@@ -961,17 +994,35 @@ export class RoomHost {
         back.push({ op: 'remove', id })
       }
     }
+    /** The sender must lose this stroke, and if the room holds it, so must everyone else */
+    const takeBack = (id: string) => {
+      back.push({ op: 'remove', id })
+      if (this.annotations.remove(share, memberId, id)) onward.push({ op: 'remove', id })
+    }
+    const drawing = this.mayDrawOn(memberId, share)
     let limited = false
+    let denied = false
     for (const op of ops) {
+      if (!drawing && (op.op === 'add' || op.op === 'update' || op.op === 'laser')) {
+        denied = true
+        if (op.op === 'add') takeBack(op.stroke.id)
+        continue
+      }
       switch (op.op) {
         case 'add': {
           const { id } = op.stroke
+          const stroke: Stroke = { ...op.stroke, by: memberId }
+          // Past a board's limits (J3); someone else's id cannot be asked about, `put` refuses it
+          if (this.annotations.overflows(share, stroke)) {
+            limited = true
+            takeBack(id)
+            break
+          }
           if (!this.annotations.has(share, id) && !this.annotationStrokes.take(memberId, now)) {
             limited = true
             back.push({ op: 'remove', id })
             break
           }
-          const stroke: Stroke = { ...op.stroke, by: memberId }
           const put = this.annotations.put(share, stroke)
           // Someone else's id: never a stroke of ours to replace
           if (!put) {
@@ -1003,6 +1054,7 @@ export class RoomHost {
       }
     }
     if (limited) this.deps.sockets.send(connId, { t: 'error', code: 'annotation_limit' })
+    if (denied) this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
     if (back.length > 0) this.sendLayer([connId], share, null, back)
     if (onward.length > 0) {
       const others = [...this.conns]
@@ -1022,6 +1074,71 @@ export class RoomHost {
     if (conns.length === 0) return
     const frame: ServerMessage = { t: 'annotation', share, by, ops }
     for (const id of conns) this.deps.sockets.send(id, frame)
+  }
+
+  /** A connection for each member in the meeting */
+  private roomConns(): string[] {
+    return [...this.conns].filter(([, conn]) => this.inRoom(conn)).map(([id]) => id)
+  }
+
+  /**
+   * `clearAnnotations` (J3, e7-t05; AC-7.3): a layer, or (`by`) one member's strokes on it, go for
+   * everyone and from storage at once. Who may: shared/roles.ts mayClearLayer (a host, a co-host,
+   * who owns the layer); it works with the policy off too, which is when it may matter most. Those
+   * who lost something, and the sharer whose share it is, are told who did it.
+   */
+  private clearAnnotations(
+    connId: string,
+    memberId: string,
+    share: string,
+    by: string | null,
+  ): void {
+    const member = this.members.get(memberId)
+    const exists = isWhiteboard(share) || this.info?.shares[share] !== undefined
+    if (!member || !exists || !mayClearLayer(member.role, this.ownsLayer(memberId, share))) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    const authors = this.annotations.authors(share)
+    const affected = new Set(by === null ? authors.keys() : authors.has(by) ? [by] : [])
+    // Nothing of theirs there: nothing to do, nobody to tell
+    if (affected.size === 0) return
+    if (by === null) this.annotations.clearShare(share)
+    else this.annotations.clearBy(share, by)
+    this.flushAnnotations()
+    this.sendLayer(this.roomConns(), share, memberId, [
+      by === null ? { op: 'clear' } : { op: 'clear', by },
+    ])
+    if (!isWhiteboard(share)) affected.add(share)
+    affected.delete(memberId)
+    for (const id of affected) {
+      this.notify(id, {
+        t: 'notice',
+        notice: 'annotationsCleared',
+        by: memberId,
+        layer: share,
+        ...(by === null ? { all: true as const } : {}),
+      })
+    }
+  }
+
+  /**
+   * `whiteboard` (J3, e7-t06): the room's board comes on the stage, or leaves it (its strokes stay:
+   * only clearing or the meeting's end takes them). shared/roles.ts mayOpenBoard, mayCloseBoard
+   */
+  private setWhiteboard(connId: string, memberId: string, open: boolean): void {
+    const member = this.members.get(memberId)
+    if (!member || !this.info) return
+    const board = this.info.whiteboard
+    const allowed = open
+      ? mayOpenBoard(this.info.annotationPolicy, member.role)
+      : mayCloseBoard(member.role, board?.by === memberId)
+    if (!allowed) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    if (open === (board !== null)) return
+    this.setRoom({ whiteboard: open ? { by: memberId, since: this.deps.now() } : null })
   }
 
   /** Writes the changed segments of strokes, at most every ANNOTATION_FLUSH_MS (J2) */
@@ -1044,8 +1161,7 @@ export class RoomHost {
   private clearShareAnnotations(share: string): void {
     if (!this.annotations.clearShare(share)) return
     this.flushAnnotations()
-    const conns = [...this.conns].filter(([, conn]) => this.inRoom(conn)).map(([id]) => id)
-    this.sendLayer(conns, share, null, [{ op: 'clear' }])
+    this.sendLayer(this.roomConns(), share, null, [{ op: 'clear' }])
   }
 
   /** The strokes on a share, oldest first (for tests and the recorder's side of the room) */
@@ -1288,6 +1404,20 @@ export class RoomHost {
         }
         this.publish()
         return
+      case 'annotationPolicy':
+        if (this.info!.annotationPolicy === message.policy) return
+        this.setRoom({ annotationPolicy: message.policy })
+        // Everyone is affected: who was drawing loses the tools, or gets them
+        for (const id of this.members.keys()) {
+          if (id === memberId || !this.inRoomMember(id)) continue
+          this.notify(id, {
+            t: 'notice',
+            notice: 'annotationPolicy',
+            by: memberId,
+            policy: message.policy,
+          })
+        }
+        return
       case 'lock':
         this.setRoom({ locked: message.on })
         return
@@ -1348,7 +1478,12 @@ export class RoomHost {
 
   /** Changes the room's switches (F2), password time (F3) or spotlight (G2), and tells everyone */
   private setRoom(
-    changes: Partial<Pick<RoomInfo, 'locked' | 'waitingRoom' | 'passwordSetAt' | 'spotlight'>>,
+    changes: Partial<
+      Pick<
+        RoomInfo,
+        'locked' | 'waitingRoom' | 'passwordSetAt' | 'spotlight' | 'annotationPolicy' | 'whiteboard'
+      >
+    >,
   ): void {
     this.info = { ...this.info!, ...changes }
     this.deps.storage.saveRoom(this.info)
@@ -2427,6 +2562,10 @@ export class RoomHost {
         spotlight: null,
         // Recordings (I4) are the meeting's, not the room's settings
         recordings: {},
+        // So are who may annotate and the board (J3). Keeping the board's strokes across meetings
+        // is J4 (e7-t08): annotationsOf(WHITEBOARD_LAYER), before `reset` above, is what to keep
+        annotationPolicy: DEFAULT_ANNOTATION_POLICY,
+        whiteboard: null,
       }
       this.password = kept.password
       this.deps.storage.savePersistent?.(this.persistent)

@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, type PointerEvent } from 'react'
 import styled from 'styled-components'
 import {
+  insideSpace,
+  isWhiteboard,
   laserOpacity,
+  spaceOf,
   type AnnotationColor,
   type AnnotationWidth,
   type Stroke,
 } from '../../shared/annotation.ts'
-import { backingSize, insideContent, type Point } from '../../shared/shareGeometry.ts'
+import { backingSize, type Point } from '../../shared/shareGeometry.ts'
 import { useReducedMotion } from '../components/layoutContext.ts'
 import { useShareGeometry } from '../components/useShareGeometry.ts'
 import type { AnnotationStore } from '../room/annotationStore.ts'
@@ -59,6 +62,8 @@ export default function AnnotationCanvas({
   const geometry = useShareGeometry()
   const { box, rect, pixelRatio, source, clientToContent } = geometry
   const aspect = source ? source.width / source.height : 1
+  // The whiteboard: the rectangle is only its unit square, marks go anywhere (J3)
+  const clipped = !isWhiteboard(share)
   const reducedMotion = useReducedMotion()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const settledCanvas = useRef<HTMLCanvasElement | null>(null)
@@ -97,7 +102,7 @@ export default function AnnotationCanvas({
       const context = settled.getContext?.('2d')
       if (context) {
         const finished = strokes.filter((stroke) => !active.has(stroke.id))
-        drawStrokes(context, finished, rect, pixelRatio, settled)
+        drawStrokes(context, finished, rect, pixelRatio, settled, clipped)
       }
     }
     ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -106,9 +111,11 @@ export default function AnnotationCanvas({
     const now = Date.now()
     const lasers = store.lasers(share)
     ctx.save()
-    ctx.beginPath()
-    ctx.rect(rect.x * pixelRatio, rect.y * pixelRatio, rect.width * pixelRatio, rect.height * pixelRatio)
-    ctx.clip()
+    if (clipped) {
+      ctx.beginPath()
+      ctx.rect(rect.x * pixelRatio, rect.y * pixelRatio, rect.width * pixelRatio, rect.height * pixelRatio)
+      ctx.clip()
+    }
     for (const stroke of moving) drawStroke(ctx, stroke, rect, pixelRatio)
     for (const stroke of moving) {
       if (stroke.by === me) continue
@@ -126,7 +133,7 @@ export default function AnnotationCanvas({
     ctx.restore()
     // Something is fading or going quiet: the next frame looks again
     if (lasers.length > 0 || active.size > 0) scheduleRef.current()
-  }, [store, share, me, nameOf, rect, pixelRatio, reducedMotion])
+  }, [store, share, me, nameOf, rect, pixelRatio, reducedMotion, clipped])
 
   /** At most one repaint a frame, however fast the pointer or the room reports */
   const schedule = useCallback(() => {
@@ -168,7 +175,7 @@ export default function AnnotationCanvas({
   /** Where the pointer is on the picture; null off it */
   const onPicture = (clientX: number, clientY: number): Point | null => {
     const at = clientToContent(clientX, clientY)
-    return at && insideContent(at) ? at : null
+    return at && insideSpace(at, spaceOf(share)) ? at : null
   }
 
   const onPointerDown = (event: PointerEvent<HTMLCanvasElement>) => {

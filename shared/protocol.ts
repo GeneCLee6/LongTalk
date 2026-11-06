@@ -152,6 +152,18 @@
 //    only passed on. Over the limits (shared/annotation-limits.ts) a frame or stroke is refused:
 //    `error` code `annotation_limit`, and a refused stroke comes back as `remove`; past the size
 //    limits the oldest strokes fall out, as `remove` to everyone.
+// 24. Who may annotate (J3, e7-t05; shared/roles.ts mayDraw): `RoomInfo.annotationPolicy`, changed
+//    with `host` `annotationPolicy` (a host or co-host; everyone else gets a `notice`). The room
+//    refuses what the policy forbids op by op: `add`, `update` and `laser` from someone who may not
+//    draw get `error` `forbidden` and a refused stroke comes back removed, while taking back one's
+//    own marks stays allowed. `clearAnnotations` clears a layer, or (`by`) one member's strokes on
+//    it (shared/roles.ts mayClearLayer: a host, a co-host, the layer's owner): everyone gets the
+//    `annotation` `clear`, the people affected a `notice` `annotationsCleared`.
+// 25. The whiteboard (J3, e7-t06): `whiteboard` opens it (`RoomInfo.whiteboard`: who, since when) or
+//    closes it (the strokes stay until someone clears them or the meeting ends). Its strokes are one
+//    more layer (shared/annotation.ts WHITEBOARD_LAYER), in world coordinates, on the same `annotate`,
+//    `annotation` and `annotations` messages. Past its limits a new stroke is refused
+//    (`annotation_limit`); nothing falls out.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -188,20 +200,23 @@
 //   socket. A v18 browser would show only the name, with no way to open it.
 // v19 → v20 (J2): `annotate`, `annotation`, `annotations`, error code `annotation_limit`. A v19
 //   browser would neither show the strokes nor send its own.
+// v20 → v21 (J3): `RoomInfo.annotationPolicy` / `whiteboard`, `host` action `annotationPolicy`,
+//   `clearAnnotations`, `whiteboard`, notices `annotationPolicy`, `annotationsCleared`. A v20 browser
+//   would show a toolbar that is refused and could not parse the whiteboard's points.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
 // View types are `type` aliases, not interfaces, so they stay assignable to JsonValue.
-import { parseAnnotationOps, type AnnotationOp, type Stroke } from './annotation.ts'
+import { parseAnnotationOps, spaceOf, type AnnotationOp, type Stroke } from './annotation.ts'
 import { isChatMessage, normalizeChatText, type ChatMessage } from './chat.ts'
 import type { JsonValue, PatchOp } from './patch.ts'
 import { normalizePassword } from './password.ts'
 import { isReaction, type Reaction } from './reactions.ts'
-import type { Role } from './roles.ts'
+import { isAnnotationPolicy, type AnnotationPolicy, type Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 20
+export const PROTOCOL_VERSION = 21
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -328,6 +343,17 @@ export type RoomInfo = RoomInit & {
    * light, the pre-join notice), CLAUDE.md rule 4
    */
   recordings: Record<string, RecordingInfo>
+  /** Who may draw on the shares and the whiteboard (J3, e7-t05; shared/roles.ts) */
+  annotationPolicy: AnnotationPolicy
+  /** The whiteboard on the stage (J3, e7-t06); null when it is closed */
+  whiteboard: WhiteboardInfo | null
+}
+
+/** The room's whiteboard while it is open: who opened it (its owner, as a sharer is of a share) */
+export type WhiteboardInfo = {
+  by: string
+  /** When it was opened (the server's clock): it sits among the shares in that order */
+  since: number
 }
 
 /** One member's local recording (I4, e8-t01, e8-t02) */
@@ -535,8 +561,19 @@ export type NoticeKind =
   | 'recordingStopped'
   | 'recordAllowed'
   | 'recordRevoked'
+  // J3 (e7-t05): a host or co-host changed who may annotate (`policy`), for everyone else; someone
+  // cleared marks of this member's, or on this member's share (`all`: the whole layer; `layer`: which)
+  | 'annotationPolicy'
+  | 'annotationsCleared'
 
-export type NoticeMessage = { t: 'notice'; notice: NoticeKind; by: string; all?: true }
+export type NoticeMessage = {
+  t: 'notice'
+  notice: NoticeKind
+  by: string
+  all?: true
+  policy?: AnnotationPolicy
+  layer?: string
+}
 
 export type ErrorMessage = { t: 'error'; code: ErrorCode }
 
@@ -707,6 +744,9 @@ export type HostAllowRecordAction = 'allowRecord'
 /** Handing the host role to a member (F3) */
 export type HostHandoverAction = 'makeHost'
 
+/** Who may annotate (J3, e7-t05) */
+export type HostAnnotationPolicyAction = 'annotationPolicy'
+
 export type HostAction =
   | HostMemberAction
   | HostRoomAction
@@ -716,6 +756,7 @@ export type HostAction =
   | HostCohostAction
   | HostHandoverAction
   | HostAllowRecordAction
+  | HostAnnotationPolicyAction
 
 const HOST_MEMBER_ACTIONS: readonly string[] = [
   'muteMember',
@@ -739,12 +780,21 @@ export type HostMessage =
   | { t: 'host'; action: HostCohostAction; memberId: string; on: boolean }
   | { t: 'host'; action: HostAllowRecordAction; memberId: string; on: boolean }
   | { t: 'host'; action: HostHandoverAction; memberId: string }
+  | { t: 'host'; action: HostAnnotationPolicyAction; policy: AnnotationPolicy }
 
-/** What the member did to a share's layer since its last frame (J2, e7-t03, e7-t04) */
+/** What the member did to a layer since its last frame (J2, e7-t03, e7-t04; J3: the whiteboard's) */
 export type AnnotateMessage = { t: 'annotate'; share: string; ops: AnnotationOp[] }
+
+/** Clear a layer, or (`by`) one member's strokes on it, for everyone (J3, e7-t05) */
+export type ClearAnnotationsMessage = { t: 'clearAnnotations'; share: string; by: string | null }
+
+/** Open or close the room's whiteboard (J3, e7-t06) */
+export type WhiteboardMessage = { t: 'whiteboard'; open: boolean }
 
 export type ClientMessage =
   | AnnotateMessage
+  | ClearAnnotationsMessage
+  | WhiteboardMessage
   | ChatClientMessage
   | HostMessage
   | JoinMessage
@@ -883,9 +933,18 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     case 'consent':
       return { t: 'consent' }
     case 'annotate': {
-      const ops = isMemberId(value.share) ? parseAnnotationOps(value.ops) : null
+      // The share or the whiteboard: its points must be in that layer's range
+      const ops = isMemberId(value.share)
+        ? parseAnnotationOps(value.ops, spaceOf(value.share))
+        : null
       return ops === null ? null : { t: 'annotate', share: value.share as string, ops }
     }
+    case 'clearAnnotations':
+      return isMemberId(value.share) && (value.by === null || isMemberId(value.by))
+        ? { t: 'clearAnnotations', share: value.share, by: value.by }
+        : null
+    case 'whiteboard':
+      return typeof value.open === 'boolean' ? { t: 'whiteboard', open: value.open } : null
     case 'host': {
       const action = value.action
       if (typeof action !== 'string') return null
@@ -915,6 +974,9 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       }
       if (action === 'makeHost' && isMemberId(value.memberId)) {
         return { t: 'host', action, memberId: value.memberId }
+      }
+      if (action === 'annotationPolicy' && isAnnotationPolicy(value.policy)) {
+        return { t: 'host', action, policy: value.policy }
       }
       return null
     }

@@ -10,11 +10,13 @@ import {
   extendStroke,
   finishStroke,
   normalizePoint,
+  spaceOf,
   strokeAt,
   type AnnotationColor,
   type AnnotationOp,
   type AnnotationTool,
   type AnnotationWidth,
+  type CoordSpace,
   type Stroke,
 } from '../../shared/annotation.ts'
 import type { Point } from '../../shared/shareGeometry.ts'
@@ -57,6 +59,8 @@ const opStroke = (op: AnnotationOp): string | null =>
 export class AnnotationDrawer {
   private readonly store: AnnotationStore
   private readonly share: string
+  /** A share's 0–1, or the whiteboard's world (J3) */
+  private readonly space: CoordSpace
   private readonly by: string
   private readonly clock: DrawerClock
   private queue: AnnotationOp[] = []
@@ -72,6 +76,7 @@ export class AnnotationDrawer {
   constructor(store: AnnotationStore, share: string, by: string, clock: DrawerClock = systemClock) {
     this.store = store
     this.share = share
+    this.space = spaceOf(share)
     this.by = by
     this.clock = clock
     store.onSnapshot(() => this.afterSnapshot())
@@ -196,7 +201,7 @@ export class AnnotationDrawer {
     at: Point
   }): boolean {
     this.cancel()
-    const stroke = beginStroke({ by: this.by, ...options })
+    const stroke = beginStroke({ by: this.by, ...options, space: this.space })
     if (!stroke) return false
     this.current = { stroke, sent: stroke.points.length, changed: false }
     const op: AnnotationOp = { op: 'add', stroke, live: true }
@@ -208,7 +213,7 @@ export class AnnotationDrawer {
   move(at: Point, aspect: number): void {
     const { current } = this
     if (!current) return
-    const next = extendStroke(current.stroke, at, aspect)
+    const next = extendStroke(current.stroke, at, aspect, this.space)
     if (next === current.stroke) return
     if (next.tool === 'arrow' || next.tool === 'rect') current.sent = 1
     // Thinned at the cap: the points so far changed, so all of them go again
@@ -257,7 +262,7 @@ export class AnnotationDrawer {
     width: AnnotationWidth
     at: Point
   }): boolean {
-    const begun = beginStroke({ by: this.by, tool: 'text', ...options })
+    const begun = beginStroke({ by: this.by, tool: 'text', ...options, space: this.space })
     const finished = begun && finishStroke(begun, 1)
     if (!finished) return false
     const op: AnnotationOp = { op: 'add', stroke: finished }
@@ -267,9 +272,12 @@ export class AnnotationDrawer {
     return true
   }
 
-  /** Erases our own topmost stroke under the point (others' are J3's, with its permissions) */
+  /**
+   * Erases our own topmost stroke under the point. Others' strokes go only with the clear a host or
+   * the layer's owner asks for (J3: ClearMarks.tsx, confirmed), never by a stray drag
+   */
   eraseAt(at: Point, aspect: number): boolean {
-    const point = normalizePoint(at.x, at.y)
+    const point = normalizePoint(at.x, at.y, this.space)
     if (!point) return false
     const own = this.store.strokes(this.share).filter((stroke) => stroke.by === this.by)
     const hit = strokeAt(own, point, aspect)
@@ -331,7 +339,7 @@ export class AnnotationDrawer {
   // ── The laser pointer: never kept anywhere, it fades where it was last heard ────────────────
 
   laser(at: Point | null, color: AnnotationColor): void {
-    const point = at && normalizePoint(at.x, at.y)
+    const point = at && normalizePoint(at.x, at.y, this.space)
     if (at && !point) return
     const op: AnnotationOp = { op: 'laser', at: point ?? null, color }
     this.apply(op)
