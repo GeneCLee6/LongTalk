@@ -164,6 +164,22 @@
 //    more layer (shared/annotation.ts WHITEBOARD_LAYER), in world coordinates, on the same `annotate`,
 //    `annotation` and `annotations` messages. Past its limits a new stroke is refused
 //    (`annotation_limit`); nothing falls out.
+// 26. Polls (L5, e5-t07; shared/interact.ts): a host or co-host (worker/roles.ts `poll`) sends
+//    `pollStart`; one poll at a time, another is refused with `poll_active`. The poll on now is
+//    `RoomView.poll`, with its counts live for everyone; on an anonymous one the view never says
+//    who voted what, so what a member answered comes back to that member alone as `pollVoted`, on
+//    voting and after every `welcome`. `pollVote` (worker/roles.ts `votePoll`) replaces the member's
+//    earlier answer. `pollEnd` takes it off the view and the room writes the results into the chat,
+//    a message from who ended it with `ChatMessage.poll`.
+// 27. The countdown and the agenda (L5, e5-t08): `timer` sets `RoomView.timer` (null ends it), and
+//    `agenda` / `agendaCurrent` set `RoomView.agenda` and which item is on (worker/roles.ts `timer`,
+//    `agenda`: a host or co-host). Each browser counts down from `endsAt` on its own clock.
+// 28. What a persistent room's owner set on /me (L5, e1-t18): `RoomInfo.startMuted` has each
+//    participant who comes in told `notice` `startMuted`, once, on which its browser turns the
+//    microphone off (only they can turn it on again, as ever). With `RoomInfo.allowAnnotation` false
+//    `annotationPolicy` stays `off` and `host` `annotationPolicy` is refused; with
+//    `RoomInfo.allowRecording` false `record` is refused for everyone, the host too. Allowing never
+//    grants anything: who may record and everyone's consent (21., 22.) stay as they are.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -203,12 +219,30 @@
 // v20 → v21 (J3): `RoomInfo.annotationPolicy` / `whiteboard`, `host` action `annotationPolicy`,
 //   `clearAnnotations`, `whiteboard`, notices `annotationPolicy`, `annotationsCleared`. A v20 browser
 //   would show a toolbar that is refused and could not parse the whiteboard's points.
+// v21 → v22 (L5): `pollStart`, `pollVote`, `pollEnd`, `pollVoted`, `timer`, `agenda`, `agendaCurrent`,
+//   `RoomView.poll` / `timer` / `agenda`, `ChatMessage.poll`, error code `poll_active`,
+//   `RoomInfo.startMuted` / `allowAnnotation` / `allowRecording`, notice `startMuted`. A v21 browser
+//   would not show the poll, and would stay unmuted in a room that asks otherwise.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
 // View types are `type` aliases, not interfaces, so they stay assignable to JsonValue.
 import { parseAnnotationOps, spaceOf, type AnnotationOp, type Stroke } from './annotation.ts'
 import { isChatMessage, normalizeChatText, type ChatMessage } from './chat.ts'
+import {
+  MAX_AGENDA_ITEMS,
+  MAX_AGENDA_MINUTES,
+  MAX_AGENDA_TITLE_CHARS,
+  MAX_POLL_OPTIONS,
+  MAX_POLL_OPTION_CHARS,
+  MAX_POLL_QUESTION_CHARS,
+  MAX_TIMER_SECONDS,
+  MIN_POLL_OPTIONS,
+  type AgendaInfo,
+  type AgendaItem,
+  type PollView,
+  type TimerInfo,
+} from './interact.ts'
 import type { JsonValue, PatchOp } from './patch.ts'
 import { normalizePassword } from './password.ts'
 import { isReaction, type Reaction } from './reactions.ts'
@@ -216,7 +250,7 @@ import { isAnnotationPolicy, type AnnotationPolicy, type Role } from './roles.ts
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 21
+export const PROTOCOL_VERSION = 22
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -350,6 +384,14 @@ export type RoomInfo = RoomInit & {
   annotationPolicy: AnnotationPolicy
   /** The whiteboard on the stage (J3, e7-t06); null when it is closed */
   whiteboard: WhiteboardInfo | null
+  /**
+   * A persistent room's owner set these on /me (L5, e1-t18). `startMuted`: participants come in
+   * with the microphone off (absent means false). `allowAnnotation`, `allowRecording`: false turns
+   * the feature off in this room, for everyone (absent means true)
+   */
+  startMuted?: boolean
+  allowAnnotation?: boolean
+  allowRecording?: boolean
 }
 
 /** The room's whiteboard while it is open: who opened it (its owner, as a sharer is of a share) */
@@ -508,6 +550,13 @@ export type RoomView = {
   waiting: Record<string, WaitingEntry>
   /** The month's Realtime egress state (shared/usage.ts); `normal` until the room hears otherwise */
   usage: UsageState
+  // Not in RoomInfo: GET /api/rooms/<id> gives that to anyone with the link, before any password
+  /** The poll on now (L5, e5-t07); absent or null when there is none */
+  poll?: PollView | null
+  /** The countdown (L5, e5-t08); absent or null when there is none */
+  timer?: TimerInfo | null
+  /** The agenda bar (L5, e5-t08); absent or null when there is none */
+  agenda?: AgendaInfo | null
 }
 
 // ── Server → browser ─────────────────────────────────────────────────────────────────────────
@@ -534,6 +583,7 @@ export type PatchMessage = { t: 'patch'; rev: number; ops: PatchOp[] }
  * - `audio_only`: `share` in a month that is audio-only (shared/usage.ts)
  * - `rate_limited`: `chat` faster than CHAT_RATE (D3); the message was not kept
  * - `annotation_limit`: `annotate` faster than the limits (J2); a refused stroke comes back removed
+ * - `poll_active`: `pollStart` while a poll is on (L5)
  */
 export type ErrorCode =
   | 'bad_message'
@@ -542,6 +592,7 @@ export type ErrorCode =
   | 'audio_only'
   | 'rate_limited'
   | 'annotation_limit'
+  | 'poll_active'
 
 /**
  * What a host (or co-host) did to this member (F1): `muted` (the microphone; `all` when it was
@@ -568,6 +619,8 @@ export type NoticeKind =
   // cleared marks of this member's, or on this member's share (`all`: the whole layer; `layer`: which)
   | 'annotationPolicy'
   | 'annotationsCleared'
+  // L5 (e1-t18): this persistent room has participants come in muted; `by` is the member themselves
+  | 'startMuted'
 
 export type NoticeMessage = {
   t: 'notice'
@@ -633,7 +686,11 @@ export type AnnotationsMessage = {
   done?: true
 }
 
+/** What this member answered to the poll on now (L5): the view does not say on an anonymous one */
+export type PollVotedMessage = { t: 'pollVoted'; poll: number; choices: number[] }
+
 export type ServerMessage =
+  | PollVotedMessage
   | AnnotationMessage
   | AnnotationsMessage
   | WelcomeMessage
@@ -794,7 +851,37 @@ export type ClearAnnotationsMessage = { t: 'clearAnnotations'; share: string; by
 /** Open or close the room's whiteboard (J3, e7-t06) */
 export type WhiteboardMessage = { t: 'whiteboard'; open: boolean }
 
+/** Start a poll (L5, e5-t07; a host or co-host); checked as parsePollStart does */
+export type PollStartMessage = {
+  t: 'pollStart'
+  question: string
+  options: string[]
+  multi: boolean
+  anonymous: boolean
+}
+
+/** The member's answer to the poll `poll`, replacing an earlier one */
+export type PollVoteMessage = { t: 'pollVote'; poll: number; choices: number[] }
+
+/** End the poll `poll`; its results go to the chat */
+export type PollEndMessage = { t: 'pollEnd'; poll: number }
+
+/** Start the countdown over, or (null) end it (L5, e5-t08; a host or co-host) */
+export type TimerMessage = { t: 'timer'; seconds: number | null }
+
+/** The agenda's items, replacing what was there; none: no agenda (L5, e5-t08) */
+export type AgendaMessage = { t: 'agenda'; items: AgendaItem[] }
+
+/** Which of the agenda's items is on now */
+export type AgendaCurrentMessage = { t: 'agendaCurrent'; index: number }
+
 export type ClientMessage =
+  | PollStartMessage
+  | PollVoteMessage
+  | PollEndMessage
+  | TimerMessage
+  | AgendaMessage
+  | AgendaCurrentMessage
   | AnnotateMessage
   | ClearAnnotationsMessage
   | WhiteboardMessage
@@ -880,6 +967,46 @@ export function newSessionToken(): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
+const isIndex = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && (value as number) >= 0
+
+/** `pollStart`'s fields, normalized as the room stores them; null when any does not fit */
+export function parsePollStart(value: Record<string, unknown>): PollStartMessage | null {
+  const question = normalizeName(value.question, MAX_POLL_QUESTION_CHARS)
+  if (question === null || !Array.isArray(value.options)) return null
+  if (value.options.length < MIN_POLL_OPTIONS || value.options.length > MAX_POLL_OPTIONS) return null
+  const options: string[] = []
+  for (const raw of value.options as unknown[]) {
+    const option = normalizeName(raw, MAX_POLL_OPTION_CHARS)
+    // The same choice twice could only split the votes
+    if (option === null || options.includes(option)) return null
+    options.push(option)
+  }
+  if (typeof value.multi !== 'boolean' || typeof value.anonymous !== 'boolean') return null
+  return { t: 'pollStart', question, options, multi: value.multi, anonymous: value.anonymous }
+}
+
+/** The answers a `pollVote` names: at least one, none twice (the poll decides the rest) */
+function parseChoices(value: unknown): number[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_POLL_OPTIONS) return null
+  if (!value.every(isIndex) || new Set(value).size !== value.length) return null
+  return value as number[]
+}
+
+/** The agenda's items, normalized as the room stores them; null when any does not fit */
+export function parseAgendaItems(value: unknown): AgendaItem[] | null {
+  if (!Array.isArray(value) || value.length > MAX_AGENDA_ITEMS) return null
+  const items: AgendaItem[] = []
+  for (const raw of value as unknown[]) {
+    if (typeof raw !== 'object' || raw === null) return null
+    const { title, minutes } = raw as Record<string, unknown>
+    const name = normalizeName(title, MAX_AGENDA_TITLE_CHARS)
+    if (name === null || !isIndex(minutes) || minutes < 1 || minutes > MAX_AGENDA_MINUTES) return null
+    items.push({ title: name, minutes })
+  }
+  return items
+}
+
 /** A browser's message, or null when it is not one this version understands */
 export function parseClientMessage(raw: string): ClientMessage | null {
   const value = parseObject(raw, MAX_CLIENT_MESSAGE_CHARS)
@@ -948,6 +1075,25 @@ export function parseClientMessage(raw: string): ClientMessage | null {
         : null
     case 'whiteboard':
       return typeof value.open === 'boolean' ? { t: 'whiteboard', open: value.open } : null
+    case 'pollStart':
+      return parsePollStart(value)
+    case 'pollVote': {
+      const choices = parseChoices(value.choices)
+      return isIndex(value.poll) && choices ? { t: 'pollVote', poll: value.poll, choices } : null
+    }
+    case 'pollEnd':
+      return isIndex(value.poll) ? { t: 'pollEnd', poll: value.poll } : null
+    case 'timer':
+      return value.seconds === null ||
+        (isIndex(value.seconds) && value.seconds >= 1 && value.seconds <= MAX_TIMER_SECONDS)
+        ? { t: 'timer', seconds: value.seconds }
+        : null
+    case 'agenda': {
+      const items = parseAgendaItems(value.items)
+      return items ? { t: 'agenda', items } : null
+    }
+    case 'agendaCurrent':
+      return isIndex(value.index) ? { t: 'agendaCurrent', index: value.index } : null
     case 'host': {
       const action = value.action
       if (typeof action !== 'string') return null
@@ -1085,6 +1231,10 @@ export function parseServerMessage(raw: string): ServerMessage | null {
         : null
     case 'annotations':
       return Array.isArray(value.strokes) ? (value as AnnotationsMessage) : null
+    case 'pollVoted':
+      return typeof value.poll === 'number' && Array.isArray(value.choices)
+        ? (value as PollVotedMessage)
+        : null
     default:
       return null
   }

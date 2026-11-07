@@ -251,6 +251,27 @@ describe('persistent rooms', () => {
     expect(edited.json.room).toMatchObject({ name: 'Standup', waitingRoom: true, password: true })
     expect((await alice.call('PATCH', '/rooms/alice-room', { password: '12' })).status).toBe(400)
     expect((await alice.call('PATCH', '/rooms/alice-room', { locked: 'yes' })).status).toBe(400)
+    // L5 (e1-t18): the room's other settings, only ever true or false
+    for (const key of ['startMuted', 'allowAnnotation', 'allowRecording']) {
+      expect((await alice.call('PATCH', '/rooms/alice-room', { [key]: 'yes' })).status).toBe(400)
+      expect((await alice.call('PATCH', '/rooms/alice-room', { [key]: 1 })).status).toBe(400)
+    }
+    const set = await alice.call('PATCH', '/rooms/alice-room', {
+      startMuted: true,
+      allowAnnotation: false,
+      allowRecording: false,
+    })
+    expect(set.status).toBe(200)
+    expect(set.json.room).toMatchObject({
+      startMuted: true,
+      allowAnnotation: false,
+      allowRecording: false,
+    })
+    await alice.call('PATCH', '/rooms/alice-room', {
+      startMuted: false,
+      allowAnnotation: true,
+      allowRecording: true,
+    })
     const bob = new t.Browser()
     await bob.signUp('Bob')
     expect((await bob.call('PATCH', '/rooms/alice-room', { locked: true })).status).toBe(404)

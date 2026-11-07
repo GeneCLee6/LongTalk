@@ -519,6 +519,28 @@ describe('RoomConnection reconnect (e2-t08)', () => {
   })
 })
 
+describe('RoomConnection polls (L5, e5-t07)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('keeps our answer as the room says it; a new welcome starts over until the room repeats it', () => {
+    const t = connect()
+    t.socket.open()
+    // Before this socket's welcome it is not ours to believe
+    t.socket.receive({ t: 'pollVoted', poll: 7, choices: [1] })
+    expect(t.connection.getState().pollVote).toBeNull()
+    t.socket.receive(welcome(1))
+    t.socket.receive({ t: 'pollVoted', poll: 7, choices: [1] })
+    expect(t.connection.getState().pollVote).toEqual({ poll: 7, choices: [1] })
+    t.socket.receive(welcome(2))
+    expect(t.connection.getState().pollVote).toBeNull()
+  })
+})
+
 describe('RoomConnection chat (D3, e5-t01)', () => {
   beforeEach(() => {
     vi.useFakeTimers()

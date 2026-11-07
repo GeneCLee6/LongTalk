@@ -417,6 +417,9 @@ async function me(c: Context): Promise<Reply> {
         locked: settings?.locked ?? false,
         password: settings?.password ?? false,
         memberCount: settings?.memberCount ?? 0,
+        startMuted: settings?.startMuted ?? false,
+        allowAnnotation: settings?.allowAnnotation ?? true,
+        allowRecording: settings?.allowRecording ?? true,
       }
     }),
   )
@@ -563,6 +566,9 @@ async function createRoom(c: Context): Promise<Reply> {
     locked: false,
     password: false,
     memberCount: 0,
+    startMuted: false,
+    allowAnnotation: true,
+    allowRecording: true,
   }
   return new Reply(201, { room })
 }
@@ -579,7 +585,13 @@ function settingsChange(input: Record<string, unknown> | null): RoomSettingsChan
       change.name = name
     }
   }
-  for (const key of ['waitingRoom', 'locked'] as const) {
+  for (const key of [
+    'waitingRoom',
+    'locked',
+    'startMuted',
+    'allowAnnotation',
+    'allowRecording',
+  ] as const) {
     if (!(key in input)) continue
     if (typeof input[key] !== 'boolean') return null
     change[key] = input[key]

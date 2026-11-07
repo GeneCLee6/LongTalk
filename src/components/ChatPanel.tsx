@@ -18,6 +18,7 @@ import type { ChatSendResult } from '../room/RoomConnection.ts'
 import { strings } from '../strings.ts'
 import { color, fontSize, media, radius, size, space } from '../styles/tokens.ts'
 import { ChatFileCard } from './ChatFileCard.tsx'
+import { PollResults } from './PollResults.tsx'
 import { ChatUploads } from './ChatUploads.tsx'
 import { AttachIcon, SendIcon } from './icons.tsx'
 import { useMediaQuery } from './layoutContext.ts'
@@ -180,7 +181,21 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: C
               return (
                 <Item key={message.id} $own={own} $grouped={grouped}>
                   {!grouped && <Meta aria-hidden="true">{strings.chat.meta(name, time)}</Meta>}
-                  {message.file && files ? (
+                  {message.poll ? (
+                    <Bubble as="div" $own={own}>
+                      <Hidden>{strings.chat.spoken(name, time)}</Hidden>
+                      <PollCard>
+                        <b>{strings.poll.resultTitle(message.poll.question)}</b>
+                        <PollResults
+                          options={message.poll.options}
+                          counts={message.poll.counts}
+                          voters={message.poll.voters}
+                          votes={message.poll.votes}
+                        />
+                        <span>{strings.poll.voters(message.poll.voters)}</span>
+                      </PollCard>
+                    </Bubble>
+                  ) : message.file && files ? (
                     <Bubble as="div" $own={own}>
                       <Hidden>{strings.chat.spoken(name, time)}</Hidden>
                       <ChatFileCard
@@ -391,6 +406,19 @@ const Bubble = styled.p<{ $own: boolean }>`
   a {
     color: ${color.primary};
     text-decoration: underline;
+  }
+`
+
+/** A poll's results (e5-t07): as wide as the bubble goes, so the bars can be read */
+const PollCard = styled.div`
+  display: grid;
+  gap: ${space(2)};
+  min-width: 200px;
+  white-space: normal;
+
+  > span:last-child {
+    color: ${color.muted};
+    font-size: ${fontSize.toolbarLabel};
   }
 `
 

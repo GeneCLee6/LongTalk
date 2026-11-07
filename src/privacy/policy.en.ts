@@ -93,7 +93,7 @@ export const policy = (f: Facts): PolicyDocument => ({
               key: 'room',
               cells: [
                 'The room (Cloudflare Durable Object, one per room)',
-                `For the length of the meeting: the room’s name; each member’s display name, role, member token, this browser’s random id and microphone, camera and raised-hand state; the last ${f.chatMessages} chat messages; each chat file’s name, size, type and which member sent it; who is recording and who agreed; marks on shared screens and the whiteboard (strokes, text and who drew them); names in the waiting room; removed browsers’ ids. If the room has a password, a salted hash of it, and for wrong guesses the browser’s random id and a digest of the network.`,
+                `For the length of the meeting: the room’s name; each member’s display name, role, member token, this browser’s random id and microphone, camera and raised-hand state; the last ${f.chatMessages} chat messages; each chat file’s name, size, type and which member sent it; the poll on now and each person’s answer (on an anonymous poll only the room knows, so people can change their answer; nobody can see it), the countdown and the agenda; who is recording and who agreed; marks on shared screens and the whiteboard (strokes, text and who drew them); names in the waiting room; removed browsers’ ids. If the room has a password, a salted hash of it, and for wrong guesses the browser’s random id and a digest of the network.`,
               ],
             },
             {
@@ -195,7 +195,7 @@ export const policy = (f: Facts): PolicyDocument => ({
             {
               key: 'meeting',
               cells: [
-                'A meeting: members, chat, chat file names, recording state and who agreed',
+                'A meeting: members, chat, chat file names, recording state and who agreed, polls and who answered what, the countdown and the agenda',
                 'The room',
                 `For as long as the meeting goes on, with no fixed limit. Deleted when the host ends it, or ${f.emptyRoomMinutes} minutes after the room empties. Someone who loses connection stays listed for ${f.reconnectSeconds} seconds.`,
               ],

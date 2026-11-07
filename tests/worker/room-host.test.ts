@@ -55,6 +55,9 @@ const INFO = {
   recordings: {},
   annotationPolicy: 'everyone' as const,
   whiteboard: null,
+  startMuted: false,
+  allowAnnotation: true,
+  allowRecording: true,
 }
 
 /** A browser as the room sees it: keeps its own copy of the view from what it receives */
@@ -200,7 +203,15 @@ describe('RoomHost', () => {
     expect(t.host.create(ROOM)).toBe(true)
     expect(t.host.create({ ...ROOM, createdAt: 2 })).toBe(false)
     expect(t.saved.room).toEqual(INFO)
-    expect(t.host.view()).toEqual({ room: INFO, members: {}, waiting: {}, usage: 'normal' })
+    expect(t.host.view()).toEqual({
+      room: INFO,
+      members: {},
+      waiting: {},
+      usage: 'normal',
+      poll: null,
+      timer: null,
+      agenda: null,
+    })
     expect(t.host.summary()).toEqual({ ...INFO, memberCount: 0, owner: false })
   })
 
@@ -231,6 +242,9 @@ describe('RoomHost', () => {
           members: { m1: member('m1', '小潔', t.now(), false, 'host') },
           waiting: {},
           usage: 'normal',
+          poll: null,
+          timer: null,
+          agenda: null,
         },
       },
       // The chat history follows every welcome (D3), even when there is none yet

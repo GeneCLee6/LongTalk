@@ -31,6 +31,9 @@ const ME: MeResponse = {
       locked: false,
       password: true,
       memberCount: 0,
+      startMuted: false,
+      allowAnnotation: true,
+      allowRecording: true,
     },
   ],
   meetings: [],
@@ -136,6 +139,29 @@ describe('/me (I2)', () => {
     ])
     expect(calls[2].body).toMatchObject({ credential: { id: 'Y3JlZA', rawId: 'AQID', response: { transports: ['internal'] } } })
     expect(loadAccountHint()).toBe('Gene')
+  })
+
+  it('sets a persistent room’s defaults (L5, e1-t18): recording allowed is only a yes to asking', async () => {
+    const calls = stubApi({ value: true })
+    stubWebAuthn()
+    visit()
+    await screen.findByText('週會')
+    fireEvent.click(screen.getByRole('button', { name: text.account.editRoomLabel('gene-weekly') }))
+    const box = (name: string) => screen.getByRole('checkbox', { name }) as HTMLInputElement
+    expect(box(text.account.startMuted).checked).toBe(false)
+    expect(box(text.account.allowAnnotation).checked).toBe(true)
+    expect(box(text.account.allowRecording).checked).toBe(true)
+    expect(screen.getByText(text.account.settingsHint).textContent).toContain('明確同意')
+    fireEvent.click(box(text.account.startMuted))
+    fireEvent.click(box(text.account.allowRecording))
+    fireEvent.click(screen.getByRole('button', { name: text.account.saveRoom }))
+    await waitFor(() =>
+      expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({
+        startMuted: true,
+        allowAnnotation: true,
+        allowRecording: false,
+      }),
+    )
   })
 
   it('lists rooms, passkeys and browsers; the last passkey stays; deleting signs out', async () => {

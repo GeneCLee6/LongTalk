@@ -89,6 +89,11 @@ export type PersistentRoomInfo = {
   password: boolean
   /** Who is in it now (0 between meetings) */
   memberCount: number
+  /** Participants come in muted (L5, e1-t18) */
+  startMuted: boolean
+  /** False: nobody annotates in this room, nobody records in it (L5, e1-t18) */
+  allowAnnotation: boolean
+  allowRecording: boolean
 }
 
 /** GET /api/account: everything /me shows */
@@ -107,6 +112,9 @@ export type RoomSettingsChange = {
   waitingRoom?: boolean
   locked?: boolean
   password?: string | null
+  startMuted?: boolean
+  allowAnnotation?: boolean
+  allowRecording?: boolean
 }
 
 /** What GET /api/rooms/<id> adds for a signed-in browser: its name, and whether it owns the room */

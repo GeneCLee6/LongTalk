@@ -41,7 +41,16 @@ export function setup(migrations?: string[]) {
           if (rooms.has(slug)) return false
           rooms.set(slug, {
             owner: record.owner,
-            settings: { name, waitingRoom: false, locked: false, password: false, memberCount: 0 },
+            settings: {
+              name,
+              waitingRoom: false,
+              locked: false,
+              password: false,
+              memberCount: 0,
+              startMuted: false,
+              allowAnnotation: true,
+              allowRecording: true,
+            },
           })
           return true
         },

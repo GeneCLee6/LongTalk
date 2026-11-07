@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { ChatMessage } from '../shared/chat.ts'
+import type { InteractState } from './room-interact.ts'
 import {
   CloseCode,
   HEARTBEAT_PING,
@@ -67,6 +68,8 @@ const PERSISTENT_KEY = 'persistent'
 const FILES_KEY = 'files'
 /** How a persistent room's meeting stands with its saved whiteboard (J4) */
 const BOARD_KEY = 'board'
+/** The poll, its votes, the countdown and the agenda (L5) */
+const INTERACT_KEY = 'interact'
 /** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
 const CHAT_PREFIX = 'chat:'
 const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
@@ -155,6 +158,7 @@ export class RoomDO extends DurableObject<Env> {
           }
         },
         saveBoardState: (state) => void storage.put<BoardState>(BOARD_KEY, state),
+        saveInteract: (state) => void storage.put<InteractState>(INTERACT_KEY, state),
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -207,6 +211,7 @@ export class RoomDO extends DurableObject<Env> {
           PERSISTENT_KEY,
           FILES_KEY,
           BOARD_KEY,
+          INTERACT_KEY,
         ]),
         storage.list<AnnotationSegment>({ prefix: ANNOTATION_PREFIX }),
       ])
@@ -232,6 +237,7 @@ export class RoomDO extends DurableObject<Env> {
           files: (extras.get(FILES_KEY) as FilesState | undefined) ?? null,
           annotations: [...annotations.values()],
           board: (extras.get(BOARD_KEY) as BoardState | undefined) ?? null,
+          interact: (extras.get(INTERACT_KEY) as InteractState | undefined) ?? null,
         },
       )
       // A room stored before C2 has no schedule: restore made one

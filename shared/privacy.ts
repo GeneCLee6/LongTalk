@@ -17,4 +17,4 @@ export const SOURCE_URL = 'https://github.com/GeneCLee6/LongTalk'
 export const PRIVACY_CONTACT: PrivacyContact = { url: `${SOURCE_URL}/issues`, isPublic: true }
 
 /** Shown as the policy's date: change it whenever the policy's text changes */
-export const POLICY_UPDATED = '2026-11-06'
+export const POLICY_UPDATED = '2026-11-07'

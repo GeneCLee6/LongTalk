@@ -5,7 +5,7 @@ import {
   type AnnotationOp,
   type Stroke,
 } from '../shared/annotation.ts'
-import { DEFAULT_ANNOTATION_POLICY } from '../shared/roles.ts'
+import { DEFAULT_ANNOTATION_POLICY, type AnnotationPolicy } from '../shared/roles.ts'
 import {
   ANNOTATION_FLUSH_MS,
   BOARD_SAVE_MS,
@@ -13,6 +13,8 @@ import {
   ANNOTATION_STROKE_RATE,
 } from '../shared/annotation-limits.ts'
 import { CHAT_CHUNK, CHAT_HISTORY, ChatRateLimit, type ChatMessage } from '../shared/chat.ts'
+import { INTERACT_RATE, POLL_START_RATE } from '../shared/interact.ts'
+import { RoomInteract, type InteractState } from './room-interact.ts'
 import type { ChatFile } from '../shared/files.ts'
 import {
   RoomFiles,
@@ -54,6 +56,7 @@ import {
   type Member,
   type MemberTrack,
   type NoticeMessage,
+  type PollStartMessage,
   type RoomInfo,
   type RoomInit,
   type RecordingInfo,
@@ -223,6 +226,10 @@ export type SettingsChange = {
   waitingRoom?: boolean
   locked?: boolean
   password?: string | null
+  /** L5, e1-t18 */
+  startMuted?: boolean
+  allowAnnotation?: boolean
+  allowRecording?: boolean
 }
 
 /** A persistent room's settings as /me lists them (shared/account.ts, without the slug's row) */
@@ -244,6 +251,8 @@ export type RestoreExtras = {
   annotations?: readonly AnnotationSegment[]
   /** How this meeting stands with the saved whiteboard (J4); absent: it has not read it yet */
   board?: BoardState | null
+  /** The poll, its votes, the countdown and the agenda (L5) */
+  interact?: InteractState | null
 }
 
 /** A persistent room's meeting that has read its saved whiteboard (J4, e7-t08) */
@@ -296,6 +305,8 @@ export interface RoomStorage {
   saveAnnotations?(writes: AnnotationWrite[]): void
   /** How this meeting stands with the saved whiteboard (J4); optional like the above */
   saveBoardState?(state: BoardState): void
+  /** The poll, its votes, the countdown and the agenda (L5), saved whenever they change */
+  saveInteract?(state: InteractState): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -330,10 +341,18 @@ function restoredInfo(info: StoredRoomInfo): RoomInfo {
     // Rooms stored before v21 have neither (J3)
     annotationPolicy: DEFAULT_ANNOTATION_POLICY,
     whiteboard: null,
+    // Rooms stored before v22 have none of these (L5)
+    startMuted: false,
+    allowAnnotation: true,
+    allowRecording: true,
     ...rest,
     shares: storedShares(info),
   }
 }
+
+/** Who may annotate when a meeting starts (L5, e1-t18): the owner may have turned it off */
+const startingPolicy = (allowed: boolean | undefined): AnnotationPolicy =>
+  allowed === false ? 'off' : DEFAULT_ANNOTATION_POLICY
 
 /** What the alarm did, for the adapter */
 export type AlarmResult = {
@@ -479,6 +498,11 @@ export class RoomHost {
   /** `annotate` frames and new strokes per member (J2), in memory like the chat's */
   private readonly annotationFrames = new ChatRateLimit(ANNOTATION_FRAME_RATE)
   private readonly annotationStrokes = new ChatRateLimit(ANNOTATION_STROKE_RATE)
+  /** The poll, the countdown and the agenda (L5, e5-t07, e5-t08) */
+  private interact = new RoomInteract()
+  /** Polls started and everything else of those per member (L5), in memory like the chat's */
+  private readonly pollRate = new ChatRateLimit(POLL_START_RATE)
+  private readonly interactRate = new ChatRateLimit(INTERACT_RATE)
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -535,6 +559,9 @@ export class RoomHost {
     this.files = new RoomFiles(info ? extras.files : null)
     this.annotationFrames.clear()
     this.annotationStrokes.clear()
+    this.interact = new RoomInteract(info ? extras.interact : null)
+    this.pollRate.clear()
+    this.interactRate.clear()
     this.reported = 0
     this.usage = usage?.state ?? 'normal'
     this.usageAt = usage?.at ?? this.deps.now()
@@ -671,6 +698,9 @@ export class RoomHost {
       recordings: {},
       annotationPolicy: DEFAULT_ANNOTATION_POLICY,
       whiteboard: null,
+      startMuted: false,
+      allowAnnotation: true,
+      allowRecording: true,
     }
     this.deps.storage.saveRoom(this.info)
     this.usageAt = this.deps.now()
@@ -714,6 +744,9 @@ export class RoomHost {
       locked: this.info.locked,
       password: this.info.passwordSetAt !== null,
       memberCount: this.memberCount,
+      startMuted: this.info.startMuted === true,
+      allowAnnotation: this.info.allowAnnotation !== false,
+      allowRecording: this.info.allowRecording !== false,
     }
   }
 
@@ -735,6 +768,24 @@ export class RoomHost {
     if (change.waitingRoom !== undefined && change.waitingRoom !== this.info.waitingRoom) {
       this.setRoom({ waitingRoom: change.waitingRoom })
       if (!change.waitingRoom) this.admitWaiting(this.waitingIds())
+    }
+    if (change.startMuted !== undefined && change.startMuted !== this.info.startMuted) {
+      // Only for who comes in from now on: who is here keeps the microphone as it is
+      this.setRoom({ startMuted: change.startMuted })
+    }
+    if (change.allowRecording !== undefined && change.allowRecording !== this.info.allowRecording) {
+      // Only new recordings are refused: one under way is on everyone's screen, and stops as usual
+      this.setRoom({ allowRecording: change.allowRecording })
+    }
+    if (
+      change.allowAnnotation !== undefined &&
+      change.allowAnnotation !== this.info.allowAnnotation
+    ) {
+      // At once: who was drawing loses the tools. What is drawn stays, and can still be cleared
+      this.setRoom({
+        allowAnnotation: change.allowAnnotation,
+        annotationPolicy: startingPolicy(change.allowAnnotation),
+      })
     }
     if (change.password !== undefined) await this.setPassword(change.password)
     return this.settings()
@@ -1046,7 +1097,127 @@ export class RoomHost {
       case 'whiteboard':
         this.setWhiteboard(connId, conn.member!, message.open)
         return
+      case 'pollStart':
+        this.startPoll(connId, conn.member!, message)
+        return
+      case 'pollVote':
+        this.votePoll(connId, conn.member!, message.poll, message.choices)
+        return
+      case 'pollEnd':
+        this.endPoll(connId, conn.member!, message.poll)
+        return
+      case 'timer':
+        if (!this.mayInteract(connId, conn.member!, 'timer')) return
+        this.interact.setTimer(
+          message.seconds === null
+            ? null
+            : { endsAt: this.deps.now() + message.seconds * 1000, seconds: message.seconds },
+        )
+        this.interactChanged()
+        return
+      case 'agenda':
+        if (!this.mayInteract(connId, conn.member!, 'agenda')) return
+        this.interact.setAgenda(message.items)
+        this.interactChanged()
+        return
+      case 'agendaCurrent':
+        if (!this.mayInteract(connId, conn.member!, 'agenda')) return
+        // Out of range: the list changed under the button, and the patch saying so is on its way
+        if (this.interact.setAgendaCurrent(message.index)) this.interactChanged()
+        return
     }
+  }
+
+  /**
+   * Whether the member may do `action` now (worker/roles.ts, CLAUDE.md rule 1) and is within
+   * INTERACT_RATE; answers `forbidden` or `rate_limited` otherwise (L5)
+   */
+  private mayInteract(connId: string, memberId: string, action: Action): boolean {
+    if (!this.allowed(memberId, action)) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return false
+    }
+    if (!this.interactRate.take(memberId, this.deps.now())) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'rate_limited' })
+      return false
+    }
+    return true
+  }
+
+  private interactChanged(): void {
+    this.deps.storage.saveInteract?.(this.interact.stored)
+    this.publish()
+  }
+
+  /**
+   * `pollStart` (L5, e5-t07): one poll at a time, at most POLL_START_RATE per member. Its id is the
+   * room's clock; two in the same millisecond would need the first to have ended, so no answer can
+   * reach the wrong one.
+   */
+  private startPoll(connId: string, memberId: string, message: PollStartMessage): void {
+    if (!this.allowed(memberId, 'poll')) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    if (this.interact.pollOn) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'poll_active' })
+      return
+    }
+    const now = this.deps.now()
+    if (!this.pollRate.take(memberId, now)) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'rate_limited' })
+      return
+    }
+    const { question, options, multi, anonymous } = message
+    const by = this.members.get(memberId)!.name
+    this.interact.startPoll({ id: now, by, question, options, multi, anonymous })
+    this.interactChanged()
+  }
+
+  /**
+   * `pollVote` (L5, e5-t07): the member's answer, replacing an earlier one. Answers that do not fit
+   * the poll are `bad_message`; a poll that just ended is no error. The member's own answer comes
+   * back to them alone: the view does not say on an anonymous poll.
+   */
+  private votePoll(connId: string, memberId: string, poll: number, choices: number[]): void {
+    if (!this.mayInteract(connId, memberId, 'votePoll')) return
+    const name = this.members.get(memberId)!.name
+    const outcome = this.interact.vote(poll, memberId, name, choices)
+    if (!outcome.ok) {
+      if (outcome.reason === 'invalid') {
+        this.deps.sockets.send(connId, { t: 'error', code: 'bad_message' })
+      } else if (outcome.reason === 'full') {
+        this.deps.sockets.send(connId, { t: 'error', code: 'rate_limited' })
+      }
+      return
+    }
+    if (outcome.changed) this.interactChanged()
+    this.sendOwnVote(connId, memberId)
+  }
+
+  /** What the member answered to the poll on now, if anything (L5) */
+  private sendOwnVote(connId: string, memberId: string): void {
+    const vote = this.interact.voteOf(memberId)
+    if (vote) this.deps.sockets.send(connId, { t: 'pollVoted', ...vote })
+  }
+
+  /**
+   * `pollEnd` (L5, e5-t07): the poll leaves the view and its results go to the chat, a message from
+   * who ended it, like a file (I5). A poll already over is no error: someone else just ended it.
+   */
+  private endPoll(connId: string, memberId: string, poll: number): void {
+    if (!this.mayInteract(connId, memberId, 'poll')) return
+    const result = this.interact.endPoll(poll)
+    if (!result) return
+    this.interactChanged()
+    this.postChat({
+      id: ++this.chatId,
+      from: memberId,
+      name: this.members.get(memberId)!.name,
+      text: result.question,
+      at: this.deps.now(),
+      poll: result,
+    })
   }
 
   /** Whose a layer is (J3): the sharer's their share, the whiteboard whoever opened it */
@@ -1385,6 +1556,8 @@ export class RoomHost {
   private mayRecord(memberId: string): boolean {
     const member = this.members.get(memberId)
     if (!member || member.role === 'waiting') return false
+    // The owner turned recording off in this room (L5, e1-t18). Allowing it grants nothing
+    if (this.info?.allowRecording === false) return false
     return this.allowed(memberId, 'record') || member.mayRecord
   }
 
@@ -1525,6 +1698,11 @@ export class RoomHost {
         this.publish()
         return
       case 'annotationPolicy':
+        // The owner turned annotation off in this room (L5, e1-t18): only /me turns it back on
+        if (this.info!.allowAnnotation === false) {
+          this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+          return
+        }
         if (this.info!.annotationPolicy === message.policy) return
         this.setRoom({ annotationPolicy: message.policy })
         // Everyone is affected: who was drawing loses the tools, or gets them
@@ -1601,7 +1779,15 @@ export class RoomHost {
     changes: Partial<
       Pick<
         RoomInfo,
-        'locked' | 'waitingRoom' | 'passwordSetAt' | 'spotlight' | 'annotationPolicy' | 'whiteboard'
+        | 'locked'
+        | 'waitingRoom'
+        | 'passwordSetAt'
+        | 'spotlight'
+        | 'annotationPolicy'
+        | 'whiteboard'
+        | 'startMuted'
+        | 'allowAnnotation'
+        | 'allowRecording'
       >
     >,
   ): void {
@@ -1688,7 +1874,9 @@ export class RoomHost {
     this.publish(conns)
     for (const id of admitted) {
       const conn = this.sessions.get(id)?.conn
-      if (conn) this.welcome(conn, id)
+      if (!conn) continue
+      this.welcome(conn, id)
+      this.tellStartMuted(id)
     }
   }
 
@@ -2198,7 +2386,15 @@ export class RoomHost {
     if (!this.info) throw new Error('The room was not created')
     const members: Record<string, Member> = {}
     for (const [id, member] of this.members) if (member.role !== 'waiting') members[id] = member
-    return { room: this.info, members, waiting: this.waitingView(), usage: this.usage }
+    return {
+      room: this.info,
+      members,
+      waiting: this.waitingView(),
+      usage: this.usage,
+      poll: this.interact.pollView,
+      timer: this.interact.timer,
+      agenda: this.interact.agenda,
+    }
   }
 
   /** Who waits (F2), as the room sees them */
@@ -2441,7 +2637,19 @@ export class RoomHost {
     this.publish(new Set([connId]))
     // After the patch, so the notice can name the owner
     for (const id of demoted) this.notify(id, { t: 'notice', notice: 'madeCohost', by: memberId })
-    if (!this.isWaiting(memberId)) this.welcome(connId, memberId)
+    if (this.isWaiting(memberId)) return
+    this.welcome(connId, memberId)
+    // Coming back keeps the microphone as the member left it
+    if (known === undefined) this.tellStartMuted(memberId)
+  }
+
+  /**
+   * A participant just came in to a room whose owner wants them muted at first (L5, e1-t18): their
+   * browser turns the microphone off and says why. Not the host or a co-host, who run the meeting.
+   */
+  private tellStartMuted(memberId: string): void {
+    if (this.info?.startMuted !== true || this.members.get(memberId)?.role !== 'participant') return
+    this.notify(memberId, { t: 'notice', notice: 'startMuted', by: memberId })
   }
 
   /** Closes a socket that may not join, with the reason */
@@ -2467,6 +2675,8 @@ export class RoomHost {
     this.sendChatHistory(connId)
     // The strokes on the shares (J2): for someone late, and to catch up after a reconnect
     for (const frame of this.annotations.snapshot()) this.deps.sockets.send(connId, frame)
+    // Their answer to the poll on now (L5): the view does not say on an anonymous one
+    this.sendOwnVote(connId, memberId)
   }
 
   /** A connection whose member is in the room (not waiting, F2): it gets patches and chat */
@@ -2512,6 +2722,8 @@ export class RoomHost {
     this.signalRate.forget(memberId)
     this.annotationFrames.forget(memberId)
     this.annotationStrokes.forget(memberId)
+    this.pollRate.forget(memberId)
+    this.interactRate.forget(memberId)
     this.lobbies.delete(memberId)
     this.cameIn.delete(memberId)
   }
@@ -2676,6 +2888,10 @@ export class RoomHost {
     this.annotations.reset()
     this.annotationFrames.clear()
     this.annotationStrokes.clear()
+    // The poll, the countdown and the agenda are the meeting's; what is stored goes below
+    this.interact = new RoomInteract()
+    this.pollRate.clear()
+    this.interactRate.clear()
     this.bans.clear()
     this.cameIn.clear()
     this.lobbies.clear()
@@ -2700,7 +2916,7 @@ export class RoomHost {
         // Recordings (I4) are the meeting's, not the room's settings
         recordings: {},
         // So are who may annotate and whether the board is open (J3); its strokes were saved above
-        annotationPolicy: DEFAULT_ANNOTATION_POLICY,
+        annotationPolicy: startingPolicy(kept.info.allowAnnotation),
         whiteboard: null,
       }
       this.password = kept.password
