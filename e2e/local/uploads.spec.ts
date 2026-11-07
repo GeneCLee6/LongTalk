@@ -192,9 +192,14 @@ test('an upload shows progress and can be cancelled; a failure says why', async 
   const room = await newRoom(page)
   await joinRoom(page, room, 'Alice')
   await openChat(page)
-  // Held on the way out so the row can be looked at
+  // Held on the way out until cancelled, so the row can be looked at: a fixed wait can run out during
+  // the axe scan on a slow machine, and the row and its cancel button go with it
+  let release = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
   await page.route('**/api/files/*/*', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    await held
     await route.continue().catch(() => {})
   })
   await pick(page, 'slow.zip', 'application/zip', Buffer.alloc(200_000, 7))
@@ -203,6 +208,7 @@ test('an upload shows progress and can be cancelled; a failure says why', async 
   await expectNoViolations(page, 'an upload under way')
   await page.getByRole('button', { name: strings.chat.file.cancel('slow.zip') }).click()
   await expect(bar).toHaveCount(0)
+  release()
   await page.unroute('**/api/files/*/*')
 
   // The connection dies while the bytes go out
