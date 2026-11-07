@@ -210,6 +210,8 @@ test('an upload shows progress and can be cancelled; a failure says why', async 
   await expect(bar).toHaveCount(0)
   release()
   await page.unroute('**/api/files/*/*')
+  // A cancelled upload never shows up in the chat
+  await expect(page.getByText('slow.zip')).toHaveCount(0)
 
   // The connection dies while the bytes go out
   await page.route('**/api/files/*/*', (route) => route.abort())
