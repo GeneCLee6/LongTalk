@@ -400,6 +400,9 @@ function RoomItem({ room, run, ask }: { room: PersistentRoomInfo; run: Run; ask:
     room.waitingRoom && strings.account.waitingRoom,
     room.locked && strings.account.locked,
     room.password && strings.account.passwordSet,
+    room.startMuted && strings.account.startMuted,
+    !room.allowAnnotation && strings.account.noAnnotation,
+    !room.allowRecording && strings.account.noRecording,
     room.memberCount > 0 && strings.account.roomPeople(room.memberCount),
   ].filter(Boolean)
   return (
@@ -459,6 +462,9 @@ function RoomSettingsForm({
   const [name, setName] = useState(room.name ?? '')
   const [waitingRoom, setWaitingRoom] = useState(room.waitingRoom)
   const [locked, setLocked] = useState(room.locked)
+  const [startMuted, setStartMuted] = useState(room.startMuted)
+  const [allowAnnotation, setAllowAnnotation] = useState(room.allowAnnotation)
+  const [allowRecording, setAllowRecording] = useState(room.allowRecording)
   const [password, setPassword] = useState('')
   const passwordValue = password.trim() === '' ? null : normalizePassword(password)
   const passwordBad = password.trim() !== '' && passwordValue === null
@@ -470,6 +476,9 @@ function RoomSettingsForm({
           name: name.trim() === '' ? null : name,
           waitingRoom,
           locked,
+          startMuted,
+          allowAnnotation,
+          allowRecording,
           ...(clearPassword ? { password: null } : passwordValue ? { password: passwordValue } : {}),
         }),
       strings.account.saved,
@@ -500,6 +509,27 @@ function RoomSettingsForm({
         <input type="checkbox" checked={locked} onChange={(e) => setLocked(e.target.checked)} />
         {strings.account.locked}
       </Check>
+      <Check>
+        <input type="checkbox" checked={startMuted} onChange={(e) => setStartMuted(e.target.checked)} />
+        {strings.account.startMuted}
+      </Check>
+      <Check>
+        <input
+          type="checkbox"
+          checked={allowAnnotation}
+          onChange={(e) => setAllowAnnotation(e.target.checked)}
+        />
+        {strings.account.allowAnnotation}
+      </Check>
+      <Check>
+        <input
+          type="checkbox"
+          checked={allowRecording}
+          onChange={(e) => setAllowRecording(e.target.checked)}
+        />
+        {strings.account.allowRecording}
+      </Check>
+      <Small>{strings.account.settingsHint}</Small>
       <TextField
         label={strings.account.newPassword}
         type="password"

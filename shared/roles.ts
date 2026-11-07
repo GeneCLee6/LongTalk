@@ -71,6 +71,8 @@ export const PERMISSIONS = {
    * Closing it is mayCloseBoard: it asks for more than opening does
    */
   openWhiteboard: { who: IN_ROOM, on: 'self', since: 'J3' },
+  /** Answer the poll on now (L5, e5-t07) */
+  votePoll: { who: IN_ROOM, on: 'self', since: 'L5' },
   /** Ask the sharer for remote control (N, E9; the sharer still has to accept) */
   requestControl: { who: IN_ROOM, on: 'self', since: 'N' },
 
@@ -104,6 +106,11 @@ export const PERMISSIONS = {
    * (`allowRecord`, `Member.mayRecord`) may record too, and stop their own
    */
   record: { who: ['host'], on: 'room', since: 'I4' },
+
+  /** Start and end polls (L5, e5-t07); the countdown and the agenda bar (L5, e5-t08) */
+  poll: { who: STAFF, on: 'room', since: 'L5' },
+  timer: { who: STAFF, on: 'room', since: 'L5' },
+  agenda: { who: STAFF, on: 'room', since: 'L5' },
 
   // ── What is done to one other member ──
   /** Mute their microphone; only they can turn it back on (F1) */

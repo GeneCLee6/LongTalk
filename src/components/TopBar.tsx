@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import styled from 'styled-components'
 import { strings } from '../strings.ts'
 import { color, fontSize, media, radius, size, space } from '../styles/tokens.ts'
+import { TIMER_SHOWN_AFTER_MS, type TimerInfo } from '../../shared/interact.ts'
 import { formatElapsed } from '../room/elapsed.ts'
 import { LinkIcon, LockIcon } from './icons.tsx'
 import { usePhoneLayout } from './layoutContext.ts'
@@ -22,6 +23,8 @@ export interface TopBarProps {
    * who records in words. `onStop` when we record: the light is the 停止錄影 button
    */
   recording?: { label: string; onStop?: () => void; saving?: boolean } | null
+  /** The countdown a host or co-host set (L5, e5-t08), for everyone */
+  timer?: TimerInfo | null
   onCopyLink: () => void
   /** Leave the room: the button sits here on phones (e4-t07), in the toolbar elsewhere */
   onLeave?: () => void
@@ -44,6 +47,27 @@ function Elapsed({ startedAt, now }: { startedAt: number; now: () => number }) {
 }
 
 /**
+ * The countdown (e5-t08), ticking every second: when it runs out it says so, in words, for
+ * TIMER_SHOWN_AFTER_MS and then leaves. On this device's clock, like the elapsed time.
+ */
+function Countdown({ timer, now }: { timer: TimerInfo; now: () => number }) {
+  const [at, setAt] = useState(now)
+  useEffect(() => {
+    const tick = setInterval(() => setAt(now()), 1000)
+    return () => clearInterval(tick)
+  }, [now])
+  const left = timer.endsAt - at
+  if (left <= -TIMER_SHOWN_AFTER_MS) return null
+  const over = left <= 0
+  return (
+    <Count role="timer" aria-label={strings.timer.label} $over={over}>
+      {/* Rounded up, so it reads 00:00 only once it is really over */}
+      {over ? strings.timer.done : formatElapsed(Math.ceil(left / 1000) * 1000)}
+    </Count>
+  )
+}
+
+/**
  * The room's top bar (e4-t06, DESIGN.md §4.3 / §5 TopBar): room name, the meeting's elapsed
  * time, copy link, and on the right the connection state (amber while reconnecting).
  *
@@ -58,6 +82,7 @@ export function TopBar({
   warn,
   locked = false,
   recording = null,
+  timer = null,
   onCopyLink,
   onLeave,
   now = Date.now,
@@ -73,6 +98,8 @@ export function TopBar({
         </Locked>
       )}
       {startedAt !== null && <Elapsed startedAt={startedAt} now={now} />}
+      {/* A new countdown starts from its own first second */}
+      {timer && <Countdown key={timer.endsAt} timer={timer} now={now} />}
       {recording &&
         (recording.onStop ? (
           <Recording
@@ -216,6 +243,18 @@ const Short = styled.span`
 const Time = styled.span`
   font-variant-numeric: tabular-nums;
   color: ${color.fg};
+`
+
+/** The countdown: a pill beside the elapsed time; amber and bold once it ran out */
+const Count = styled.span<{ $over: boolean }>`
+  flex: none;
+  padding: 0 ${space(2)};
+  border: 1px solid ${({ $over }) => ($over ? color.warn : color.line)};
+  border-radius: ${radius.pill};
+  color: ${({ $over }) => ($over ? color.warn : color.fg)};
+  font-weight: ${({ $over }) => ($over ? 700 : 400)};
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 `
 
 /** Icon and words on desktop, the icon alone (a 44 px target) on phones */

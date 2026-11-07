@@ -11,6 +11,14 @@
 // token gets 403 turnstile_required; the public dummy token passes.
 import { ROOM_CONNECT_RATE, ROOM_CREATE_LIMITS, SOCKET_MESSAGE_RATE } from '../shared/abuse.ts'
 import { MAX_FILE_BYTES, filePath, filesPath } from '../shared/files.ts'
+import {
+  INTERACT_RATE,
+  MAX_AGENDA_ITEMS,
+  MAX_POLL_OPTIONS,
+  MAX_POLL_QUESTION_CHARS,
+  MAX_TIMER_SECONDS,
+  POLL_START_RATE,
+} from '../shared/interact.ts'
 import { CloseCode, MAX_CLIENT_MESSAGE_CHARS, roomSocketPath } from '../shared/protocol.ts'
 
 const base = process.env.BASE_URL?.replace(/\/$/, '')
@@ -177,6 +185,107 @@ async function uploads(roomId: string) {
   member.close()
 }
 
+/**
+ * Polls, the countdown and the agenda (L5, AC-5.5) on the real RoomDO: who may, the limits, and that
+ * what is refused changes nothing. The first to join is the host, the second a participant.
+ */
+async function interactions(roomId: string) {
+  type Seen = { t?: string; code?: string; state?: { poll?: unknown }; you?: string }
+  const member = (name: string) =>
+    new Promise<{ ws: WebSocket; seen: Seen[]; id: string | null }>((resolve) => {
+      const ws = new WebSocket(wsBase + roomSocketPath(roomId))
+      const seen: Seen[] = []
+      const timer = setTimeout(() => resolve({ ws, seen, id: null }), 8_000)
+      ws.onopen = () => join(ws, name)
+      ws.onmessage = (event) => {
+        const message = JSON.parse(String(event.data)) as Seen
+        seen.push(message)
+        if (message.t === 'welcome') {
+          clearTimeout(timer)
+          resolve({ ws, seen, id: message.you ?? null })
+        }
+      }
+    })
+  const host = await member('Poll host')
+  const guest = await member('Poll guest')
+  if (!host.id || !guest.id) {
+    record('interact: members to test with', false, 'no welcome')
+    host.ws.close()
+    guest.ws.close()
+    return
+  }
+  const errors = (who: { seen: Seen[] }) =>
+    who.seen.filter((m) => m.t === 'error').map((m) => m.code)
+  const poll = { t: 'pollStart', question: 'q', options: ['a', 'b'], multi: false, anonymous: true }
+
+  guest.ws.send(JSON.stringify(poll))
+  guest.ws.send(JSON.stringify({ t: 'timer', seconds: 60 }))
+  guest.ws.send(JSON.stringify({ t: 'agenda', items: [{ title: 'x', minutes: 1 }] }))
+  await sleep(1_000)
+  const refused = errors(guest)
+  record(
+    'interact: a participant may not',
+    refused.length === 3 && refused.every((code) => code === 'forbidden'),
+    `pollStart, timer, agenda -> ${refused.join(', ')}`,
+  )
+
+  const malformed = [
+    { ...poll, options: ['only one'] },
+    { ...poll, options: Array.from({ length: MAX_POLL_OPTIONS + 1 }, (_, n) => `o${n}`) },
+    { ...poll, question: 'q'.repeat(MAX_POLL_QUESTION_CHARS + 1) },
+    { t: 'timer', seconds: MAX_TIMER_SECONDS + 1 },
+    { t: 'agenda', items: Array.from({ length: MAX_AGENDA_ITEMS + 1 }, () => ({ title: 'x', minutes: 1 })) },
+  ]
+  for (const message of malformed) host.ws.send(JSON.stringify(message))
+  await sleep(1_000)
+  const bad = errors(host)
+  record(
+    'interact: malformed messages',
+    bad.length === malformed.length && bad.every((code) => code === 'bad_message'),
+    `${malformed.length} sent -> ${bad.join(', ')}`,
+  )
+
+  // Starting: one at a time, then POLL_START_RATE; the start time is the poll's id, from the patch
+  host.seen.length = 0
+  const pollIdIn = (seen: Seen[]) => {
+    const text = JSON.stringify(seen.filter((m) => m.t === 'patch'))
+    return Number(/"id":(\d{10,})/.exec(text)?.[1] ?? 0)
+  }
+  let limited = false
+  let started = 0
+  for (let i = 0; i < POLL_START_RATE.count + 1 && !limited; i++) {
+    host.seen.length = 0
+    host.ws.send(JSON.stringify(poll))
+    await sleep(400)
+    if (errors(host).includes('rate_limited')) limited = true
+    else if (i === 0) {
+      host.ws.send(JSON.stringify(poll))
+      await sleep(400)
+      record('interact: one poll at a time', errors(host).includes('poll_active'), errors(host).join())
+    }
+    const id = pollIdIn(host.seen)
+    if (id > 0) started += 1
+    if (!limited) host.ws.send(JSON.stringify({ t: 'pollEnd', poll: id }))
+    await sleep(200)
+  }
+  record(
+    'interact: polls per member',
+    limited && started === POLL_START_RATE.count,
+    `${started} started, then rate_limited: ${limited}`,
+  )
+
+  // Votes: INTERACT_RATE per member. The host's rate for polls is spent, the guest's for votes is not
+  guest.seen.length = 0
+  for (let i = 0; i < INTERACT_RATE.count + 5; i++) {
+    guest.ws.send(JSON.stringify({ t: 'pollVote', poll: 1, choices: [0] }))
+  }
+  await sleep(1_000)
+  const tooFast = errors(guest).filter((code) => code === 'rate_limited').length
+  record('interact: votes per member', tooFast === 5, `${INTERACT_RATE.count + 5} at once -> ${tooFast} rate_limited`)
+  host.ws.close()
+  guest.ws.close()
+}
+
 async function main() {
   // 1. Turnstile: no token, a token that passes
   const noToken = await createRoom(null)
@@ -209,6 +318,7 @@ async function main() {
 
   // Files first: the floods below use up what this network may do in a room
   await uploads(rooms[2] ?? roomId)
+  await interactions(rooms[3] ?? roomId)
 
   // 3. A frame flood on one socket closes it with rateLimited
   const flood = await socket(roomId, (ws) => {

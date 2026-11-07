@@ -49,6 +49,7 @@ import { ChatPanel } from '../components/ChatPanel.tsx'
 import { ChatPreview } from '../components/ChatPreview.tsx'
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx'
 import { LeaveDialog, PasswordDialog } from '../components/HostDialogs.tsx'
+import { AgendaBar } from '../components/AgendaBar.tsx'
 import { Drawer } from '../components/Drawer.tsx'
 import { LeftScreen } from '../components/LeftScreen.tsx'
 import {
@@ -828,7 +829,8 @@ function Room({
   // The chat (D3) and the participants (F1): one side panel on desktop, a full-screen drawer on
   // phones, switching between the two
   // 連線統計 (H2, e2-t14) opens in the same place as chat and participants
-  const [panel, setPanel] = useState<'chat' | 'participants' | 'stats' | null>(null)
+  // 互動 (L5: polls, the countdown, the agenda) too, and it is one more tab beside those two
+  const [panel, setPanel] = useState<'chat' | 'participants' | 'interact' | 'stats' | null>(null)
   const chatOpen = panel === 'chat'
   const togglePanel = (which: 'chat' | 'participants' | 'stats') =>
     setPanel((open) => (open === which ? null : which))
@@ -878,6 +880,7 @@ function Room({
       onError((code) => {
         if (code === 'rate_limited') show(strings.chat.rateLimited, 'warn')
         if (code === 'annotation_limit') show(strings.screenShare.annotationLimit, 'warn')
+        if (code === 'poll_active') show(strings.poll.busy, 'warn')
         // A host control the room refused (our role changed meanwhile, F1)
         if (code === 'forbidden') show(strings.participants.forbidden, 'warn')
       }),
@@ -1101,7 +1104,7 @@ function Room({
             onSelect: recording.stop,
           },
         ]
-      : can(role, 'record') || self?.mayRecord === true
+      : roomInfo?.allowRecording !== false && (can(role, 'record') || self?.mayRecord === true)
         ? [
             {
               id: 'record',
@@ -1122,6 +1125,8 @@ function Room({
       checked: prefs.sounds,
       onSelect: () => updatePrefs({ sounds: !prefs.sounds }),
     },
+    // 更多 › 投票與計時 (L5): also where a phone, with no tabs on its toolbar, finds them
+    { id: 'interact', label: strings.interact.menu, onSelect: () => setPanel('interact') },
     // 更多 › 連線統計 (H2, e2-t14)
     { id: 'stats', label: strings.stats.menu, onSelect: () => setPanel('stats') },
     // The list of keyboard shortcuts (G4, e4-t13), where there is a keyboard layout
@@ -1446,6 +1451,11 @@ function Room({
           )
         }
         return
+      // L5 (e1-t18): the owner's setting, not anyone's action
+      case 'startMuted':
+        void devices?.setOn('mic', false)
+        show(strings.hostNotice.startMuted)
+        return
       case 'annotationsCleared':
         // Maybe a sharer, not only a host: the name alone
         show(
@@ -1734,6 +1744,34 @@ function Room({
   useEffect(() => {
     if (mutedSpeech.hint) announce(strings.mutedSpeech.text)
   }, [mutedSpeech.hint, announce])
+  // The poll on now (L5, e5-t07), on the stage until we answer or wave it away
+  const poll = state.view?.poll ?? null
+  const myVote = poll && state.pollVote?.poll === poll.id ? state.pollVote.choices : null
+  const [pollWavedAway, setPollWavedAway] = useState<number | null>(null)
+  const pollAsked =
+    inRoom && poll !== null && myVote === null && panel !== 'interact' && pollWavedAway !== poll.id
+  // Someone started one while we are here: told once. Who comes in late just finds it on the stage
+  const pollSeen = useRef<number | null | undefined>(undefined)
+  const pollId = state.view ? (poll?.id ?? null) : undefined
+  const pollQuestion = poll?.question
+  useEffect(() => {
+    if (pollId === undefined) return
+    const fresh = pollSeen.current !== undefined && pollId !== null && pollId !== pollSeen.current
+    pollSeen.current = pollId
+    if (fresh) announce(strings.poll.started(pollQuestion ?? ''))
+  }, [pollId, pollQuestion, announce])
+  // The countdown ran out while we watched (L5, e5-t08): said once, and on the top bar for a minute
+  const timerEnds = state.view?.timer?.endsAt ?? null
+  useEffect(() => {
+    if (timerEnds === null) return
+    const left = timerEnds - Date.now()
+    if (left <= 0) return
+    const done = setTimeout(() => {
+      show(strings.timer.done)
+      announce(strings.timer.done)
+    }, left)
+    return () => clearTimeout(done)
+  }, [timerEnds, show, announce])
   // The 更多 menu's media items (H3), after the others
   const mediaItems: MenuItem[] = [
     {
@@ -1922,10 +1960,29 @@ function Room({
       tabs={[
         { id: 'chat', label: strings.toolbar.chatUnread(chat.unread) },
         { id: 'participants', label: strings.participants.tabParticipants(members.length) },
+        { id: 'interact', label: strings.interact.tab },
       ]}
       selected={panel ?? 'chat'}
-      onSelect={(id) => setPanel(id === 'participants' ? 'participants' : 'chat')}
+      onSelect={(id) => setPanel(id === 'participants' || id === 'interact' ? id : 'chat')}
     />
+  )
+  const panelTitle = (which: 'chat' | 'participants' | 'interact') =>
+    which === 'chat'
+      ? strings.chat.title
+      : which === 'participants'
+        ? strings.participants.title
+        : strings.interact.title
+  const interactPanel = (
+    <Suspense fallback={null}>
+      <InteractPanel
+        poll={poll}
+        myVote={myVote}
+        timer={state.view?.timer ?? null}
+        agenda={state.view?.agenda ?? null}
+        manage={can(role, 'poll')}
+        send={send}
+      />
+    </Suspense>
   )
   const participantsPanel = (
     <ParticipantsPanel
@@ -1940,6 +1997,8 @@ function Room({
       waitingRoom={roomInfo?.waitingRoom ?? false}
       annotationPolicy={annotationPolicy}
       onAnnotationPolicy={onAnnotationPolicy}
+      annotationLocked={roomInfo?.allowAnnotation === false}
+      recordingOff={roomInfo?.allowRecording === false}
       onLock={onLock}
       onWaitingRoom={onWaitingRoom}
       onAdmit={onAdmit}
@@ -2193,11 +2252,22 @@ function Room({
           warn={state.status !== 'open'}
           locked={roomInfo?.locked ?? false}
           recording={recordingLight}
+          timer={state.view?.timer ?? null}
           onCopyLink={() => void copyRoomLink(link, title, strings.share.text).then(onLinkOutcome)}
           onLeave={onLeave}
         />
         <Middle>
           <StageArea>
+            {inRoom && state.view?.agenda && (
+              <AgendaBar
+                agenda={state.view.agenda}
+                onCurrent={
+                  can(role, 'agenda')
+                    ? (index) => send({ t: 'agendaCurrent', index })
+                    : undefined
+                }
+              />
+            )}
             {sharePhase === 'sharing' && (
               <SharingBar
                 note={cameraLocked ? strings.screenShare.cameraLocked : null}
@@ -2315,6 +2385,21 @@ function Room({
                   </Alert>
                 )}
                 {mediaProblem && <Alert role="alert">{mediaProblem}</Alert>}
+                {pollAsked && poll && (
+                  <Note>
+                    {strings.poll.asked(poll.question)}
+                    <InlineButton type="button" onClick={() => setPanel('interact')}>
+                      {strings.poll.answerNow}
+                    </InlineButton>
+                    <InlineButton
+                      type="button"
+                      aria-label={strings.poll.dismiss}
+                      onClick={() => setPollWavedAway(poll.id)}
+                    >
+                      ×
+                    </InlineButton>
+                  </Note>
+                )}
                 {/* Said by the announcer, like push-to-talk */}
                 {mutedSpeech.hint && (
                   <Note>
@@ -2368,8 +2453,14 @@ function Room({
           )}
           {panel !== null && panel !== 'stats' && phone === null && (
             <SidePanel
-              title={panel === 'chat' ? strings.chat.title : strings.participants.title}
-              closeLabel={panel === 'chat' ? strings.chat.close : strings.participants.close}
+              title={panelTitle(panel)}
+              closeLabel={
+                panel === 'chat'
+                  ? strings.chat.close
+                  : panel === 'participants'
+                    ? strings.participants.close
+                    : strings.interact.close
+              }
               onClose={() => setPanel(null)}
             >
               {panelTabs}
@@ -2381,8 +2472,10 @@ function Room({
                   files={fileSharing}
                   autoFocus
                 />
-              ) : (
+              ) : panel === 'participants' ? (
                 participantsPanel
+              ) : (
+                interactPanel
               )}
             </SidePanel>
           )}
@@ -2428,7 +2521,7 @@ function Room({
         {panel !== null && panel !== 'stats' && phone !== null && (
           <Drawer
             variant="full"
-            title={panel === 'chat' ? strings.chat.title : strings.participants.title}
+            title={panelTitle(panel)}
             onClose={() => setPanel(null)}
           >
             {panelTabs}
@@ -2439,8 +2532,10 @@ function Room({
                 onSend={sendChat}
                 files={fileSharing}
               />
-            ) : (
+            ) : panel === 'participants' ? (
               participantsPanel
+            ) : (
+              interactPanel
             )}
           </Drawer>
         )}
@@ -2925,6 +3020,9 @@ function mediaErrorText(error: MediaTransportErrorCode | null): string | null {
  * The free-tier notices (e11-t13): a toast whenever the month's state gets worse while we are in
  * the room (or is already bad when we arrive), and one when our own camera was not sent
  */
+/** 互動 (L5: polls, the countdown, the agenda): its own chunk, loaded when the panel first opens */
+const InteractPanel = lazy(() => import('../components/InteractPanel.tsx'))
+
 /** 連線統計 (e2-t14): its own chunk, loaded when the panel first opens */
 const StatsPanel = lazy(() => import('../components/StatsPanel.tsx'))
 

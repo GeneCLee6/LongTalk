@@ -56,6 +56,10 @@ export interface ParticipantsPanelProps {
   /** Who may annotate (J3, e7-t05): the three states, for who may set them */
   annotationPolicy?: AnnotationPolicy
   onAnnotationPolicy?: (policy: AnnotationPolicy) => void
+  /** The owner turned annotation off in this persistent room (L5, e1-t18): only /me changes it */
+  annotationLocked?: boolean
+  /** The owner turned recording off in this persistent room (L5, e1-t18): nothing to allow */
+  recordingOff?: boolean
   /** Co-hosts and handing over (F3, e1-t16); handing over asks first */
   onRole?: (change: RoleChange, memberId: string) => void
   /** Who records the meeting now (I4): a 錄影中 tag for everyone */
@@ -133,6 +137,8 @@ export function ParticipantsPanel({
   waitingRoom = false,
   annotationPolicy = DEFAULT_ANNOTATION_POLICY,
   onAnnotationPolicy = noop,
+  annotationLocked = false,
+  recordingOff = false,
   onLock = noop,
   onWaitingRoom = noop,
   onAdmit = noop,
@@ -223,7 +229,7 @@ export function ParticipantsPanel({
         onSelect: () => onRecordAction('stop', member.id),
       })
     }
-    if (member.role !== 'host' && canActOn(role, 'allowRecord', member.role, self)) {
+    if (!recordingOff && member.role !== 'host' && canActOn(role, 'allowRecord', member.role, self)) {
       recording.push(
         member.mayRecord
           ? {
@@ -278,11 +284,16 @@ export function ParticipantsPanel({
             <SwitchRow>
               <SwitchText>
                 <Name id="annotation-policy-label">{strings.annotation.policy.label}</Name>
-                <Hint>{strings.annotation.policy.hint[annotationPolicy]}</Hint>
+                <Hint>
+                  {annotationLocked
+                    ? strings.annotation.policy.lockedByOwner
+                    : strings.annotation.policy.hint[annotationPolicy]}
+                </Hint>
               </SwitchText>
               <PolicySelect
                 aria-labelledby="annotation-policy-label"
                 value={annotationPolicy}
+                disabled={annotationLocked}
                 onChange={(event) => onAnnotationPolicy(event.target.value as AnnotationPolicy)}
               >
                 {ANNOTATION_POLICIES.map((policy) => (

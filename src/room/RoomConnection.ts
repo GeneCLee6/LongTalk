@@ -95,6 +95,8 @@ export interface RoomConnectionState {
   lobby: LobbyState | null
   /** After `passwordWait` (F3): when this browser may try a password again (epoch ms) */
   passwordWaitUntil: number | null
+  /** What we answered to the poll on now (L5, `pollVoted`): the view does not say on an anonymous one */
+  pollVote: { poll: number; choices: number[] } | null
 }
 
 /** The bits of WebSocket the connection uses, so tests can pass a fake */
@@ -225,6 +227,7 @@ export class RoomConnection {
     chatLoaded: false,
     lobby: null,
     passwordWaitUntil: null,
+    pollVote: null,
   }
   /** The room's CHAT_RATE, checked here too so a refused message stays in the box */
   private readonly chatRate = new ChatRateLimit()
@@ -314,6 +317,7 @@ export class RoomConnection {
       chatLoaded: false,
       lobby: null,
       passwordWaitUntil: null,
+      pollVote: null,
     })
     this.open()
   }
@@ -476,6 +480,7 @@ export class RoomConnection {
           view: message.state,
           welcomes: this.state.welcomes + 1,
           lobby: null,
+          pollVote: null,
         })
         return
       case 'lobby': {
@@ -511,6 +516,14 @@ export class RoomConnection {
         this.update({ ...this.state, view })
         return
       }
+      case 'pollVoted':
+        // Only after this socket's welcome, which clears what an earlier socket heard
+        if (this.rev < 0) return
+        this.update({
+          ...this.state,
+          pollVote: { poll: message.poll, choices: message.choices },
+        })
+        return
       case 'error':
         for (const listener of this.errorListeners) listener(message.code)
         return

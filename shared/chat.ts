@@ -2,6 +2,7 @@
 // keeps and how fast a member may send. Shared by the Worker (RoomHost decides) and the browser
 // (which checks the same limits before sending, so a refused message stays in the box).
 import type { ChatFile } from './files.ts'
+import { isPollResult, type PollResult } from './interact.ts'
 
 /** A message's length in characters (code points), after normalizeChatText (E5: ≤ 2000 字) */
 export const MAX_CHAT_CHARS = 2_000
@@ -29,6 +30,11 @@ export type ChatMessage = {
    * finishes; `text` is then the file's name, for previews and older readers
    */
   file?: ChatFile
+  /**
+   * A poll that ended (L5, e5-t07): the room writes this message itself, from who ended it; `text`
+   * is then the question, for previews and older readers
+   */
+  poll?: PollResult
 }
 
 // Control characters (but the newline) and the bidirectional overrides that could make text
@@ -114,6 +120,7 @@ export function isChatMessage(value: unknown): value is ChatMessage {
     typeof message.name === 'string' &&
     typeof message.text === 'string' &&
     typeof message.at === 'number' &&
-    (message.file === undefined || isChatFile(message.file))
+    (message.file === undefined || isChatFile(message.file)) &&
+    (message.poll === undefined || isPollResult(message.poll))
   )
 }

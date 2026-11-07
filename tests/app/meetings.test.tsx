@@ -129,6 +129,9 @@ const ROOM = {
   locked: false,
   password: true,
   memberCount: 0,
+  startMuted: false,
+  allowAnnotation: true,
+  allowRecording: true,
 }
 
 function me(meetings: MeetingInfo[]): MeResponse {
