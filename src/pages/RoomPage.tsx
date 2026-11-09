@@ -50,6 +50,8 @@ import { ChatPreview } from '../components/ChatPreview.tsx'
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx'
 import { LeaveDialog, PasswordDialog } from '../components/HostDialogs.tsx'
 import { AgendaBar } from '../components/AgendaBar.tsx'
+import { BreakoutBar } from '../components/BreakoutBar.tsx'
+import { useBreakoutNotices } from '../components/useBreakoutClock.ts'
 import { Drawer } from '../components/Drawer.tsx'
 import { LeftScreen } from '../components/LeftScreen.tsx'
 import {
@@ -723,6 +725,7 @@ function Room({
 }) {
   const {
     state,
+    fullView,
     leave,
     send,
     retry: retryRoom,
@@ -830,13 +833,17 @@ function Room({
   // phones, switching between the two
   // 連線統計 (H2, e2-t14) opens in the same place as chat and participants
   // 互動 (L5: polls, the countdown, the agenda) too, and it is one more tab beside those two
-  const [panel, setPanel] = useState<'chat' | 'participants' | 'interact' | 'stats' | null>(null)
+  // 分組討論室 (L3) for a host or co-host, like 連線統計: a panel of its own, no tabs
+  const [panel, setPanel] = useState<
+    'chat' | 'participants' | 'interact' | 'stats' | 'breakout' | null
+  >(null)
   const chatOpen = panel === 'chat'
   const togglePanel = (which: 'chat' | 'participants' | 'stats') =>
     setPanel((open) => (open === which ? null : which))
   const chat = useChatNotifications({
     messages: state.chat,
     loaded: state.chatLoaded,
+    historyUntil: state.chatHistoryUntil,
     you: state.you,
     open: chatOpen,
   })
@@ -881,6 +888,8 @@ function Room({
         if (code === 'rate_limited') show(strings.chat.rateLimited, 'warn')
         if (code === 'annotation_limit') show(strings.screenShare.annotationLimit, 'warn')
         if (code === 'poll_active') show(strings.poll.busy, 'warn')
+        // The spotlight, the whiteboard or a poll while breakout rooms are open (L3)
+        if (code === 'breakout_active') show(strings.breakout.busy, 'warn')
         // A host control the room refused (our role changed meanwhile, F1)
         if (code === 'forbidden') show(strings.participants.forbidden, 'warn')
       }),
@@ -902,6 +911,16 @@ function Room({
   const pinnedId = pinned !== null && state.view?.members[pinned] ? pinned : null
   const spotlight = roomInfo?.spotlight ?? null
   const maySpotlight = can(role, 'spotlight')
+  // Breakout rooms (L3, e10-t05): the room decides who is where; our own view is scoped to our
+  // room (useRoomConnection), and only a host's panels read the whole room's (`fullView`)
+  const breakout = state.view?.breakout ?? null
+  const mayBreakout = can(role, 'breakout')
+  const myGroup = self?.group ?? null
+  const myRoomName = breakout?.groups.find((group) => group.id === myGroup)?.name ?? null
+  useBreakoutNotices(breakout, myGroup, show, state.view !== null && state.you !== null)
+  // A host or co-host sees everyone while breakout rooms are open, grouped by room (L3)
+  const allMembers = Object.values(fullView?.members ?? {})
+  const staffWide = mayBreakout && breakout !== null
   const setSpotlight = (memberId: string | null) => send({ t: 'spotlight', memberId })
   useSpotlightNotice(spotlight, state.you, show)
   const togglePin = (memberId: string) => {
@@ -1110,8 +1129,14 @@ function Room({
               id: 'record',
               label: strings.record.start,
               section: strings.record.section,
-              disabled: !recordSupported,
-              hint: recordSupported ? undefined : strings.record.unavailable,
+              // Not while breakout rooms are open (L3): the room would refuse it
+              disabled: !recordSupported || breakout !== null,
+              hint:
+                breakout !== null
+                  ? strings.breakout.noRecording
+                  : recordSupported
+                    ? undefined
+                    : strings.record.unavailable,
               onSelect: () => setRecordDialog(true),
             },
           ]
@@ -1127,6 +1152,10 @@ function Room({
     },
     // 更多 › 投票與計時 (L5): also where a phone, with no tabs on its toolbar, finds them
     { id: 'interact', label: strings.interact.menu, onSelect: () => setPanel('interact') },
+    // 更多 › 分組討論室 (L3), for who may open them (RoomDO checks again)
+    ...(mayBreakout
+      ? [{ id: 'breakout', label: strings.breakout.menu, onSelect: () => setPanel('breakout') }]
+      : []),
     // 更多 › 連線統計 (H2, e2-t14)
     { id: 'stats', label: strings.stats.menu, onSelect: () => setPanel('stats') },
     // The list of keyboard shortcuts (G4, e4-t13), where there is a keyboard layout
@@ -1247,10 +1276,18 @@ function Room({
     .join(' ')
   const sharerIds = useMemo(() => (sharerKey ? sharerKey.split(' ') : []), [sharerKey])
   const viewMembers = state.view?.members
+  // Names, from the whole room (L3): a host in another breakout room still acts on us, and a
+  // host's panel acts on people in other rooms
+  const anyMembers = fullView?.members ?? viewMembers
   const memberName = useRef<(id: string) => string>(() => '')
   useEffect(() => {
-    memberName.current = (id) => viewMembers?.[id]?.name ?? ''
-  }, [viewMembers])
+    memberName.current = (id) => anyMembers?.[id]?.name ?? ''
+  }, [anyMembers])
+  // Who shares in the whole room, for a host's participants panel while breakout rooms are open
+  const allSharerKey = shareOrder(fullView?.room.shares)
+    .map((share) => share.memberId)
+    .join(' ')
+  const allSharerIds = useMemo(() => (allSharerKey ? allSharerKey.split(' ') : []), [allSharerKey])
   const onShareNotice = useCallback(
     (notice: ShareNotice) => {
       switch (notice.type) {
@@ -1397,7 +1434,7 @@ function Room({
   // What a host did to us (F1, AC-1.4): the room already lists the track muted; our browser
   // turns the device off itself and says who did it. Only we can turn it back on.
   const onHostNotice = useEffectEvent((notice: NoticeMessage) => {
-    const actor = viewMembers?.[notice.by]
+    const actor = anyMembers?.[notice.by]
     const who = strings.hostNotice.actor(
       actor?.role === 'cohost' ? strings.participants.cohost : strings.participants.host,
       actor?.name ?? '',
@@ -1413,7 +1450,13 @@ function Room({
         show(strings.hostNotice.camOff(who), 'warn')
         return
       case 'shareStopped':
-        show(strings.hostNotice.shareStopped(who), 'warn')
+        // From the member themselves: the room stopped it, a breakout room had too many shares (L3)
+        show(
+          notice.by === state.you
+            ? strings.breakout.shareFull
+            : strings.hostNotice.shareStopped(who),
+          'warn',
+        )
         return
       // F3 (e1-t16)
       case 'madeCohost':
@@ -1474,15 +1517,15 @@ function Room({
   const onMemberAction = (action: HostMemberAction, memberId: string) => {
     send({ t: 'host', action, memberId })
     if (action === 'remove') {
-      show(strings.participants.removed(viewMembers?.[memberId]?.name ?? ''))
+      show(strings.participants.removed(anyMembers?.[memberId]?.name ?? ''))
     }
     if (action === 'lowerHand') {
-      show(strings.reactions.lowered(viewMembers?.[memberId]?.name ?? ''))
+      show(strings.reactions.lowered(anyMembers?.[memberId]?.name ?? ''))
     }
   }
   // Recording (I4): the host stops someone's, or allows them to record; RoomDO decides
   const onRecordAction = (action: RecordAction, memberId: string) => {
-    const name = viewMembers?.[memberId]?.name ?? ''
+    const name = anyMembers?.[memberId]?.name ?? ''
     if (action === 'stop') {
       send({ t: 'host', action: 'stopRecording', memberId })
       show(strings.record.stoppedTheirs(name))
@@ -1501,7 +1544,7 @@ function Room({
   }
   // Co-hosts and handing over (F3, e1-t16): RoomDO decides (worker/roles.ts)
   const onRole = (change: RoleChange, memberId: string) => {
-    const name = viewMembers?.[memberId]?.name ?? ''
+    const name = anyMembers?.[memberId]?.name ?? ''
     if (change === 'makeHost') {
       send({ t: 'host', action: 'makeHost', memberId })
       show(strings.participants.madeHost(name))
@@ -1663,8 +1706,9 @@ function Room({
     const split = (keys: string) => (keys === '' ? [] : keys.split(' '))
     setVideoPriority(split(chosenKeys), split(speakerKeys))
   }, [setVideoPriority, chosenKeys, speakerKeys])
-  // Who could take over from us: connected members in the meeting, the room's own pick first
-  const successors = members
+  // Who could take over from us: connected members in the meeting, the room's own pick first;
+  // everyone in it, whichever breakout room they are in (L3)
+  const successors = Object.values(fullView?.members ?? state.view?.members ?? {})
     .filter((member) => member.id !== state.you && !member.reconnecting)
     .sort((a, b) => successorOrder(a) - successorOrder(b) || a.joinedAt - b.joinedAt)
 
@@ -1959,7 +2003,10 @@ function Room({
       label={strings.participants.tabs}
       tabs={[
         { id: 'chat', label: strings.toolbar.chatUnread(chat.unread) },
-        { id: 'participants', label: strings.participants.tabParticipants(members.length) },
+        {
+          id: 'participants',
+          label: strings.participants.tabParticipants((staffWide ? allMembers : members).length),
+        },
         { id: 'interact', label: strings.interact.tab },
       ]}
       selected={panel ?? 'chat'}
@@ -1984,11 +2031,22 @@ function Room({
       />
     </Suspense>
   )
+  const breakoutPanel = (
+    <Suspense fallback={null}>
+      <BreakoutPanel
+        breakout={fullView?.breakout ?? null}
+        members={allMembers}
+        you={state.you}
+        send={send}
+      />
+    </Suspense>
+  )
   const participantsPanel = (
     <ParticipantsPanel
-      members={members}
+      members={staffWide ? allMembers : members}
+      breakout={staffWide ? breakout : null}
       you={state.you}
-      sharerIds={sharerIds}
+      sharerIds={staffWide ? allSharerIds : sharerIds}
       onAction={onMemberAction}
       onMuteAll={onMuteAll}
       onEndMeeting={onEndMeeting}
@@ -2052,7 +2110,7 @@ function Room({
       ? strings.record.byYou
       : recorders.length > 1
         ? strings.record.byMany(recorders.length)
-        : strings.record.byOne(viewMembers?.[otherRecorders[0].memberId]?.name ?? '')
+        : strings.record.byOne(anyMembers?.[otherRecorders[0].memberId]?.name ?? '')
   const mainSharer = otherSharers.find((sharer) => sharer.id === slots.main)
   const nameOnMarks = (memberId: string) => viewMembers?.[memberId]?.name ?? null
   const recordingText = recorders.length > 0 || weRecord ? recordingLabel : null
@@ -2199,9 +2257,7 @@ function Room({
     focus: focus?.id ?? null,
   })
   const floating = floatSelf ? stageMembers.find((member) => member.id === state.you) : undefined
-  const gridMembers = floating
-    ? stageMembers.filter((member) => member !== floating)
-    : stageMembers
+  const gridMembers = floating ? stageMembers.filter((member) => member !== floating) : stageMembers
   const tileOf = (member: Member) => {
     const you = member.id === state.you
     const mic = member.tracks.find((t) => t.kind === 'mic')
@@ -2227,9 +2283,7 @@ function Room({
         // may spotlight (worker/roles.ts); the button only shows for them.
         onTogglePin={you ? undefined : () => togglePin(member.id)}
         onToggleSpotlight={
-          maySpotlight
-            ? () => setSpotlight(spotlight === member.id ? null : member.id)
-            : undefined
+          maySpotlight ? () => setSpotlight(spotlight === member.id ? null : member.id) : undefined
         }
         // The speaking outline follows our own microphone while it sends, theirs
         // while it is on
@@ -2258,13 +2312,18 @@ function Room({
         />
         <Middle>
           <StageArea>
+            {inRoom && breakout && (
+              <BreakoutBar
+                breakout={breakout}
+                room={myRoomName}
+                onManage={mayBreakout ? () => setPanel('breakout') : undefined}
+              />
+            )}
             {inRoom && state.view?.agenda && (
               <AgendaBar
                 agenda={state.view.agenda}
                 onCurrent={
-                  can(role, 'agenda')
-                    ? (index) => send({ t: 'agendaCurrent', index })
-                    : undefined
+                  can(role, 'agenda') ? (index) => send({ t: 'agendaCurrent', index }) : undefined
                 }
               />
             )}
@@ -2451,7 +2510,16 @@ function Room({
               {statsPanel}
             </SidePanel>
           )}
-          {panel !== null && panel !== 'stats' && phone === null && (
+          {panel === 'breakout' && mayBreakout && phone === null && (
+            <SidePanel
+              title={strings.breakout.title}
+              closeLabel={strings.breakout.close}
+              onClose={() => setPanel(null)}
+            >
+              {breakoutPanel}
+            </SidePanel>
+          )}
+          {panel !== null && panel !== 'stats' && panel !== 'breakout' && phone === null && (
             <SidePanel
               title={panelTitle(panel)}
               closeLabel={
@@ -2518,12 +2586,13 @@ function Room({
             {statsPanel}
           </Drawer>
         )}
-        {panel !== null && panel !== 'stats' && phone !== null && (
-          <Drawer
-            variant="full"
-            title={panelTitle(panel)}
-            onClose={() => setPanel(null)}
-          >
+        {panel === 'breakout' && mayBreakout && phone !== null && (
+          <Drawer variant="full" title={strings.breakout.title} onClose={() => setPanel(null)}>
+            {breakoutPanel}
+          </Drawer>
+        )}
+        {panel !== null && panel !== 'stats' && panel !== 'breakout' && phone !== null && (
+          <Drawer variant="full" title={panelTitle(panel)} onClose={() => setPanel(null)}>
             {panelTabs}
             {panel === 'chat' ? (
               <ChatPanel
@@ -3022,6 +3091,9 @@ function mediaErrorText(error: MediaTransportErrorCode | null): string | null {
  */
 /** 互動 (L5: polls, the countdown, the agenda): its own chunk, loaded when the panel first opens */
 const InteractPanel = lazy(() => import('../components/InteractPanel.tsx'))
+
+/** 分組討論室 (L3, e10-t05): its own chunk, for a host or co-host, loaded when it first opens */
+const BreakoutPanel = lazy(() => import('../components/BreakoutPanel.tsx'))
 
 /** 連線統計 (e2-t14): its own chunk, loaded when the panel first opens */
 const StatsPanel = lazy(() => import('../components/StatsPanel.tsx'))

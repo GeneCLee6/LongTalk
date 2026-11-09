@@ -50,8 +50,8 @@ depends_on: [E2, E4, E1]
 - [x] `e10-t01` 訂閱策略：可見清單驅動 desired set、講話者例外、預先訂閱（與 E2 `e2-t18`；L1，#49，預先訂閱只在指標停在換頁鈕上時，見下面的決定） · AC-10.1 · M
 - [x] `e10-t02` 分頁 UI 與講話者側格（L1，#49：`shared/layout.ts` 的 `GALLERY_PAGE_SIZE`、`gallerySide`、`sideTile`） · AC-10.2 · S · ← e10-t01
 - [ ] `e10-t03` 25 人負載測試腳本與報告 · AC-10.3 · M · ← e10-t02
-- [ ] `e10-t04` 分組討論室：RoomDO 子房間、隔離、時長與召回 · AC-10.4 · M · ← e1-t07
-- [ ] `e10-t05` 分組 UI：主持人分配面板、成員倒數、廣播 · AC-10.4 · M · ← e10-t04
+- [x] `e10-t04` 分組討論室：RoomDO 子房間、隔離、時長與召回（L3，#PR：`worker/room-breakout.ts`、`shared/breakout.ts`，伺服器擋跨組的 SFU 訂閱） · AC-10.4 · M · ← e1-t07
+- [x] `e10-t05` 分組 UI：主持人分配面板、成員倒數、廣播（L3，#PR：`BreakoutPanel`、`BreakoutBar`） · AC-10.4 · M · ← e10-t04
 
 ### M3
 
@@ -68,4 +68,4 @@ depends_on: [E2, E4, E1]
 ## 未決問題
 
 - [ ] **Q:** 分組討論室要不要獨立 DO（隔離更乾淨）？
-      **A:** _(建議先同一 DO；50 人再評估)_
+      **A:** 同一個 DO（L3 決定）：每個成員的組別只存在 `RoomBreakout` 一處，畫面差異照舊推送；`sfuAccess` 擋跨組的訂閱，聊天依送出者的組別分送。已經建立的訂閱在換組時伺服器不會拆（誠實的瀏覽器會自己退訂），要更嚴就得換組時重新發布換新的軌名；50 人再評估。

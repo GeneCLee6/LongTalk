@@ -182,6 +182,47 @@ describe('useChatNotifications', () => {
     expect(result.current.preview).toBeNull()
     expect(result.current.unread).toBe(0)
   })
+
+  it('neither previews nor counts a breakout room’s history replayed mid-meeting (L3)', () => {
+    const { result, rerender } = renderHook((props: Props) => useChatNotifications(props), {
+      initialProps: { ...start, loaded: true, messages: [message(1)], historyUntil: 1 },
+    })
+    rerender({ ...start, loaded: true, messages: [message(1), message(2)], historyUntil: 1 })
+    expect(result.current.unread).toBe(1)
+    act(() => {
+      vi.advanceTimersByTime(CHAT_PREVIEW_MS)
+    })
+    // Moved: the new room's chat replaces the list, newer ids than we had, all of it history
+    const room = [message(5), message(7), message(9)]
+    rerender({ ...start, loaded: true, messages: room, historyUntil: 9 })
+    expect(result.current.unread).toBe(0)
+    expect(result.current.preview).toBeNull()
+    // What is said there afterwards is new
+    rerender({ ...start, loaded: true, messages: [...room, message(10)], historyUntil: 9 })
+    expect(result.current.unread).toBe(1)
+    expect(result.current.preview).toMatchObject({ id: 10 })
+    // Back to a room where nothing was said, panel open: settles; then a new message counts
+    rerender({ ...start, loaded: true, open: true, messages: [], historyUntil: 9 })
+    expect(result.current.unread).toBe(0)
+    rerender({ ...start, loaded: true, messages: [message(11)], historyUntil: 9 })
+    expect(result.current.unread).toBe(1)
+    expect(result.current.preview).toMatchObject({ id: 11 })
+  })
+
+  it('does not count the rest of a long first history as new', () => {
+    const { result, rerender } = renderHook((props: Props) => useChatNotifications(props), {
+      initialProps: start,
+    })
+    rerender({ ...start, loaded: true, messages: [message(1), message(2)], historyUntil: 2 })
+    rerender({
+      ...start,
+      loaded: true,
+      messages: [message(1), message(2), message(3)],
+      historyUntil: 3,
+    })
+    expect(result.current.unread).toBe(0)
+    expect(result.current.preview).toBeNull()
+  })
 })
 
 describe('ChatPanel', () => {

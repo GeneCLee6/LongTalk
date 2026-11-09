@@ -1455,6 +1455,10 @@ export class RoomMedia {
       this.pending.delete(key)
       if (this.closed) return
       if (result.status === 'rejected') {
+        // Never an error on screen. One no longer wanted (a breakout move, L3: the room refuses a
+        // pull across rooms with track_not_in_room, `not_found` here) is dropped; one still wanted
+        // tries again with backoff up to retryMaxMs, until the view drops it. The proxy refuses
+        // the whole call, so a track in the same batch as a refused one waits for its retry too
         if (wanted) this.retryLater(key)
         return
       }

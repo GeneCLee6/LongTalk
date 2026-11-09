@@ -204,6 +204,7 @@ export async function handleSfu(request: Request, env: SfuEnv, deps: SfuDeps): P
   const room = deps.room(roomId)
   const access = await room.sfuAccess(token, sessionId, plan.pulls)
   if (!access.ok) {
+    // `not_found` also covers a track of someone in another breakout room (L3, AC-10.4)
     return fail(access.reason === 'not_found' ? 'track_not_in_room' : access.reason)
   }
 

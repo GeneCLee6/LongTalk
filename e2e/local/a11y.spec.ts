@@ -232,6 +232,25 @@ test('the room, its panels, menus and dialogs have no axe violations', async ({
   await page.getByRole('button', { name: strings.agenda.clear }).click()
   await page.getByRole('button', { name: strings.interact.close }).click()
 
+  // 更多 › 分組討論室 (L3): the host's form, then the rooms open with Bob in one, the bar for both
+  await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
+  await page.getByRole('menuitem', { name: strings.breakout.menu }).click()
+  const breakoutForm = page.getByRole('form', { name: strings.breakout.setupLabel })
+  await expect(breakoutForm).toBeVisible()
+  await expectNoViolations(page, 'breakout panel: the form')
+  await breakoutForm.getByRole('button', { name: strings.breakout.open }).click()
+  await expect(page.getByRole('button', { name: strings.breakout.recall })).toBeVisible()
+  await expect(bob.page.getByRole('region', { name: strings.breakout.label })).toBeVisible()
+  await page.getByRole('textbox', { name: strings.breakout.broadcastLabel }).fill('還剩 5 分鐘')
+  await page.getByRole('button', { name: strings.breakout.broadcastSend }).click()
+  await expect(bob.page.getByText('還剩 5 分鐘').first()).toBeVisible()
+  await expectNoViolations(page, 'breakout panel: the rooms open')
+  await expectNoViolations(bob.page, 'a member in a breakout room, with a broadcast')
+  await page.getByRole('button', { name: strings.breakout.recall }).click()
+  await page.getByRole('button', { name: strings.breakout.endNow }).click()
+  await expect(page.getByRole('form', { name: strings.breakout.setupLabel })).toBeVisible()
+  await page.getByRole('button', { name: strings.breakout.close }).click()
+
   // 更多 › 連線統計 (H2): no Realtime SFU here, so it says it is collecting
   await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
   await page.getByRole('menuitem', { name: strings.stats.menu }).click()

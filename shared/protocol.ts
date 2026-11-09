@@ -189,11 +189,16 @@
 //    admitted from the waiting room land in the main room; a reconnect keeps its room.
 //    `breakoutBroadcast` sets `BreakoutView.broadcast` for every room. `breakoutClose` (or the time
 //    running out) starts a recall: `closesAt` is BREAKOUT_RECALL_MS away, and then everyone is back
-//    in the main room and `breakout` is null; a second `breakoutClose` during the recall ends it at
-//    once. The room refuses an SFU pull of a track whose owner is in another room (the proxy answers
+//    in the main room and `breakout` is null; `breakoutClose` with `now` ends them at once. Opening
+//    the rooms ends the poll on now (its results go to the main room's chat) and stops every
+//    recording (`notice` `recordingStopped`); while they are open `record` is refused with
+//    `breakout_active`. A move or the end of the rooms that leaves more than MAX_SHARES shares in one
+//    room stops the newest ones (`notice` `shareStopped`). The room refuses an SFU pull of a track whose owner is in another room (the proxy answers
 //    `track_not_in_room`), so each browser scopes its view to its own room (scopeView). Chat follows
 //    the sender: a message carries the sender's `ChatMessage.group`, and a member is sent only the
-//    messages of the room it is in; on a move it gets that room's history again (`reset`). While the
+//    messages of the room it is in; on a move it gets that room's history again (`reset`, every
+//    frame of it marked `regroup`: history, not news). Strokes on a share go to the sharer's room
+//    only; whoever changes rooms, or sees a share arrive with its sharer, gets the strokes again. While the
 //    rooms are open `spotlight`, opening the whiteboard and `pollStart` are refused with
 //    `breakout_active`; opening them clears the spotlight and closes the whiteboard.
 //
@@ -618,7 +623,7 @@ export type PatchMessage = { t: 'patch'; rev: number; ops: PatchOp[] }
  * - `annotation_limit`: `annotate` faster than the limits (J2); a refused stroke comes back removed
  * - `poll_active`: `pollStart` while a poll is on (L5)
  * - `breakout_active`: `breakoutOpen` while breakout rooms are open, or `spotlight`, opening the
- *   whiteboard or `pollStart` while they are (L3)
+ *   whiteboard, `pollStart` or `record` while they are (L3)
  */
 export type ErrorCode =
   | 'bad_message'
@@ -693,7 +698,13 @@ export type LobbyMessage = {
  * room sends after every `welcome`; replace every message you have with these (more frames of
  * the history may follow without it). Without `reset`: new messages, append them.
  */
-export type ChatServerMessage = { t: 'chat'; messages: ChatMessage[]; reset?: true }
+export type ChatServerMessage = {
+  t: 'chat'
+  messages: ChatMessage[]
+  reset?: true
+  /** A history sent because the member changed breakout rooms (L3): none of it is new */
+  regroup?: true
+}
 
 /** Someone in the room reacted (G3, e5-t03): `from` is their member id (maybe our own) */
 export type ReactionMessage = { t: 'reaction'; from: string; emoji: Reaction }
@@ -929,8 +940,11 @@ export type BreakoutMoveMessage = { t: 'breakoutMove'; memberId: string; group: 
 /** A message to every breakout room, replacing the last one */
 export type BreakoutBroadcastMessage = { t: 'breakoutBroadcast'; text: string }
 
-/** Start the recall (BREAKOUT_RECALL_MS), or during one bring everyone back at once */
-export type BreakoutCloseMessage = { t: 'breakoutClose' }
+/**
+ * Start the recall (BREAKOUT_RECALL_MS), or (`now`) bring everyone back at once. Without `now` a
+ * recall already under way is left alone: two co-hosts pressing 全部召回 never skip the warning
+ */
+export type BreakoutCloseMessage = { t: 'breakoutClose'; now: boolean }
 
 export type ClientMessage =
   | BreakoutOpenMessage
@@ -1194,7 +1208,7 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return text === null ? null : { t: 'breakoutBroadcast', text }
     }
     case 'breakoutClose':
-      return { t: 'breakoutClose' }
+      return typeof value.now === 'boolean' ? { t: 'breakoutClose', now: value.now } : null
     case 'host': {
       const action = value.action
       if (typeof action !== 'string') return null

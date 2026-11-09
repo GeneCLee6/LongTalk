@@ -86,7 +86,7 @@ export function scopeView(view: RoomView, you: string): RoomView {
     if ((member.group ?? null) === mine) members[id] = member
   }
   const shares: RoomView['room']['shares'] = {}
-  for (const [id, share] of Object.entries(view.room.shares)) {
+  for (const [id, share] of Object.entries(view.room.shares ?? {})) {
     if (id in members) shares[id] = share
   }
   const spotlight =
