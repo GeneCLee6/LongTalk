@@ -1,4 +1,5 @@
 import {
+  CHAT_CHUNK,
   CHAT_HISTORY,
   ChatRateLimit,
   MAX_CHAT_CHARS,
@@ -89,6 +90,15 @@ export interface RoomConnectionState {
   /** The room has sent its chat history at least once (the messages before it are not new) */
   chatLoaded: boolean
   /**
+   * The newest chat id the room replayed as history rather than sent as new (0: none yet): the
+   * first history after joining, and a breakout room's history after a move (L3, every frame
+   * marked `regroup`). Not a reconnect's history: what it brings that we had not seen was said
+   * while we were away, and is new to us (a member moved while disconnected gets the new room's
+   * history counted so; accepted). useChatNotifications neither counts nor previews what is at or
+   * below it.
+   */
+  chatHistoryUntil: number
+  /**
    * In the waiting room (F2): the latest `lobby`, kept while the socket reconnects; null once
    * the room welcomed us (admitted), and before
    */
@@ -146,6 +156,13 @@ export type ChatSendResult = 'sent' | 'empty' | 'tooLong' | 'rateLimited' | 'off
 
 /** Once the page is back in the foreground, a socket that does not answer a ping this soon is dead */
 export const PROBE_TIMEOUT_MS = 5_000
+/**
+ * The first history after joining arrives in CHAT_CHUNK frames back to back (worker/room-host.ts
+ * sends them in one go), and only its first frame says so (`reset`): a frame without it this soon
+ * after a full one is the rest of it, not a new message. A breakout move's history needs no
+ * guess: every frame of it is marked `regroup`
+ */
+const REPLAY_FRAME_MS = 2_000
 
 /** The close code the browser uses when it drops a socket it takes for dead */
 const CLIENT_DROP = 4000
@@ -217,6 +234,12 @@ export class RoomConnection {
   private running = false
   /** The rev of the current socket's view; -1 until its welcome */
   private rev = -1
+  /**
+   * While the first history after joining arrives in CHAT_CHUNK frames: until when a frame
+   * without `reset` still belongs to it (REPLAY_FRAME_MS). Null: the last frame was not full, or
+   * it was not that history, so whatever comes next is new
+   */
+  private firstReplayUntil: number | null = null
   private state: RoomConnectionState = {
     status: 'connecting',
     you: null,
@@ -225,6 +248,7 @@ export class RoomConnection {
     welcomes: 0,
     chat: [],
     chatLoaded: false,
+    chatHistoryUntil: 0,
     lobby: null,
     passwordWaitUntil: null,
     pollVote: null,
@@ -315,6 +339,7 @@ export class RoomConnection {
       welcomes: 0,
       chat: [],
       chatLoaded: false,
+      chatHistoryUntil: 0,
       lobby: null,
       passwordWaitUntil: null,
       pollVote: null,
@@ -482,6 +507,7 @@ export class RoomConnection {
           lobby: null,
           pollVote: null,
         })
+        this.firstReplayUntil = null
         return
       case 'lobby': {
         // In the waiting room (F2): the token brings us back to the same place after a reload
@@ -543,14 +569,39 @@ export class RoomConnection {
       case 'chat': {
         // Only after this socket's welcome (the history follows it)
         if (this.rev < 0) return
+        const full = message.messages.length === CHAT_CHUNK
         if (message.reset) {
-          this.update({ ...this.state, chat: message.messages, chatLoaded: true })
+          // A breakout move's history (L3, `regroup`): none of it new. After a welcome: the
+          // history, not new the first time; a reconnect's may bring what was said while we were
+          // away
+          const first = !message.regroup && !this.state.chatLoaded
+          const history = first || message.regroup === true
+          this.firstReplayUntil = first && full ? Date.now() + REPLAY_FRAME_MS : null
+          this.update({
+            ...this.state,
+            chat: message.messages,
+            chatLoaded: true,
+            chatHistoryUntil: history
+              ? Math.max(this.state.chatHistoryUntil, message.messages.at(-1)?.id ?? 0)
+              : this.state.chatHistoryUntil,
+          })
           return
         }
+        // The rest of a history the room sends in several frames: marked when it is a move's,
+        // guessed from the timing for the first one after joining
+        const firstReplay = this.firstReplayUntil !== null && Date.now() <= this.firstReplayUntil
+        this.firstReplayUntil = firstReplay && full ? Date.now() + REPLAY_FRAME_MS : null
+        const history = message.regroup === true || firstReplay
         const last = this.state.chat.at(-1)?.id ?? 0
         const added = message.messages.filter((m) => m.id > last)
         if (added.length === 0) return
-        this.update({ ...this.state, chat: [...this.state.chat, ...added].slice(-CHAT_HISTORY) })
+        this.update({
+          ...this.state,
+          chat: [...this.state.chat, ...added].slice(-CHAT_HISTORY),
+          chatHistoryUntil: history
+            ? Math.max(this.state.chatHistoryUntil, added.at(-1)!.id)
+            : this.state.chatHistoryUntil,
+        })
         return
       }
     }

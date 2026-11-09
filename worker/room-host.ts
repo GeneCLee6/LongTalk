@@ -15,6 +15,8 @@ import {
 import { CHAT_CHUNK, CHAT_HISTORY, ChatRateLimit, type ChatMessage } from '../shared/chat.ts'
 import { INTERACT_RATE, POLL_START_RATE } from '../shared/interact.ts'
 import { RoomInteract, type InteractState } from './room-interact.ts'
+import { chatVisible } from '../shared/breakout.ts'
+import { RoomBreakout, type BreakoutPhase, type BreakoutState } from './room-breakout.ts'
 import type { ChatFile } from '../shared/files.ts'
 import {
   RoomFiles,
@@ -48,8 +50,11 @@ import {
   WAIT_TIMEOUT_MS,
   isSignalLevel,
   parseClientMessage,
+  shareOrder,
   viewAsJson,
   waitingQueue,
+  type AnnotationsMessage,
+  type BreakoutOpenMessage,
   type HostMessage,
   type JoinMessage,
   type LobbyMessage,
@@ -253,6 +258,8 @@ export type RestoreExtras = {
   board?: BoardState | null
   /** The poll, its votes, the countdown and the agenda (L5) */
   interact?: InteractState | null
+  /** The breakout rooms and who is in which (L3) */
+  breakout?: BreakoutState | null
 }
 
 /** A persistent room's meeting that has read its saved whiteboard (J4, e7-t08) */
@@ -307,6 +314,8 @@ export interface RoomStorage {
   saveBoardState?(state: BoardState): void
   /** The poll, its votes, the countdown and the agenda (L5), saved whenever they change */
   saveInteract?(state: InteractState): void
+  /** The breakout rooms and who is in which (L3), saved whenever they change; null: none open */
+  saveBreakout?(state: BreakoutState | null): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -503,6 +512,8 @@ export class RoomHost {
   /** Polls started and everything else of those per member (L5), in memory like the chat's */
   private readonly pollRate = new ChatRateLimit(POLL_START_RATE)
   private readonly interactRate = new ChatRateLimit(INTERACT_RATE)
+  /** The breakout rooms and who is in which (L3, e10-t04) */
+  private breakout = new RoomBreakout()
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -560,6 +571,7 @@ export class RoomHost {
     this.annotationFrames.clear()
     this.annotationStrokes.clear()
     this.interact = new RoomInteract(info ? extras.interact : null)
+    this.breakout = new RoomBreakout(info ? extras.breakout : null)
     this.pollRate.clear()
     this.interactRate.clear()
     this.reported = 0
@@ -611,6 +623,10 @@ export class RoomHost {
     )
     if (Object.keys(kept).length !== Object.keys(shares).length) {
       this.info = { ...this.info!, shares: kept }
+    }
+    // And for who is in a breakout room (L3)
+    for (const id of this.breakout.assigned) {
+      if (!this.inRoomMember(id) && this.breakout.forget(id)) this.saveBreakout()
     }
     // The same for the spotlight (G2)
     const spotlight = this.info?.spotlight ?? null
@@ -833,10 +849,7 @@ export class RoomHost {
         this.annotations.seed(WHITEBOARD_LAYER, strokes)
         this.flushAnnotations()
         // Only someone already here when an earlier try failed
-        const here = this.roomConns()
-        for (const frame of here.length > 0 ? this.annotations.snapshot() : []) {
-          for (const id of here) this.deps.sockets.send(id, frame)
-        }
+        for (const id of this.roomConns()) this.sendAnnotations(id)
       })
       .catch((error: unknown) => console.error('reading a saved whiteboard failed', error))
       .finally(() => {
@@ -900,6 +913,8 @@ export class RoomHost {
         if (this.guard.prune(this.deps.now())) this.saveGuesses()
       } else if (job === 'board') {
         this.saveBoard()
+      } else if (job === 'breakout') {
+        this.tickBreakout()
       } else if (job === 'ended' && !this.info) {
         // The ended meeting's tombstone ran out (F3): from now on its id is simply not found
         this.endedUntil = null
@@ -1125,6 +1140,182 @@ export class RoomHost {
         // Out of range: the list changed under the button, and the patch saying so is on its way
         if (this.interact.setAgendaCurrent(message.index)) this.interactChanged()
         return
+      case 'breakoutOpen':
+        if (!this.mayInteract(connId, conn.member!, 'breakout')) return
+        this.openBreakout(connId, conn.member!, message)
+        return
+      case 'breakoutMove':
+        if (!this.mayInteract(connId, conn.member!, 'breakout')) return
+        this.moveToGroup(connId, conn.member!, message.memberId, message.group)
+        return
+      case 'breakoutBroadcast':
+        if (!this.mayInteract(connId, conn.member!, 'breakout')) return
+        if (!this.breakout.on) {
+          this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+          return
+        }
+        this.breakout.broadcast({
+          text: message.text,
+          by: this.members.get(conn.member!)!.name,
+          at: this.deps.now(),
+        })
+        this.breakoutChanged()
+        return
+      case 'breakoutClose':
+        if (!this.mayInteract(connId, conn.member!, 'breakout')) return
+        // No rooms open, or a recall already under way: someone else just did it, and the patch
+        // saying so is on its way
+        this.recall(conn.member!, (now) => this.breakout.close(now, message.now))
+        return
+    }
+  }
+
+  /** The breakout rooms changed: stored, and everyone sees it */
+  private breakoutChanged(): void {
+    this.saveBreakout()
+    this.publish()
+  }
+
+  private saveBreakout(): void {
+    this.deps.storage.saveBreakout?.(this.breakout.stored)
+  }
+
+  /** The breakout room a member is in (L3); null for the main room */
+  private groupOf(memberId: string | null): string | null {
+    return memberId === null ? null : this.breakout.groupOf(memberId)
+  }
+
+  /**
+   * `breakoutOpen` (L3, e10-t04): one set of rooms at a time. Only members in the meeting are
+   * placed (someone who left, or waits, stays out: the panel was out of date); everyone else is in
+   * the main room. What belongs to the whole meeting ends first, while everyone is still in the
+   * main room: the poll (its results go to the main room's chat), every recording (a recorder would
+   * hear only their own room, and the consent clock would count people in every room), the
+   * spotlight, and the whiteboard leaves the stage (its strokes stay for after the recall).
+   */
+  private openBreakout(connId: string, actor: string, message: BreakoutOpenMessage): void {
+    if (this.breakout.on) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'breakout_active' })
+      return
+    }
+    const poll = this.interact.pollView
+    if (poll) this.finishPoll(actor, poll.id)
+    for (const recorder of Object.keys(this.info!.recordings)) {
+      this.notify(recorder, { t: 'notice', notice: 'recordingStopped', by: actor })
+      this.endRecording(recorder)
+    }
+    const assign = Object.fromEntries(
+      Object.entries(message.assign).filter(([id]) => this.inRoomMember(id)),
+    )
+    const shares = this.info!.shares
+    this.breakout.open(message.groups, assign, message.minutes, this.deps.now())
+    if (this.info!.spotlight !== null || this.info!.whiteboard !== null) {
+      this.info = { ...this.info!, spotlight: null, whiteboard: null }
+      this.deps.storage.saveRoom(this.info)
+    }
+    this.regrouped(actor, new Map(this.breakout.assigned.map((id) => [id, null])), shares)
+  }
+
+  /**
+   * `breakoutMove` (L3): a member (the actor too: that is how a host enters a room) into a room or
+   * back to the main room. Refused with `forbidden` when no rooms are open, the member is not in
+   * the meeting or the room does not exist: each means the panel was out of date.
+   *
+   * Pulls the member already has across the old boundary are not torn down here: the SFU proxy
+   * only refuses new ones (sfuAccess). An honest browser drops them as its scoped view changes; a
+   * modified one keeps what it had until it renegotiates. Accepted for a room among friends.
+   */
+  private moveToGroup(connId: string, actor: string, memberId: string, group: string | null): void {
+    if (!this.inRoomMember(memberId) || !this.breakout.on) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    const from = this.breakout.groupOf(memberId)
+    if (from === group) return
+    const shares = this.info!.shares
+    if (!this.breakout.move(memberId, group)) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    this.regrouped(actor, new Map([[memberId, from]]), shares)
+  }
+
+  /**
+   * A recall (`breakoutClose`, or the clock; `by` is who, or null for the clock): the grace
+   * started, or everyone who was in a room is back in the main room
+   */
+  private recall(by: string | null, step: (now: number) => BreakoutPhase | null): void {
+    const before = new Map(this.breakout.assigned.map((id) => [id, this.breakout.groupOf(id)]))
+    const shares = this.info!.shares
+    const phase = step(this.deps.now())
+    if (phase === 'closing') this.breakoutChanged()
+    else if (phase === 'ended') this.regrouped(by, before, shares, true)
+  }
+
+  /** The `breakout` job: the time ran out (the recall starts), or the recall's grace did */
+  private tickBreakout(): void {
+    this.recall(null, (now) => this.breakout.tick(now))
+  }
+
+  /**
+   * Members changed rooms (`moved`: each one's room before; null the main room): stored, too many
+   * shares in a room stopped, everyone sees it, then what follows the room is sent again. `shares`
+   * are the shares before, so a sharer whose share just stopped still counts as having moved one.
+   */
+  private regrouped(
+    by: string | null,
+    moved: ReadonlyMap<string, string | null>,
+    shares: RoomInfo['shares'],
+    everyone = false,
+  ): void {
+    this.saveBreakout()
+    this.fitShares(by)
+    this.publish()
+    this.regroup(moved, shares, everyone)
+  }
+
+  /**
+   * MAX_SHARES per breakout room (L3): a move or the end of the rooms may bring more together. The
+   * newest go (shareOrder), each sharer told who stopped it (themselves when it was the clock)
+   */
+  private fitShares(by: string | null): void {
+    const counts = new Map<string | null, number>()
+    for (const { memberId } of shareOrder(this.info!.shares)) {
+      const group = this.groupOf(memberId)
+      const count = (counts.get(group) ?? 0) + 1
+      counts.set(group, count)
+      if (count <= MAX_SHARES) continue
+      this.notify(memberId, { t: 'notice', notice: 'shareStopped', by: by ?? memberId })
+      this.endShare(memberId)
+    }
+  }
+
+  /**
+   * After members changed rooms: each gets the chat of the room it is in now, replacing what it had
+   * (`reset`, and `regroup`: none of it is new), and the strokes on that room's shares. A share
+   * follows its sharer, so a sharer's old and new rooms both get the strokes again; the end of the
+   * rooms (`everyone`) sends them to every connection.
+   */
+  private regroup(
+    moved: ReadonlyMap<string, string | null>,
+    shares: RoomInfo['shares'],
+    everyone: boolean,
+  ): void {
+    const rooms = new Set<string | null>()
+    for (const [id, from] of moved) {
+      if (!shares[id]) continue
+      rooms.add(from)
+      rooms.add(this.groupOf(id))
+    }
+    for (const id of moved.keys()) {
+      const conn = this.sessions.get(id)?.conn ?? null
+      if (conn !== null && this.inRoomMember(id)) this.sendChatHistory(conn, true)
+    }
+    for (const [conn, { member }] of this.conns) {
+      if (member === null || !this.inRoomMember(member)) continue
+      if (everyone || moved.has(member) || rooms.has(this.groupOf(member))) {
+        this.sendAnnotations(conn)
+      }
     }
   }
 
@@ -1157,6 +1348,11 @@ export class RoomHost {
   private startPoll(connId: string, memberId: string, message: PollStartMessage): void {
     if (!this.allowed(memberId, 'poll')) {
       this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    // One poll for the whole meeting would reach into every breakout room (L3)
+    if (this.breakout.on) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'breakout_active' })
       return
     }
     if (this.interact.pollOn) {
@@ -1207,6 +1403,11 @@ export class RoomHost {
    */
   private endPoll(connId: string, memberId: string, poll: number): void {
     if (!this.mayInteract(connId, memberId, 'poll')) return
+    this.finishPoll(memberId, poll)
+  }
+
+  /** Ends the poll `poll`, if it is the one on now: its results go to the chat, from `memberId` */
+  private finishPoll(memberId: string, poll: number): void {
     const result = this.interact.endPoll(poll)
     if (!result) return
     this.interactChanged()
@@ -1261,6 +1462,10 @@ export class RoomHost {
       }
     } else if (!this.info?.shares[share]) {
       this.sendLayer([connId], share, null, [{ op: 'clear' }])
+      return
+    } else if (!this.seesLayer(memberId, share)) {
+      // A share in another breakout room (L3): not this member's to draw on
+      refuse('forbidden', added)
       return
     }
     if (!this.annotationFrames.take(memberId, now)) {
@@ -1345,9 +1550,7 @@ export class RoomHost {
     if (back.length > 0) this.sendLayer([connId], share, null, back)
     if (whiteboard && onward.some((op) => op.op !== 'laser')) this.boardChanged()
     if (onward.length > 0) {
-      const others = [...this.conns]
-        .filter(([id, conn]) => id !== connId && this.inRoom(conn))
-        .map(([id]) => id)
+      const others = this.layerConns(share).filter((id) => id !== connId)
       this.sendLayer(others, share, memberId, onward)
     }
     this.flushAnnotationsLater()
@@ -1370,6 +1573,44 @@ export class RoomHost {
   }
 
   /**
+   * Whether a member has a layer (L3): the whiteboard is the whole meeting's, a share only its
+   * sharer's breakout room's (a share layer's id is the sharer's member id)
+   */
+  private seesLayer(memberId: string | null, share: string): boolean {
+    return isWhiteboard(share) || this.groupOf(share) === this.groupOf(memberId)
+  }
+
+  /** A connection for each member in the meeting who has the layer (L3) */
+  private layerConns(share: string): string[] {
+    return [...this.conns]
+      .filter(([, conn]) => this.inRoom(conn) && this.seesLayer(conn.member, share))
+      .map(([id]) => id)
+  }
+
+  /**
+   * The strokes a member is sent whole (after a welcome, a move between breakout rooms, a saved
+   * whiteboard arriving): the whiteboard and the shares of their own room only (L3). Still one
+   * `reset` first and one `done` last, as RoomAnnotations.snapshot makes them.
+   */
+  private snapshotFor(memberId: string): AnnotationsMessage[] {
+    const frames = this.annotations
+      .snapshot()
+      .filter((frame) => frame.share !== null && this.seesLayer(memberId, frame.share))
+      .map(({ reset: _reset, done: _done, ...frame }): AnnotationsMessage => frame)
+    if (frames.length === 0) frames.push({ t: 'annotations', share: null, strokes: [] })
+    frames[0] = { ...frames[0], reset: true }
+    frames[frames.length - 1] = { ...frames[frames.length - 1], done: true }
+    return frames
+  }
+
+  /** Sends the connection its member's snapshot of the strokes */
+  private sendAnnotations(connId: string): void {
+    const memberId = this.conns.get(connId)?.member ?? null
+    if (memberId === null) return
+    for (const frame of this.snapshotFor(memberId)) this.deps.sockets.send(connId, frame)
+  }
+
+  /**
    * `clearAnnotations` (J3, e7-t05; AC-7.3): a layer, or (`by`) one member's strokes on it, go for
    * everyone and from storage at once. Who may: shared/roles.ts mayClearLayer (a host, a co-host,
    * who owns the layer); it works with the policy off too, which is when it may matter most. Those
@@ -1382,7 +1623,10 @@ export class RoomHost {
     by: string | null,
   ): void {
     const member = this.members.get(memberId)
-    const exists = isWhiteboard(share) || this.info?.shares[share] !== undefined
+    // A share in another breakout room (L3) is not there for this member
+    const exists =
+      isWhiteboard(share) ||
+      (this.info?.shares[share] !== undefined && this.seesLayer(memberId, share))
     if (!member || !exists || !mayClearLayer(member.role, this.ownsLayer(memberId, share))) {
       this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
       return
@@ -1396,7 +1640,7 @@ export class RoomHost {
     else this.annotations.clearBy(share, by)
     this.flushAnnotations()
     if (isWhiteboard(share)) this.boardChanged()
-    this.sendLayer(this.roomConns(), share, memberId, [
+    this.sendLayer(this.layerConns(share), share, memberId, [
       by === null ? { op: 'clear' } : { op: 'clear', by },
     ])
     if (!isWhiteboard(share)) affected.add(share)
@@ -1428,6 +1672,11 @@ export class RoomHost {
       this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
       return
     }
+    // The room's one board would be every breakout room's stage (L3); closing it is always fine
+    if (open && this.breakout.on) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'breakout_active' })
+      return
+    }
     if (open === (board !== null)) return
     this.setRoom({ whiteboard: open ? { by: memberId, since: this.deps.now() } : null })
   }
@@ -1452,7 +1701,7 @@ export class RoomHost {
   private clearShareAnnotations(share: string): void {
     if (!this.annotations.clearShare(share)) return
     this.flushAnnotations()
-    this.sendLayer(this.roomConns(), share, null, [{ op: 'clear' }])
+    this.sendLayer(this.layerConns(share), share, null, [{ op: 'clear' }])
   }
 
   /** The strokes on a share, oldest first (for tests and the recorder's side of the room) */
@@ -1540,6 +1789,11 @@ export class RoomHost {
       this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
       return
     }
+    // A recorder would hear only their own breakout room, and consent would be asked of every room
+    if (this.breakout.on) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'breakout_active' })
+      return
+    }
     if (recordings[memberId]) return
     this.info = {
       ...this.info!,
@@ -1598,8 +1852,12 @@ export class RoomHost {
     if (!this.allowed(memberId, 'react')) return
     if (!this.reactionRate.take(memberId, this.deps.now())) return
     const frame: ServerMessage = { t: 'reaction', from: memberId, emoji }
+    // Only to the sender's own breakout room (L3): nobody elsewhere has their tile
+    const group = this.groupOf(memberId)
     for (const [id, conn] of this.conns) {
-      if (this.inRoom(conn)) this.deps.sockets.send(id, frame)
+      if (this.inRoom(conn) && this.groupOf(conn.member) === group) {
+        this.deps.sockets.send(id, frame)
+      }
     }
   }
 
@@ -1643,6 +1901,11 @@ export class RoomHost {
       (targetId !== null && !this.inRoomMember(targetId))
     ) {
       this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    // Everyone's main area is not one room's while the breakout rooms are open (L3)
+    if (this.breakout.on) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'breakout_active' })
       return
     }
     if (this.info!.spotlight === targetId) return
@@ -2073,25 +2336,40 @@ export class RoomHost {
     this.postChat({ id: ++this.chatId, from: memberId, name: member.name, text, at: now })
   }
 
-  /** A message the room accepted: stored, older ones dropped, sent to everyone in the room */
-  private postChat(message: ChatMessage): void {
+  /**
+   * A message the room accepted: stored, older ones dropped, sent to everyone in the room. It
+   * belongs to the sender's breakout room (L3), if any: only that room's members get it.
+   */
+  private postChat(unscoped: ChatMessage): void {
+    const group = this.groupOf(unscoped.from)
+    const message: ChatMessage = group === null ? unscoped : { ...unscoped, group }
     this.chat.push(message)
     this.deps.storage.saveChat(message)
     while (this.chat.length > CHAT_HISTORY) this.deps.storage.dropChat(this.chat.shift()!.id)
     const frame: ServerMessage = { t: 'chat', messages: [message] }
     for (const [id, conn] of this.conns) {
-      if (this.inRoom(conn)) this.deps.sockets.send(id, frame)
+      if (this.inRoom(conn) && chatVisible(message, this.groupOf(conn.member))) {
+        this.deps.sockets.send(id, frame)
+      }
     }
   }
 
-  /** The chat history after a welcome: CHAT_CHUNK messages a frame, the first one with `reset` */
-  private sendChatHistory(connId: string): void {
-    for (let start = 0; start === 0 || start < this.chat.length; start += CHAT_CHUNK) {
-      const messages = this.chat.slice(start, start + CHAT_CHUNK)
-      this.deps.sockets.send(
-        connId,
-        start === 0 ? { t: 'chat', messages, reset: true } : { t: 'chat', messages },
-      )
+  /**
+   * The chat history after a welcome, or a move between breakout rooms (L3): the messages of the
+   * room the member is in, CHAT_CHUNK a frame, the first one with `reset`. After a move every frame
+   * is marked `regroup`: the browser must not take any of it for new messages
+   */
+  private sendChatHistory(connId: string, regroup = false): void {
+    const group = this.groupOf(this.conns.get(connId)?.member ?? null)
+    const visible = this.chat.filter((message) => chatVisible(message, group))
+    for (let start = 0; start === 0 || start < visible.length; start += CHAT_CHUNK) {
+      const messages = visible.slice(start, start + CHAT_CHUNK)
+      this.deps.sockets.send(connId, {
+        t: 'chat',
+        messages,
+        ...(start === 0 ? { reset: true as const } : {}),
+        ...(regroup ? { regroup: true as const } : {}),
+      })
     }
   }
 
@@ -2201,7 +2479,10 @@ export class RoomHost {
       this.deps.sockets.send(connId, { t: 'error', code: 'audio_only' })
       return
     }
-    if (Object.keys(shares).length >= MAX_SHARES) {
+    // MAX_SHARES is per breakout room (L3): each is a meeting of its own
+    const group = this.groupOf(memberId)
+    const sharing = Object.keys(shares).filter((id) => this.groupOf(id) === group)
+    if (sharing.length >= MAX_SHARES) {
       this.deps.sockets.send(connId, { t: 'error', code: 'share_full' })
       return
     }
@@ -2260,7 +2541,8 @@ export class RoomHost {
    * The SFU proxy asks before every call (worker/sfu.ts): is `token` a member's, is `sessionId`
    * (null when creating one) that member's SFU session, and is every track it wants to pull
    * published in this room. Nobody outside the room can spend the room's SFU, and a member can
-   * only drive its own session.
+   * only drive its own session. While breakout rooms are open (L3, AC-10.4) a track whose owner is
+   * in another room is not in this member's room: `not_found`, as for one never published.
    */
   sfuAccess(token: string, sessionId: string | null, pulls: readonly SfuTrackRef[]): SfuAccess {
     const memberId = this.info ? this.byToken.get(token) : undefined
@@ -2271,10 +2553,11 @@ export class RoomHost {
       return { ok: false, reason: 'forbidden' }
     }
     const kinds: TrackKind[] = []
+    const group = this.groupOf(memberId)
     for (const pull of pulls) {
-      const kind = this.findTrack(pull)
-      if (!kind) return { ok: false, reason: 'not_found' }
-      kinds.push(kind)
+      const found = this.findTrack(pull)
+      if (!found || this.groupOf(found.owner) !== group) return { ok: false, reason: 'not_found' }
+      kinds.push(found.kind)
     }
     return { ok: true, memberId, pulls: kinds }
   }
@@ -2323,8 +2606,10 @@ export class RoomHost {
       if (receiver.reconnecting) continue
       let sound = 0
       let video = 0
+      const group = this.groupOf(receiverId)
       for (const [publisherId, publisher] of this.members) {
-        if (publisherId === receiverId) continue
+        // Nobody receives from another breakout room (L3)
+        if (publisherId === receiverId || this.groupOf(publisherId) !== group) continue
         for (const track of publisher.tracks) {
           // A muted track sends nothing (B2); a member lying about it still shows up in the
           // receivers' own reports
@@ -2385,7 +2670,12 @@ export class RoomHost {
   view(): RoomView {
     if (!this.info) throw new Error('The room was not created')
     const members: Record<string, Member> = {}
-    for (const [id, member] of this.members) if (member.role !== 'waiting') members[id] = member
+    for (const [id, member] of this.members) {
+      if (member.role === 'waiting') continue
+      // Where each member is (L3); absent for the main room, as rooms stored before v23 have it
+      const group = this.breakout.groupOf(id)
+      members[id] = group === null ? member : { ...member, group }
+    }
     return {
       room: this.info,
       members,
@@ -2394,6 +2684,7 @@ export class RoomHost {
       poll: this.interact.pollView,
       timer: this.interact.timer,
       agenda: this.interact.agenda,
+      breakout: this.breakout.view,
     }
   }
 
@@ -2406,12 +2697,13 @@ export class RoomHost {
     return waiting
   }
 
-  private findTrack(ref: SfuTrackRef): TrackKind | null {
+  /** A published track and whose it is; null when nobody in the room publishes it */
+  private findTrack(ref: SfuTrackRef): { kind: TrackKind; owner: string } | null {
     for (const member of this.members.values()) {
       const track = member.tracks.find(
         (t) => t.sessionId === ref.sessionId && t.trackName === ref.trackName,
       )
-      if (track) return track.kind
+      if (track) return { kind: track.kind, owner: member.id }
     }
     return null
   }
@@ -2674,7 +2966,7 @@ export class RoomHost {
     })
     this.sendChatHistory(connId)
     // The strokes on the shares (J2): for someone late, and to catch up after a reconnect
-    for (const frame of this.annotations.snapshot()) this.deps.sockets.send(connId, frame)
+    this.sendAnnotations(connId)
     // Their answer to the poll on now (L5): the view does not say on an anonymous one
     this.sendOwnVote(connId, memberId)
   }
@@ -2724,6 +3016,8 @@ export class RoomHost {
     this.annotationStrokes.forget(memberId)
     this.pollRate.forget(memberId)
     this.interactRate.forget(memberId)
+    // Someone who left is in no breakout room; coming back (a new member) lands in the main room
+    if (this.breakout.forget(memberId)) this.saveBreakout()
     this.lobbies.delete(memberId)
     this.cameIn.delete(memberId)
   }
@@ -2832,6 +3126,10 @@ export class RoomHost {
     const guessEnds = this.guard.nextExpiry()
     if (guessEnds === null) this.schedule.clear('guesses')
     else this.schedule.set('guesses', guessEnds)
+    // The breakout rooms' time running out, or their recall's grace (L3); none open, no job
+    const breakoutDue = this.breakout.due()
+    if (breakoutDue === null) this.schedule.clear('breakout')
+    else this.schedule.set('breakout', breakoutDue)
     const stored = JSON.stringify(this.schedule)
     if (stored !== this.storedSchedule) {
       this.storedSchedule = stored
@@ -2890,6 +3188,8 @@ export class RoomHost {
     this.annotationStrokes.clear()
     // The poll, the countdown and the agenda are the meeting's; what is stored goes below
     this.interact = new RoomInteract()
+    // So are the breakout rooms (L3)
+    this.breakout.reset()
     this.pollRate.clear()
     this.interactRate.clear()
     this.bans.clear()

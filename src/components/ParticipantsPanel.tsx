@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import styled from 'styled-components'
+import type { BreakoutView } from '../../shared/breakout.ts'
 import type { HostMemberAction, Member, WaitingEntry } from '../../shared/protocol.ts'
 import { handQueue } from '../../shared/reactions.ts'
 import {
@@ -68,6 +69,11 @@ export interface ParticipantsPanelProps {
   onRecordAction?: (action: RecordAction, memberId: string) => void
   /** Each person's level meter and receive volume (e6-t08); left out where nothing plays */
   audio?: PanelAudio
+  /**
+   * The breakout rooms while they are open (L3, e10-t05), for a host or co-host: `members` is then
+   * the whole room's and the list is grouped by room, the main room first
+   */
+  breakout?: BreakoutView | null
 }
 
 /** What the panel shows of each person's sound (e6-t08): local to this browser */
@@ -150,6 +156,7 @@ export function ParticipantsPanel({
   recorderIds = [],
   onRecordAction = noop,
   audio,
+  breakout = null,
 }: ParticipantsPanelProps) {
   const [confirm, setConfirm] = useState<
     | { type: 'remove'; member: Member }
@@ -259,6 +266,101 @@ export function ParticipantsPanel({
     const remove = controls.filter((item) => item.id === 'remove')
     return [...controls.filter((item) => item.id !== 'remove'), ...recording, ...roles, ...remove]
   }
+
+  const rowOf = (member: Member) => {
+    const mic = member.tracks.find((t) => t.kind === 'mic')
+    const cam = member.tracks.find((t) => t.kind === 'cam')
+    const micOn = !!mic && !mic.muted
+    const camOn = !!cam && !cam.muted
+    const items = itemsFor(member)
+    const roleLabel =
+      member.role === 'host'
+        ? strings.participants.host
+        : member.role === 'cohost'
+          ? strings.participants.cohost
+          : null
+    return (
+      <Row key={member.id} aria-label={member.name} $away={member.reconnecting}>
+        <Avatar aria-hidden="true" style={{ background: avatarColor(member.name) }}>
+          {[...member.name][0]?.toUpperCase()}
+        </Avatar>
+        <Who>
+          <Name>{member.name}</Name>
+          <Tags>
+            {handPlace.has(member.id) && (
+              <HandTag
+                role="img"
+                aria-label={strings.reactions.handPosition(handPlace.get(member.id)!)}
+              >
+                <HandIcon />
+                <span aria-hidden="true">{handPlace.get(member.id)}</span>
+              </HandTag>
+            )}
+            {member.id === you && <Tag>{strings.participants.you}</Tag>}
+            {roleLabel && <Tag $strong>{roleLabel}</Tag>}
+            {member.reconnecting && <Tag $warn>{strings.participants.reconnecting}</Tag>}
+            {recorderIds.includes(member.id) && <Tag $danger>{strings.record.tag}</Tag>}
+          </Tags>
+          {audio && <LevelBar track={audio.levelOf(member.id)} />}
+          {audio?.volumeSupported && member.id !== you && (
+            <VolumeSlider
+              label={strings.participants.volumeOf(member.name)}
+              value={audio.volumeOf(member.id)}
+              onChange={(percent) => audio.onVolume(member.id, percent)}
+            />
+          )}
+          {audio?.volumeSupported && member.id !== you && audio.sharesSound(member.id) && (
+            <VolumeSlider
+              label={strings.participants.shareVolumeOf(member.name)}
+              value={audio.volumeOf(shareVolumeKey(member.id))}
+              onChange={(percent) => audio.onVolume(shareVolumeKey(member.id), percent)}
+            />
+          )}
+        </Who>
+        <States>
+          {sharerIds.includes(member.id) && (
+            <State
+              role="img"
+              aria-label={strings.participants.sharing}
+              title={strings.participants.sharing}
+              $on
+            >
+              <ScreenShareIcon />
+            </State>
+          )}
+          <State
+            role="img"
+            aria-label={micOn ? strings.participants.micOn : strings.participants.micOff}
+            title={micOn ? strings.participants.micOn : strings.participants.micOff}
+            $off={!micOn}
+          >
+            {micOn ? <MicIcon /> : <MicOffIcon />}
+          </State>
+          <State
+            role="img"
+            aria-label={camOn ? strings.participants.camOn : strings.participants.camOff}
+            title={camOn ? strings.participants.camOn : strings.participants.camOff}
+            $off={!camOn}
+          >
+            {camOn ? <CamIcon /> : <CamOffIcon />}
+          </State>
+        </States>
+        {items.length > 0 && (
+          <Menu
+            label={strings.participants.actions(member.name)}
+            icon={<MoreIcon />}
+            items={items}
+            align="end"
+          />
+        )}
+      </Row>
+    )
+  }
+
+  // While breakout rooms are open (L3): the main room, then each room in the host's order
+  const rooms: { id: string | null; name: string }[] = breakout
+    ? [{ id: null, name: strings.breakout.mainRoom }, ...breakout.groups]
+    : []
 
   return (
     <Root>
@@ -374,95 +476,21 @@ export function ParticipantsPanel({
         <VolumeNote>{strings.participants.volumeUnsupported}</VolumeNote>
       )}
       <List aria-label={strings.participants.list} tabIndex={0}>
-        {sorted.map((member) => {
-          const mic = member.tracks.find((t) => t.kind === 'mic')
-          const cam = member.tracks.find((t) => t.kind === 'cam')
-          const micOn = !!mic && !mic.muted
-          const camOn = !!cam && !cam.muted
-          const items = itemsFor(member)
-          const roleLabel =
-            member.role === 'host'
-              ? strings.participants.host
-              : member.role === 'cohost'
-                ? strings.participants.cohost
-                : null
-          return (
-            <Row key={member.id} aria-label={member.name} $away={member.reconnecting}>
-              <Avatar aria-hidden="true" style={{ background: avatarColor(member.name) }}>
-                {[...member.name][0]?.toUpperCase()}
-              </Avatar>
-              <Who>
-                <Name>{member.name}</Name>
-                <Tags>
-                  {handPlace.has(member.id) && (
-                    <HandTag
-                      role="img"
-                      aria-label={strings.reactions.handPosition(handPlace.get(member.id)!)}
-                    >
-                      <HandIcon />
-                      <span aria-hidden="true">{handPlace.get(member.id)}</span>
-                    </HandTag>
-                  )}
-                  {member.id === you && <Tag>{strings.participants.you}</Tag>}
-                  {roleLabel && <Tag $strong>{roleLabel}</Tag>}
-                  {member.reconnecting && <Tag $warn>{strings.participants.reconnecting}</Tag>}
-                  {recorderIds.includes(member.id) && <Tag $danger>{strings.record.tag}</Tag>}
-                </Tags>
-                {audio && <LevelBar track={audio.levelOf(member.id)} />}
-                {audio?.volumeSupported && member.id !== you && (
-                  <VolumeSlider
-                    label={strings.participants.volumeOf(member.name)}
-                    value={audio.volumeOf(member.id)}
-                    onChange={(percent) => audio.onVolume(member.id, percent)}
-                  />
-                )}
-                {audio?.volumeSupported && member.id !== you && audio.sharesSound(member.id) && (
-                  <VolumeSlider
-                    label={strings.participants.shareVolumeOf(member.name)}
-                    value={audio.volumeOf(shareVolumeKey(member.id))}
-                    onChange={(percent) => audio.onVolume(shareVolumeKey(member.id), percent)}
-                  />
-                )}
-              </Who>
-              <States>
-                {sharerIds.includes(member.id) && (
-                  <State
-                    role="img"
-                    aria-label={strings.participants.sharing}
-                    title={strings.participants.sharing}
-                    $on
-                  >
-                    <ScreenShareIcon />
-                  </State>
-                )}
-                <State
-                  role="img"
-                  aria-label={micOn ? strings.participants.micOn : strings.participants.micOff}
-                  title={micOn ? strings.participants.micOn : strings.participants.micOff}
-                  $off={!micOn}
-                >
-                  {micOn ? <MicIcon /> : <MicOffIcon />}
-                </State>
-                <State
-                  role="img"
-                  aria-label={camOn ? strings.participants.camOn : strings.participants.camOff}
-                  title={camOn ? strings.participants.camOn : strings.participants.camOff}
-                  $off={!camOn}
-                >
-                  {camOn ? <CamIcon /> : <CamOffIcon />}
-                </State>
-              </States>
-              {items.length > 0 && (
-                <Menu
-                  label={strings.participants.actions(member.name)}
-                  icon={<MoreIcon />}
-                  items={items}
-                  align="end"
-                />
-              )}
-            </Row>
-          )
-        })}
+        {breakout
+          ? rooms.map((room) => {
+              const people = sorted.filter((member) => (member.group ?? null) === room.id)
+              const headingId = `participants-room-${room.id ?? 'main'}`
+              return (
+                <RoomItem key={room.id ?? 'main'}>
+                  <RoomHeading id={headingId}>
+                    {room.name}
+                    <span>{strings.breakout.roomCount(people.length)}</span>
+                  </RoomHeading>
+                  <RoomList aria-labelledby={headingId}>{people.map(rowOf)}</RoomList>
+                </RoomItem>
+              )
+            })
+          : sorted.map(rowOf)}
       </List>
       {(canMuteAll || canEnd) && (
         <Footer>
@@ -625,6 +653,35 @@ const List = styled.ul`
   overflow-y: auto;
   margin: 0;
   padding: ${space(2)};
+  list-style: none;
+`
+
+/** One breakout room in the list (L3): its name and head count, then its people */
+const RoomItem = styled.li`
+  & + & {
+    margin-top: ${space(2)};
+  }
+`
+
+const RoomHeading = styled.h3`
+  display: flex;
+  align-items: baseline;
+  gap: ${space(2)};
+  margin: 0;
+  padding: ${space(1)} ${space(2)};
+  font-size: ${fontSize.small};
+  font-weight: 700;
+  overflow-wrap: anywhere;
+
+  span {
+    color: ${color.muted};
+    font-weight: 400;
+  }
+`
+
+const RoomList = styled.ul`
+  margin: 0;
+  padding: 0;
   list-style: none;
 `
 

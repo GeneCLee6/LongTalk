@@ -211,6 +211,7 @@ describe('RoomHost', () => {
       poll: null,
       timer: null,
       agenda: null,
+      breakout: null,
     })
     expect(t.host.summary()).toEqual({ ...INFO, memberCount: 0, owner: false })
   })
@@ -245,6 +246,7 @@ describe('RoomHost', () => {
           poll: null,
           timer: null,
           agenda: null,
+          breakout: null,
         },
       },
       // The chat history follows every welcome (D3), even when there is none yet

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import type {
+  RoomView,
   AnnotationMessage,
   AnnotationsMessage,
   ClientMessage,
@@ -7,13 +8,20 @@ import type {
   NoticeMessage,
   ReactionMessage,
 } from '../../shared/protocol.ts'
+import { scopeView } from '../../shared/breakout.ts'
 import type { Reaction } from '../../shared/reactions.ts'
 import { watchNetwork } from './network.ts'
 import { RoomConnection, type ChatSendResult, type RoomConnectionState } from './RoomConnection.ts'
 import { clearSession, loadClientId, loadSession, saveSession } from './session.ts'
 
 export interface RoomConnectionHandle {
+  /**
+   * The connection's state. While breakout rooms are open (L3) `state.view` is scoped to this
+   * member's own room (shared/breakout.ts scopeView): media, tiles, shares and hands see only it
+   */
   state: RoomConnectionState
+  /** The whole room's view, every breakout room included: only the host's panels read it (L3) */
+  fullView: RoomView | null
   /**
    * Leaves the room on purpose: the member is removed at once and the session forgotten. A host
    * may name who takes over (F3, e1-t17)
@@ -74,7 +82,11 @@ export function useRoomConnection(
       connection.stop()
     }
   }, [connection])
-  const state = useSyncExternalStore(connection.subscribe, connection.getState)
+  const raw = useSyncExternalStore(connection.subscribe, connection.getState)
+  const state = useMemo(() => {
+    const view = raw.view && raw.you ? scopeView(raw.view, raw.you) : raw.view
+    return view === raw.view ? raw : { ...raw, view }
+  }, [raw])
   const leave = useCallback(
     (host?: string) => {
       connection.stop({ leave: true, host })
@@ -84,6 +96,7 @@ export function useRoomConnection(
   )
   return {
     state,
+    fullView: raw.view,
     leave,
     send: connection.send,
     retry: connection.retry,

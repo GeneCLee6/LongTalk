@@ -38,6 +38,7 @@ const EXPECTED: Record<Action, string> = {
   clearAnnotations: 'HC',
   record: 'H',
   poll: 'HC',
+  breakout: 'HC',
   timer: 'HC',
   agenda: 'HC',
   muteMember: 'HC',

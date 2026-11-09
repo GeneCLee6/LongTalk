@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { ChatMessage } from '../shared/chat.ts'
 import type { InteractState } from './room-interact.ts'
+import type { BreakoutState } from './room-breakout.ts'
 import {
   CloseCode,
   HEARTBEAT_PING,
@@ -70,6 +71,8 @@ const FILES_KEY = 'files'
 const BOARD_KEY = 'board'
 /** The poll, its votes, the countdown and the agenda (L5) */
 const INTERACT_KEY = 'interact'
+/** The breakout rooms and who is in which (L3) */
+const BREAKOUT_KEY = 'breakout'
 /** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
 const CHAT_PREFIX = 'chat:'
 const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
@@ -159,6 +162,10 @@ export class RoomDO extends DurableObject<Env> {
         },
         saveBoardState: (state) => void storage.put<BoardState>(BOARD_KEY, state),
         saveInteract: (state) => void storage.put<InteractState>(INTERACT_KEY, state),
+        saveBreakout: (state) =>
+          void (state === null
+            ? storage.delete(BREAKOUT_KEY)
+            : storage.put<BreakoutState>(BREAKOUT_KEY, state)),
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -212,6 +219,7 @@ export class RoomDO extends DurableObject<Env> {
           FILES_KEY,
           BOARD_KEY,
           INTERACT_KEY,
+          BREAKOUT_KEY,
         ]),
         storage.list<AnnotationSegment>({ prefix: ANNOTATION_PREFIX }),
       ])
@@ -238,6 +246,7 @@ export class RoomDO extends DurableObject<Env> {
           annotations: [...annotations.values()],
           board: (extras.get(BOARD_KEY) as BoardState | undefined) ?? null,
           interact: (extras.get(INTERACT_KEY) as InteractState | undefined) ?? null,
+          breakout: (extras.get(BREAKOUT_KEY) as BreakoutState | undefined) ?? null,
         },
       )
       // A room stored before C2 has no schedule: restore made one

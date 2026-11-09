@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CHAT_CHUNK } from '../../shared/chat.ts'
 import {
   CloseCode,
   HEARTBEAT_INTERVAL_MS,
@@ -579,6 +580,81 @@ describe('RoomConnection chat (D3, e5-t01)', () => {
     t.latest().receive(welcome(2))
     t.latest().receive({ t: 'chat', messages: [message(1), message(2)], reset: true })
     expect(t.connection.getState().chat.map((m) => m.id)).toEqual([1, 2])
+  })
+
+  it('takes a breakout room’s history mid-meeting (L3), every `regroup` frame not new', () => {
+    const t = connect()
+    t.socket.open()
+    t.socket.receive(welcome(1))
+    t.socket.receive({ t: 'chat', messages: [message(1), message(2)], reset: true })
+    expect(t.connection.getState().chatHistoryUntil).toBe(2)
+    t.socket.receive({ t: 'chat', messages: [message(3)] })
+    expect(t.connection.getState().chatHistoryUntil).toBe(2)
+    // Moved to a room: its history replaces the main room's, no welcome in between
+    const first = Array.from({ length: CHAT_CHUNK }, (_, i) => message(10 + i))
+    t.socket.receive({ t: 'chat', messages: first, reset: true, regroup: true })
+    expect(t.connection.getState()).toMatchObject({ chatLoaded: true, chatHistoryUntil: 59 })
+    // The rest of it, in the next frame
+    t.socket.receive({ t: 'chat', messages: [message(70), message(71)], regroup: true })
+    expect(t.connection.getState().chatHistoryUntil).toBe(71)
+    expect(t.connection.getState().chat).toHaveLength(CHAT_CHUNK + 2)
+    // Then a new message: new
+    t.socket.receive({ t: 'chat', messages: [message(72)] })
+    expect(t.connection.getState().chatHistoryUntil).toBe(71)
+    expect(t.connection.getState().chat.at(-1)?.id).toBe(72)
+    // Back in the main room, where nothing was said: an empty history
+    t.socket.receive({ t: 'chat', messages: [], reset: true, regroup: true })
+    expect(t.connection.getState()).toMatchObject({ chat: [], chatHistoryUntil: 71 })
+    t.socket.receive({ t: 'chat', messages: [message(80)] })
+    expect(t.connection.getState().chat.map((m) => m.id)).toEqual([80])
+  })
+
+  it('a new message right after a full `regroup` frame is new, however soon (L3)', () => {
+    const t = connect()
+    t.socket.open()
+    t.socket.receive(welcome(1))
+    t.socket.receive({ t: 'chat', messages: [message(1)], reset: true })
+    const history = Array.from({ length: CHAT_CHUNK }, (_, i) => message(10 + i))
+    t.socket.receive({ t: 'chat', messages: history, reset: true, regroup: true })
+    t.socket.receive({ t: 'chat', messages: [message(99)] })
+    expect(t.connection.getState().chatHistoryUntil).toBe(59)
+    expect(t.connection.getState().chat.at(-1)?.id).toBe(99)
+  })
+
+  it('takes the rest of a long first history as not new, by its timing', () => {
+    const t = connect()
+    t.socket.open()
+    t.socket.receive(welcome(1))
+    const history = Array.from({ length: CHAT_CHUNK }, (_, i) => message(i + 1))
+    t.socket.receive({ t: 'chat', messages: history, reset: true })
+    t.socket.receive({ t: 'chat', messages: [message(51), message(52)] })
+    expect(t.connection.getState().chatHistoryUntil).toBe(52)
+    t.socket.receive({ t: 'chat', messages: [message(53)] })
+    expect(t.connection.getState().chatHistoryUntil).toBe(52)
+  })
+
+  it('does not mark a reconnect’s history: what was said meanwhile is new', () => {
+    const t = connect()
+    t.socket.open()
+    t.socket.receive(welcome(1))
+    t.socket.receive({ t: 'chat', messages: [message(1)], reset: true })
+    t.socket.serverClose(1006)
+    vi.advanceTimersByTime(1000)
+    t.latest().open()
+    t.latest().receive(welcome(2))
+    t.latest().receive({ t: 'chat', messages: [message(1), message(2)], reset: true })
+    expect(t.connection.getState().chatHistoryUntil).toBe(1)
+  })
+
+  it('a full first history long ago does not swallow the next new message', () => {
+    const t = connect()
+    t.socket.open()
+    t.socket.receive(welcome(1))
+    const history = Array.from({ length: CHAT_CHUNK }, (_, i) => message(i + 1))
+    t.socket.receive({ t: 'chat', messages: history, reset: true })
+    vi.advanceTimersByTime(60_000)
+    t.socket.receive({ t: 'chat', messages: [message(99)] })
+    expect(t.connection.getState().chatHistoryUntil).toBe(CHAT_CHUNK)
   })
 
   it('sends normalized text, and says why it did not send', () => {

@@ -179,14 +179,18 @@ export function useRoomMedia(options: UseRoomMediaOptions): RoomMediaHandle {
     void media?.setPowerSaving(powerSaving)
   }, [media, powerSaving])
 
+  // Breakout rooms (L3, AC-10.4): the room page hands over the view scoped to our own room
+  // (shared/breakout.ts scopeView), so a member moved elsewhere leaves it and is unsubscribed, and
+  // is subscribed again on coming back. The group check repeats that for a caller with the whole
+  // view: the SFU proxy refuses a pull across rooms anyway (track_not_in_room), and asking would
+  // only hold up the rest of the batch.
   const members = view?.members
-  const desired = useMemo<MemberTrack[]>(
-    () =>
-      Object.values(members ?? {})
-        .filter((member) => member.id !== you)
-        .flatMap((member) => member.tracks),
-    [members, you],
-  )
+  const desired = useMemo<MemberTrack[]>(() => {
+    const mine = (you !== null ? members?.[you]?.group : null) ?? null
+    return Object.values(members ?? {})
+      .filter((member) => member.id !== you && (member.group ?? null) === mine)
+      .flatMap((member) => member.tracks)
+  }, [members, you])
   useEffect(() => {
     media?.setDesired(desired)
   }, [media, desired])

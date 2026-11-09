@@ -180,6 +180,27 @@
 //    `annotationPolicy` stays `off` and `host` `annotationPolicy` is refused; with
 //    `RoomInfo.allowRecording` false `record` is refused for everyone, the host too. Allowing never
 //    grants anything: who may record and everyone's consent (21., 22.) stay as they are.
+// 29. Breakout rooms (L3, e10-t04; shared/breakout.ts): a host or co-host (worker/roles.ts
+//    `breakout`) sends `breakoutOpen` with the rooms' names, who goes where (member id → index) and
+//    how long (null: until recalled); a second one while they are open is refused with
+//    `breakout_active`. `RoomView.breakout` is the rooms; `Member.group` is where each member is
+//    (null or absent: the main room). `breakoutMove` puts one member (the actor too: that is how a
+//    host enters or leaves a room) in a room or back in the main room. Late joiners and people
+//    admitted from the waiting room land in the main room; a reconnect keeps its room.
+//    `breakoutBroadcast` sets `BreakoutView.broadcast` for every room. `breakoutClose` (or the time
+//    running out) starts a recall: `closesAt` is BREAKOUT_RECALL_MS away, and then everyone is back
+//    in the main room and `breakout` is null; `breakoutClose` with `now` ends them at once. Opening
+//    the rooms ends the poll on now (its results go to the main room's chat) and stops every
+//    recording (`notice` `recordingStopped`); while they are open `record` is refused with
+//    `breakout_active`. A move or the end of the rooms that leaves more than MAX_SHARES shares in one
+//    room stops the newest ones (`notice` `shareStopped`). The room refuses an SFU pull of a track whose owner is in another room (the proxy answers
+//    `track_not_in_room`), so each browser scopes its view to its own room (scopeView). Chat follows
+//    the sender: a message carries the sender's `ChatMessage.group`, and a member is sent only the
+//    messages of the room it is in; on a move it gets that room's history again (`reset`, every
+//    frame of it marked `regroup`: history, not news). Strokes on a share go to the sharer's room
+//    only; whoever changes rooms, or sees a share arrive with its sharer, gets the strokes again. While the
+//    rooms are open `spotlight`, opening the whiteboard and `pollStart` are refused with
+//    `breakout_active`; opening them clears the spotlight and closes the whiteboard.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -223,10 +244,20 @@
 //   `RoomView.poll` / `timer` / `agenda`, `ChatMessage.poll`, error code `poll_active`,
 //   `RoomInfo.startMuted` / `allowAnnotation` / `allowRecording`, notice `startMuted`. A v21 browser
 //   would not show the poll, and would stay unmuted in a room that asks otherwise.
+// v22 → v23 (L3): `breakoutOpen`, `breakoutMove`, `breakoutBroadcast`, `breakoutClose`,
+//   `RoomView.breakout`, `Member.group`, `ChatMessage.group`, error code `breakout_active`. A v22
+//   browser would subscribe to members outside its room (refused) and see every room's chat.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
 // View types are `type` aliases, not interfaces, so they stay assignable to JsonValue.
+import {
+  MAX_BREAKOUT_GROUPS,
+  MAX_BREAKOUT_MINUTES,
+  MAX_BREAKOUT_NAME_CHARS,
+  MAX_BROADCAST_CHARS,
+  type BreakoutView,
+} from './breakout.ts'
 import { parseAnnotationOps, spaceOf, type AnnotationOp, type Stroke } from './annotation.ts'
 import { isChatMessage, normalizeChatText, type ChatMessage } from './chat.ts'
 import {
@@ -250,7 +281,7 @@ import { isAnnotationPolicy, type AnnotationPolicy, type Role } from './roles.ts
 import type { UsageState } from './usage.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 22
+export const PROTOCOL_VERSION = 23
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -526,6 +557,11 @@ export type Member = {
    * anyway (worker/roles.ts `record`)
    */
   mayRecord: boolean
+  /**
+   * The breakout room the member is in (L3, e10-t04; shared/breakout.ts); null or absent: the main
+   * room
+   */
+  group?: string | null
 }
 
 /** A nameplate's signal bars (e2-t13): 好／普通／差 */
@@ -557,6 +593,8 @@ export type RoomView = {
   timer?: TimerInfo | null
   /** The agenda bar (L5, e5-t08); absent or null when there is none */
   agenda?: AgendaInfo | null
+  /** The breakout rooms (L3, e10-t04); absent or null when they are not open */
+  breakout?: BreakoutView | null
 }
 
 // ── Server → browser ─────────────────────────────────────────────────────────────────────────
@@ -584,6 +622,8 @@ export type PatchMessage = { t: 'patch'; rev: number; ops: PatchOp[] }
  * - `rate_limited`: `chat` faster than CHAT_RATE (D3); the message was not kept
  * - `annotation_limit`: `annotate` faster than the limits (J2); a refused stroke comes back removed
  * - `poll_active`: `pollStart` while a poll is on (L5)
+ * - `breakout_active`: `breakoutOpen` while breakout rooms are open, or `spotlight`, opening the
+ *   whiteboard, `pollStart` or `record` while they are (L3)
  */
 export type ErrorCode =
   | 'bad_message'
@@ -593,6 +633,7 @@ export type ErrorCode =
   | 'rate_limited'
   | 'annotation_limit'
   | 'poll_active'
+  | 'breakout_active'
 
 /**
  * What a host (or co-host) did to this member (F1): `muted` (the microphone; `all` when it was
@@ -657,7 +698,13 @@ export type LobbyMessage = {
  * room sends after every `welcome`; replace every message you have with these (more frames of
  * the history may follow without it). Without `reset`: new messages, append them.
  */
-export type ChatServerMessage = { t: 'chat'; messages: ChatMessage[]; reset?: true }
+export type ChatServerMessage = {
+  t: 'chat'
+  messages: ChatMessage[]
+  reset?: true
+  /** A history sent because the member changed breakout rooms (L3): none of it is new */
+  regroup?: true
+}
 
 /** Someone in the room reacted (G3, e5-t03): `from` is their member id (maybe our own) */
 export type ReactionMessage = { t: 'reaction'; from: string; emoji: Reaction }
@@ -875,7 +922,35 @@ export type AgendaMessage = { t: 'agenda'; items: AgendaItem[] }
 /** Which of the agenda's items is on now */
 export type AgendaCurrentMessage = { t: 'agendaCurrent'; index: number }
 
+/**
+ * Open breakout rooms (L3, e10-t04; a host or co-host): their names (ids `g1` … in this order),
+ * who goes where (member id → index into `groups`; anyone not named stays in the main room) and
+ * how long, in minutes (null: until recalled). Checked as parseBreakoutOpen does
+ */
+export type BreakoutOpenMessage = {
+  t: 'breakoutOpen'
+  groups: string[]
+  assign: Record<string, number>
+  minutes: number | null
+}
+
+/** Put a member (the actor too) in a breakout room, or (null) back in the main room */
+export type BreakoutMoveMessage = { t: 'breakoutMove'; memberId: string; group: string | null }
+
+/** A message to every breakout room, replacing the last one */
+export type BreakoutBroadcastMessage = { t: 'breakoutBroadcast'; text: string }
+
+/**
+ * Start the recall (BREAKOUT_RECALL_MS), or (`now`) bring everyone back at once. Without `now` a
+ * recall already under way is left alone: two co-hosts pressing 全部召回 never skip the warning
+ */
+export type BreakoutCloseMessage = { t: 'breakoutClose'; now: boolean }
+
 export type ClientMessage =
+  | BreakoutOpenMessage
+  | BreakoutMoveMessage
+  | BreakoutBroadcastMessage
+  | BreakoutCloseMessage
   | PollStartMessage
   | PollVoteMessage
   | PollEndMessage
@@ -1007,6 +1082,34 @@ export function parseAgendaItems(value: unknown): AgendaItem[] | null {
   return items
 }
 
+/** A breakout room id as the room gives them (shared/breakout.ts groupId) */
+const isGroupIdText = (value: unknown): value is string =>
+  typeof value === 'string' && /^g[1-9][0-9]?$/.test(value)
+
+/** `breakoutOpen`'s fields, normalized as the room stores them; null when any does not fit */
+export function parseBreakoutOpen(value: Record<string, unknown>): BreakoutOpenMessage | null {
+  if (!Array.isArray(value.groups)) return null
+  if (value.groups.length < 1 || value.groups.length > MAX_BREAKOUT_GROUPS) return null
+  const groups: string[] = []
+  for (const raw of value.groups as unknown[]) {
+    const name = normalizeName(raw, MAX_BREAKOUT_NAME_CHARS)
+    if (name === null) return null
+    groups.push(name)
+  }
+  const rawAssign = value.assign
+  if (typeof rawAssign !== 'object' || rawAssign === null || Array.isArray(rawAssign)) return null
+  const assign: Record<string, number> = {}
+  for (const [memberId, index] of Object.entries(rawAssign as Record<string, unknown>)) {
+    if (!isMemberId(memberId) || !isIndex(index) || index >= groups.length) return null
+    assign[memberId] = index
+  }
+  const minutes = value.minutes
+  if (minutes !== null && !(isIndex(minutes) && minutes >= 1 && minutes <= MAX_BREAKOUT_MINUTES)) {
+    return null
+  }
+  return { t: 'breakoutOpen', groups, assign, minutes }
+}
+
 /** A browser's message, or null when it is not one this version understands */
 export function parseClientMessage(raw: string): ClientMessage | null {
   const value = parseObject(raw, MAX_CLIENT_MESSAGE_CHARS)
@@ -1094,6 +1197,18 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     }
     case 'agendaCurrent':
       return isIndex(value.index) ? { t: 'agendaCurrent', index: value.index } : null
+    case 'breakoutOpen':
+      return parseBreakoutOpen(value)
+    case 'breakoutMove':
+      return isMemberId(value.memberId) && (value.group === null || isGroupIdText(value.group))
+        ? { t: 'breakoutMove', memberId: value.memberId, group: value.group }
+        : null
+    case 'breakoutBroadcast': {
+      const text = normalizeName(value.text, MAX_BROADCAST_CHARS)
+      return text === null ? null : { t: 'breakoutBroadcast', text }
+    }
+    case 'breakoutClose':
+      return typeof value.now === 'boolean' ? { t: 'breakoutClose', now: value.now } : null
     case 'host': {
       const action = value.action
       if (typeof action !== 'string') return null

@@ -22,9 +22,13 @@ export function ChatPreview({ message, onOpen, onDismiss }: ChatPreviewProps) {
     <Region role="status" aria-live="polite" aria-label={strings.chat.preview}>
       {message && (
         <Bubble key={message.id}>
-          <Open type="button" onClick={onOpen} aria-label={strings.chat.previewOpen(message.name)}>
+          {/* Named by what it shows (axe label-content-name-mismatch), what it does said after */}
+          <Open type="button" onClick={onOpen}>
             <Name>{message.name}</Name>
-            <Text>{message.file ? strings.chat.file.message(message.file.name) : message.text}</Text>
+            <Text>
+              {message.file ? strings.chat.file.message(message.file.name) : message.text}
+            </Text>
+            <VisuallyHidden> · {strings.chat.previewOpen}</VisuallyHidden>
           </Open>
           <Close type="button" aria-label={strings.common.close} onClick={onDismiss}>
             <CloseIcon />
@@ -119,4 +123,13 @@ const Close = styled.button`
     width: 16px;
     height: 16px;
   }
+`
+
+const VisuallyHidden = styled.span`
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 `

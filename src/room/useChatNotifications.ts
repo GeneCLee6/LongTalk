@@ -18,17 +18,23 @@ export interface ChatNotifications {
  * (the history) is not new: counting starts from the first history the room sends. Opening the
  * panel reads everything; our own messages are never unread. While the panel is closed each new
  * message from someone else replaces the preview, which goes away after CHAT_PREVIEW_MS.
+ *
+ * `historyUntil` (RoomConnectionState.chatHistoryUntil): what the room replayed as history, every
+ * frame of it, is not new either; a breakout move (L3) replays the new room's chat mid-meeting,
+ * which must neither blip nor count.
  */
 export function useChatNotifications({
   messages,
   loaded,
   you,
   open,
+  historyUntil = 0,
 }: {
   messages: readonly ChatMessage[]
   loaded: boolean
   you: string | null
   open: boolean
+  historyUntil?: number
 }): ChatNotifications {
   const latest = latestId(messages)
   // The newest id read (null until the history arrived) and the newest one previewed
@@ -39,9 +45,13 @@ export function useChatNotifications({
   // Adjusted while rendering (React's pattern for state that follows a value), not in an effect
   if (loaded && seen === null) setSeen(latest)
   if (loaded && notified === null) setNotified(latest)
+  // A replayed history is never previewed (and never unread: countUnread below starts after it).
+  // `notified` only grows, so this settles; `seen` follows `latest`, which a move may lower
+  const replayed = notified !== null && historyUntil > notified
+  if (replayed) setNotified(historyUntil)
   if (open && seen !== null && seen !== latest) setSeen(latest)
   if (open && preview !== null) setPreview(null)
-  if (notified !== null && latest > notified) {
+  if (!replayed && notified !== null && latest > notified) {
     setNotified(latest)
     const newest = [...messages].reverse().find((m) => m.id > notified && m.from !== you)
     if (!open && newest) setPreview(newest)
@@ -55,7 +65,7 @@ export function useChatNotifications({
 
   const dismissPreview = useCallback(() => setPreview(null), [])
   return {
-    unread: seen === null ? 0 : countUnread(messages, seen, you),
+    unread: seen === null ? 0 : countUnread(messages, Math.max(seen, historyUntil), you),
     preview,
     dismissPreview,
   }
