@@ -107,6 +107,11 @@ export const PERMISSIONS = {
    */
   record: { who: ['host'], on: 'room', since: 'I4' },
 
+  /**
+   * Open, move people between, broadcast to and recall breakout rooms (L3, e10-t04). A room action:
+   * the actor may move anyone, themselves included (that is how a host enters a room)
+   */
+  breakout: { who: STAFF, on: 'room', since: 'L3' },
   /** Start and end polls (L5, e5-t07); the countdown and the agenda bar (L5, e5-t08) */
   poll: { who: STAFF, on: 'room', since: 'L5' },
   timer: { who: STAFF, on: 'room', since: 'L5' },

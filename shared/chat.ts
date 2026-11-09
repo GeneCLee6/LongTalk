@@ -35,6 +35,11 @@ export type ChatMessage = {
    * is then the question, for previews and older readers
    */
   poll?: PollResult
+  /**
+   * The breakout room the sender was in (L3, e10-t04; shared/breakout.ts chatVisible); absent: the
+   * main room. Only members of that room are sent it
+   */
+  group?: string
 }
 
 // Control characters (but the newline) and the bidirectional overrides that could make text
@@ -121,6 +126,7 @@ export function isChatMessage(value: unknown): value is ChatMessage {
     typeof message.text === 'string' &&
     typeof message.at === 'number' &&
     (message.file === undefined || isChatFile(message.file)) &&
-    (message.poll === undefined || isPollResult(message.poll))
+    (message.poll === undefined || isPollResult(message.poll)) &&
+    (message.group === undefined || typeof message.group === 'string')
   )
 }
