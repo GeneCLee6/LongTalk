@@ -50,8 +50,8 @@ depends_on: [E2, E4, E1]
 - [x] `e10-t01` 訂閱策略：可見清單驅動 desired set、講話者例外、預先訂閱（與 E2 `e2-t18`；L1，#49，預先訂閱只在指標停在換頁鈕上時，見下面的決定） · AC-10.1 · M
 - [x] `e10-t02` 分頁 UI 與講話者側格（L1，#49：`shared/layout.ts` 的 `GALLERY_PAGE_SIZE`、`gallerySide`、`sideTile`） · AC-10.2 · S · ← e10-t01
 - [ ] `e10-t03` 25 人負載測試腳本與報告 · AC-10.3 · M · ← e10-t02
-- [x] `e10-t04` 分組討論室：RoomDO 子房間、隔離、時長與召回（L3，#PR：`worker/room-breakout.ts`、`shared/breakout.ts`，伺服器擋跨組的 SFU 訂閱） · AC-10.4 · M · ← e1-t07
-- [x] `e10-t05` 分組 UI：主持人分配面板、成員倒數、廣播（L3，#PR：`BreakoutPanel`、`BreakoutBar`） · AC-10.4 · M · ← e10-t04
+- [x] `e10-t04` 分組討論室：RoomDO 子房間、隔離、時長與召回（L3，#52：`worker/room-breakout.ts`、`shared/breakout.ts`，伺服器擋跨組的 SFU 訂閱） · AC-10.4 · M · ← e1-t07
+- [x] `e10-t05` 分組 UI：主持人分配面板、成員倒數、廣播（L3，#52：`BreakoutPanel`、`BreakoutBar`） · AC-10.4 · M · ← e10-t04
 
 ### M3
 
