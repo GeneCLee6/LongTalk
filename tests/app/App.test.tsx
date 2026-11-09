@@ -359,7 +359,7 @@ describe('chat in the room (D3, e5-t01, e5-t02)', () => {
     await push(socket, { t: 'chat', messages: [fromWei(2, '看這個 https://example.com')] })
     expect(screen.getByRole('button', { name: '聊天（1 則未讀）' })).toBeInTheDocument()
     // The preview bubble opens the chat
-    fireEvent.click(screen.getByRole('button', { name: '打開聊天，看 Wei 的訊息' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Wei.*打開聊天$/ }))
     const panel = screen.getByRole('complementary', { name: '聊天' })
     expect(within(panel).getByRole('link', { name: 'https://example.com' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '聊天' })).toHaveAttribute('aria-expanded', 'true')

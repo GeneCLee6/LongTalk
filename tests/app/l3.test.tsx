@@ -46,7 +46,12 @@ const OPEN: BreakoutView = {
 }
 
 describe('the 分組討論室 panel: opening the rooms', () => {
-  const MEMBERS = [member('a', 'Gene', 'host'), member('b', 'Bob'), member('c', 'Carol'), member('d', 'Dan')]
+  const MEMBERS = [
+    member('a', 'Gene', 'host'),
+    member('b', 'Bob'),
+    member('c', 'Carol'),
+    member('d', 'Dan'),
+  ]
   function setup(random = () => 0) {
     const send = vi.fn<(message: ClientMessage) => void>()
     render(<BreakoutPanel breakout={null} members={MEMBERS} you="a" send={send} random={random} />)
@@ -59,9 +64,9 @@ describe('the 分組討論室 panel: opening the rooms', () => {
     expect(form().getByText(strings.breakout.autoHint(3, 2))).toBeTruthy()
     // Opening ends the poll and stops recordings: said before
     expect(form().getByText(strings.breakout.openEnds)).toBeTruthy()
-    expect((form().getByRole('textbox', { name: strings.breakout.name(1) }) as HTMLInputElement).value).toBe(
-      strings.breakout.defaultName(1),
-    )
+    expect(
+      (form().getByRole('textbox', { name: strings.breakout.name(1) }) as HTMLInputElement).value,
+    ).toBe(strings.breakout.defaultName(1))
     fireEvent.click(form().getByRole('button', { name: strings.breakout.open }))
     expect(send).toHaveBeenCalledTimes(1)
     const message = send.mock.calls[0][0]
@@ -70,7 +75,9 @@ describe('the 分組討論室 panel: opening the rooms', () => {
     expect(message.minutes).toBe(15)
     expect(Object.keys(message.assign).sort()).toEqual(['b', 'c', 'd'])
     // Groups differ by at most one
-    const sizes = [0, 1].map((index) => Object.values(message.assign).filter((at) => at === index).length)
+    const sizes = [0, 1].map(
+      (index) => Object.values(message.assign).filter((at) => at === index).length,
+    )
     expect(Math.abs(sizes[0] - sizes[1])).toBeLessThanOrEqual(1)
   })
 
@@ -83,7 +90,10 @@ describe('the 分組討論室 panel: opening the rooms', () => {
       target: { value: '  討論區 ' },
     })
     fireEvent.click(form().getByRole('checkbox', { name: strings.breakout.noLimit }))
-    expect((form().getByRole('spinbutton', { name: strings.breakout.minutes }) as HTMLInputElement).disabled).toBe(true)
+    expect(
+      (form().getByRole('spinbutton', { name: strings.breakout.minutes }) as HTMLInputElement)
+        .disabled,
+    ).toBe(true)
     fireEvent.click(form().getByRole('button', { name: strings.breakout.open }))
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -150,9 +160,7 @@ describe('the 分組討論室 panel while the rooms are open', () => {
 
   it('lists each room with its people and the time left', () => {
     running(OPEN, 60_000)
-    expect(screen.getByRole('timer', { name: strings.breakout.timerLabel }).textContent).toBe(
-      strings.breakout.remaining('00:09:00'),
-    )
+    expect(screen.getByRole('timer').textContent).toBe(strings.breakout.remaining('00:09:00'))
     const room1 = within(screen.getByRole('region', { name: '第 1 組' }))
     expect(room1.getByText('Bob')).toBeTruthy()
     expect(room1.queryByText('Carol')).toBeNull()
@@ -196,8 +204,12 @@ describe('the 分組討論室 panel while the rooms are open', () => {
 
   it('broadcasts to every room, then clears the box', () => {
     const send = running()
-    const box = screen.getByRole('textbox', { name: strings.breakout.broadcastLabel }) as HTMLInputElement
-    const sendButton = screen.getByRole('button', { name: strings.breakout.broadcastSend }) as HTMLButtonElement
+    const box = screen.getByRole('textbox', {
+      name: strings.breakout.broadcastLabel,
+    }) as HTMLInputElement
+    const sendButton = screen.getByRole('button', {
+      name: strings.breakout.broadcastSend,
+    }) as HTMLButtonElement
     expect(sendButton.disabled).toBe(true)
     fireEvent.change(box, { target: { value: ' 還剩 5 分鐘 ' } })
     fireEvent.click(sendButton)
@@ -213,9 +225,7 @@ describe('the 分組討論室 panel while the rooms are open', () => {
 
   it('during the recall: the seconds left and 立即結束', () => {
     const send = running({ ...OPEN, closesAt: 100_000 }, 100_000 - 42_500)
-    expect(screen.getByRole('timer', { name: strings.breakout.timerLabel }).textContent).toBe(
-      strings.breakout.closing(43),
-    )
+    expect(screen.getByRole('timer').textContent).toBe(strings.breakout.closing(43))
     expect(screen.queryByRole('button', { name: strings.breakout.recall })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: strings.breakout.endNow }))
     expect(send).toHaveBeenCalledWith({ t: 'breakoutClose', now: true })
@@ -297,7 +307,11 @@ describe('what is said when the rooms change', () => {
     rerender({ breakout: { ...OPEN, broadcast: { text: '集合', by: 'Gene', at: 2 } }, group: 'g2' })
     expect(show).toHaveBeenLastCalledWith(strings.breakout.movedTo('第 2 組'))
     rerender({
-      breakout: { ...OPEN, broadcast: { text: '集合', by: 'Gene', at: 2 }, closesAt: BREAKOUT_RECALL_MS },
+      breakout: {
+        ...OPEN,
+        broadcast: { text: '集合', by: 'Gene', at: 2 },
+        closesAt: BREAKOUT_RECALL_MS,
+      },
       group: 'g2',
     })
     expect(show).toHaveBeenLastCalledWith(strings.breakout.recalled(60))
@@ -325,7 +339,9 @@ describe('the participants panel while the rooms are open', () => {
       />,
     )
     const list = screen.getByRole('list', { name: strings.participants.list })
-    const headings = within(list).getAllByRole('heading').map((heading) => heading.textContent)
+    const headings = within(list)
+      .getAllByRole('heading')
+      .map((heading) => heading.textContent)
     expect(headings).toEqual([
       strings.breakout.mainRoom + strings.breakout.roomCount(1),
       '第 1 組' + strings.breakout.roomCount(1),
@@ -421,9 +437,12 @@ describe('breakout rooms in the room page', () => {
     const panel = await screen.findByRole('complementary', { name: strings.breakout.title })
     const form = await within(panel).findByRole('form', { name: strings.breakout.setupLabel })
     fireEvent.click(within(form).getByRole('radio', { name: strings.breakout.manual }))
-    fireEvent.change(within(form).getByRole('combobox', { name: strings.breakout.assignOf('Wei') }), {
-      target: { value: '1' },
-    })
+    fireEvent.change(
+      within(form).getByRole('combobox', { name: strings.breakout.assignOf('Wei') }),
+      {
+        target: { value: '1' },
+      },
+    )
     fireEvent.click(within(form).getByRole('button', { name: strings.breakout.open }))
     expect(JSON.parse(socket.sent.at(-1)!)).toEqual({
       t: 'breakoutOpen',
@@ -443,12 +462,16 @@ describe('breakout rooms in the room page', () => {
   it('a member in a room sees its name and the time left, then the broadcast and the recall', async () => {
     const breakout = { ...OPEN, endsAt: Date.now() + 5 * 60_000 }
     const socket = await enter(
-      [member('a', 'Gene', 'participant', 'g2'), member('w', 'Wei', 'host'), member('b', 'Bob', 'participant', 'g2')],
+      [
+        member('a', 'Gene', 'participant', 'g2'),
+        member('w', 'Wei', 'host'),
+        member('b', 'Bob', 'participant', 'g2'),
+      ],
       breakout,
     )
     const bar = within(await screen.findByRole('region', { name: strings.breakout.label }))
     expect(bar.getByText(strings.breakout.inRoom('第 2 組'))).toBeTruthy()
-    expect(bar.getByRole('timer', { name: strings.breakout.timerLabel }).textContent).toMatch(/00:0[45]:/)
+    expect(bar.getByRole('timer').textContent).toMatch(/00:0[45]:/)
     expect(bar.queryByRole('button', { name: strings.breakout.manage })).toBeNull()
     // The host (in the main room) is not in our scoped view
     expect(screen.queryByRole('figure', { name: /Wei/ })).toBeNull()
@@ -456,7 +479,9 @@ describe('breakout rooms in the room page', () => {
       socket.receive({
         t: 'patch',
         rev: 2,
-        ops: [{ op: 'set', path: ['breakout', 'broadcast'], value: { text: '集合', by: 'Wei', at: 9 } }],
+        ops: [
+          { op: 'set', path: ['breakout', 'broadcast'], value: { text: '集合', by: 'Wei', at: 9 } },
+        ],
       }),
     )
     expect(screen.getByRole('region', { name: strings.breakout.broadcastFrom('Wei') })).toBeTruthy()
@@ -465,22 +490,29 @@ describe('breakout rooms in the room page', () => {
       socket.receive({
         t: 'patch',
         rev: 3,
-        ops: [{ op: 'set', path: ['breakout', 'closesAt'], value: Date.now() + BREAKOUT_RECALL_MS }],
+        ops: [
+          { op: 'set', path: ['breakout', 'closesAt'], value: Date.now() + BREAKOUT_RECALL_MS },
+        ],
       }),
     )
-    expect(screen.getByRole('timer', { name: strings.breakout.timerLabel }).textContent).toMatch(
+    expect(screen.getByRole('timer').textContent).toMatch(
       new RegExp(strings.breakout.backIn(60).replace('60', '(59|60)')),
     )
   })
 
   it('the room refusing something while the rooms are open is explained', async () => {
-    const socket = await enter([member('a', 'Gene', 'host'), member('w', 'Wei', 'participant', 'g1')], OPEN)
+    const socket = await enter(
+      [member('a', 'Gene', 'host'), member('w', 'Wei', 'participant', 'g1')],
+      OPEN,
+    )
     act(() => socket.receive({ t: 'error', code: 'breakout_active' }))
     expect(screen.getByText(strings.breakout.busy)).toBeTruthy()
     // In the main room, a host sees that they are on and can open the panel from the bar
     fireEvent.click(screen.getByRole('button', { name: strings.breakout.manage }))
     const panel = await screen.findByRole('complementary', { name: strings.breakout.title })
-    expect(await within(panel).findByRole('combobox', { name: strings.breakout.moveOf('Wei') })).toBeTruthy()
+    expect(
+      await within(panel).findByRole('combobox', { name: strings.breakout.moveOf('Wei') }),
+    ).toBeTruthy()
   })
 
   it('a host sees who shares in another room, and acts on them by name', async () => {

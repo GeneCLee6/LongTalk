@@ -556,7 +556,6 @@ export const zhTWRoom = {
     open: '開始分組討論',
     remaining: (time: string) => `剩下 ${time}`,
     unlimited: '不限時間',
-    timerLabel: '分組討論剩下的時間',
     mainRoom: '主會議室',
     roomCount: (count: number) => `${count} 人`,
     empty: '沒有人',
@@ -806,7 +805,7 @@ export const zhTWRoom = {
     offline: '連線中斷，訊息還沒送出；連上後再按一次送出。',
     // The bubble that previews a new message while the panel is closed
     preview: '新訊息',
-    previewOpen: (name: string) => `打開聊天，看 ${name} 的訊息`,
+    previewOpen: '打開聊天',
     openLink: (url: string) => `開啟連結 ${url}（新分頁）`,
     // Files in the chat (I5, e5-t05, e5-t06)
     file: {

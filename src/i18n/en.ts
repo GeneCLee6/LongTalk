@@ -554,7 +554,6 @@ export const enRoom: RoomStrings = {
     open: 'Open rooms',
     remaining: (time: string) => `${time} left`,
     unlimited: 'No time limit',
-    timerLabel: 'Time left in breakout rooms',
     mainRoom: 'Main room',
     roomCount: (count: number) => `${count} ${plural(count, 'person', 'people')}`,
     empty: 'Nobody',
@@ -801,7 +800,7 @@ export const enRoom: RoomStrings = {
     rateLimited: 'You’re sending too fast. Wait a few seconds.',
     offline: 'Connection lost and the message wasn’t sent; press Send again once you’re back.',
     preview: 'New message',
-    previewOpen: (name: string) => `Open chat to read ${name}’s message`,
+    previewOpen: 'open the chat',
     openLink: (url: string) => `Open link ${url} (new tab)`,
     file: {
       attach: 'Attach a file',

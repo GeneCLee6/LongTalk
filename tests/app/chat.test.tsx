@@ -361,7 +361,9 @@ describe('ChatPreview', () => {
     const { rerender } = render(
       <ChatPreview message={message(1, 'b', '快來看')} onOpen={onOpen} onDismiss={onDismiss} />,
     )
-    fireEvent.click(screen.getByRole('button', { name: strings.chat.previewOpen('小潔') }))
+    fireEvent.click(
+      screen.getByRole('button', { name: new RegExp(`^小潔.*${strings.chat.previewOpen}$`) }),
+    )
     expect(onOpen).toHaveBeenCalled()
     expect(screen.getByRole('status')).toHaveTextContent('快來看')
     fireEvent.click(screen.getByRole('button', { name: strings.common.close }))

@@ -4,6 +4,7 @@ import type { BreakoutView } from '../../shared/breakout.ts'
 import { formatElapsed } from '../room/elapsed.ts'
 import { strings } from '../strings.ts'
 import { color, fontSize, media, radius, space } from '../styles/tokens.ts'
+import { CloseIcon } from './icons.tsx'
 import { secondsOf, useBreakoutRemaining } from './useBreakoutClock.ts'
 
 export interface BreakoutBarProps {
@@ -34,7 +35,7 @@ export function BreakoutBar({ breakout, room, onManage, now = Date.now }: Breako
           {room !== null ? strings.breakout.inRoom(room) : strings.breakout.inProgress}
         </Where>
         {phase === 'closing' && ms !== null ? (
-          <Count role="timer" aria-label={strings.breakout.timerLabel} $warn>
+          <Count role="timer" $warn>
             {room !== null
               ? strings.breakout.backIn(secondsOf(ms))
               : strings.breakout.closing(secondsOf(ms))}
@@ -42,7 +43,7 @@ export function BreakoutBar({ breakout, room, onManage, now = Date.now }: Breako
         ) : (
           room !== null &&
           ms !== null && (
-            <Count role="timer" aria-label={strings.breakout.timerLabel} $warn={false}>
+            <Count role="timer" $warn={false}>
               {strings.breakout.remaining(formatElapsed(secondsOf(ms) * 1000))}
             </Count>
           )
@@ -63,7 +64,7 @@ export function BreakoutBar({ breakout, room, onManage, now = Date.now }: Breako
             title={strings.breakout.dismissBroadcast}
             onClick={() => setDismissed(broadcast.at)}
           >
-            ×
+            <CloseIcon />
           </Dismiss>
         </Broadcast>
       )}

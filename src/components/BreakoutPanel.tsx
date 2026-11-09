@@ -263,7 +263,7 @@ function Running({
     send({ t: 'breakoutMove', memberId, group })
   return (
     <>
-      <Status role="timer" aria-label={strings.breakout.timerLabel} $warn={phase === 'closing'}>
+      <Status role="timer" $warn={phase === 'closing'}>
         {phase === 'closing'
           ? strings.breakout.closing(secondsOf(ms ?? 0))
           : ms === null
