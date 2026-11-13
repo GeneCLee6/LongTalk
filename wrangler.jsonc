@@ -100,12 +100,14 @@
       // "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "longtalk_events_preview" }],
       // Turnstile's public test keys (DEPLOY.md §11): an invisible widget that always passes and a
       // secret that always validates, so every preview runs the whole room-creation flow. Never
-      // real keys here: previews get no Turnstile secret of their own
+      // real keys here: previews get no Turnstile secret of their own. CHAOS_DRILLS turns on the
+      // chaos drill endpoint (worker/chaos.ts, DEPLOY.md §14): previews only, never at the top level
       "vars": {
         "USAGE_LOW_QUALITY_GB": "800",
         "USAGE_AUDIO_ONLY_GB": "950",
         "TURNSTILE_SITE_KEY": "1x00000000000000000000BB",
-        "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"
+        "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA",
+        "CHAOS_DRILLS": "1"
       }
     }
   }

@@ -234,6 +234,8 @@ export interface RoomMediaOptions {
   createTransport?: () => MediaTransport
   /** ICE servers before each session (TURN, e2-t07); without it the transport's default STUN */
   iceConfig?: () => Promise<IceConfig | null>
+  /** Longest wait for `iceConfig` before connecting with the default STUN (ICE_CONFIG_TIMEOUT_MS) */
+  iceConfigTimeoutMs?: number
   /** Sends a message to the room over its WebSocket */
   send: (message: ClientMessage) => void
   statsIntervalMs?: number
@@ -278,6 +280,12 @@ export const RETRY_MAX_MS = 15_000
 /** ICE `disconnected` often heals by itself within a few seconds (a Wi-Fi hiccup) */
 export const DISCONNECT_GRACE_MS = 4_000
 export const STABLE_AFTER_MS = 20_000
+/**
+ * Longest wait for the ICE servers before a session (O2 chaos drill, e11-t12): a TURN endpoint
+ * that hangs must not hold the media back; past this the session connects with the default STUN,
+ * as when the call fails. Above the Worker's own wait for Cloudflare (worker/turn.ts, 5 s)
+ */
+export const ICE_CONFIG_TIMEOUT_MS = 6_000
 /** Layout changes come in bursts (a resize, a scroll, the strip's animation): settle first */
 export const LAYER_DEBOUNCE_MS = 400
 /** getStats() is read this often (e2-t13, PRD: 每 2 秒) */
@@ -364,6 +372,7 @@ export class RoomMedia {
   private transport: MediaTransport
   private readonly createTransport: (() => MediaTransport) | null
   private readonly iceConfig: (() => Promise<IceConfig | null>) | null
+  private readonly iceConfigTimeoutMs: number
   private readonly send: (message: ClientMessage) => void
   private readonly statsIntervalMs: number
   private readonly retryDelayMs: number
@@ -476,6 +485,7 @@ export class RoomMedia {
     if (!first) throw new Error('RoomMedia needs a transport or createTransport')
     this.transport = first
     this.iceConfig = options.iceConfig ?? null
+    this.iceConfigTimeoutMs = options.iceConfigTimeoutMs ?? ICE_CONFIG_TIMEOUT_MS
     this.send = options.send
     this.statsIntervalMs = options.statsIntervalMs ?? STATS_INTERVAL_MS
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS
@@ -869,7 +879,7 @@ export class RoomMedia {
     this.update({ status })
     let ice: IceConfig | null = null
     try {
-      ice = this.iceConfig ? await this.iceConfig().catch(() => null) : null
+      ice = this.iceConfig ? await this.loadIceConfig(this.iceConfig) : null
       if (this.closed || transport !== this.transport) return
       await transport.connect(ice?.connect)
     } catch (error) {
@@ -979,6 +989,17 @@ export class RoomMedia {
     await this.openSession(transport, 'reconnecting')
   }
 
+  /** The ICE servers, or null when they fail or take longer than iceConfigTimeoutMs */
+  private loadIceConfig(load: () => Promise<IceConfig | null>): Promise<IceConfig | null> {
+    let timer: Timer | null = null
+    const late = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), this.iceConfigTimeoutMs)
+    })
+    return Promise.race([load().catch(() => null), late]).finally(() => {
+      if (timer !== null) clearTimeout(timer)
+    })
+  }
+
   /** TURN credentials expire: hand the transport fresh ones before they do */
   private scheduleIceRefresh(transport: MediaTransport, ice: IceConfig | null): void {
     const load = this.iceConfig
@@ -986,7 +1007,7 @@ export class RoomMedia {
     if (!load || after === null || after === undefined) return
     this.iceTimer = setTimeout(async () => {
       this.iceTimer = null
-      const next = await load().catch(() => null)
+      const next = await this.loadIceConfig(load)
       if (this.closed || transport !== this.transport || !this.ready) return
       if (next?.connect.iceServers) transport.setIceServers(next.connect.iceServers)
       this.scheduleIceRefresh(transport, next ?? ice)

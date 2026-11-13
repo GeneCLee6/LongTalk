@@ -913,3 +913,44 @@ X-Frame-Options: DENY
 | 存在哪些 Cloudflare 服務、沒指定地區 | `wrangler.jsonc`（測試比對） |
 | 遙測沒有名字、房號 | `shared/telemetry.ts`（`scrubErrorText`） |
 | 錄影流程 | `docs/PRD/e8-recording-transcript-ai.md` 的同意清單 |
+
+## 14. 混沌演練（`e11-t12`，O2）
+
+會議中途把一樣東西弄壞，看會議能不能**自己好起來**（沒有人重新整理頁面、沒有人按「重試」）。演練分三層：每次提交都跑的單元測試、每個 PR 預覽都跑的瀏覽器測試、要擁有者自己在正式站做的步驟。**不要在正式站跑會弄壞東西的步驟**：正式站沒有演練用的端點（`CHAOS_DRILLS` 只在預覽，`tests/worker/chaos.test.ts` 讀 `wrangler.jsonc` 確認）。
+
+### 演練清單
+
+| # | 弄壞什麼 | 怎麼弄壞 | 應該發生的事 | 誰跑 |
+| --- | --- | --- | --- | --- |
+| 1 | **殺 RoomDO**（當機、部署） | 預覽：`POST /api/chaos/rooms/<id>/kill`（`worker/chaos.ts`，`DurableObjectState.abort`）；單元測試：用 storage 重建 `RoomHost`、所有 socket 斷掉 | 每個人的 socket 斷掉，RoomConnection 1–8 秒的退避重連、帶 token 回到**同一個位子**：id、主持人與共同主持人、分享、舉手、聊天紀錄、鎖房都還在，鎖房也讓他們進來。**媒體不中斷**（不經過 RoomDO）。遠端控制的授權**結束**，要重新請求（綁在控制者的 socket，N3）。`RECONNECT_GRACE_MS`（60 秒）內沒回來的人離開，主持人交給下一位 | `tests/worker/chaos.test.ts`（每次提交）、`e2e/chaos.spec.ts`（每個 PR 預覽） |
+| 2 | **整間辦公室同一個 IP 一起重連** | 單元測試：25 人同一個位址，殺掉之後全部重連 | 都進得來：每個網路每間房每分鐘 60 次升級（`ROOM_CONNECT_RATE`），25 人各重試一次也夠 | `tests/worker/chaos.test.ts` |
+| 3 | **SFU 連不上**（API 失敗） | 預覽：一位成員的 `/api/sfu/*` 全部拒絕連線 20 秒；單元測試：transport 連不上 | 她**在會議裡**（別人看得到她的格子、她的聊天送得到），畫面上寫「正在連接媒體伺服器…」或「正在恢復聲音與畫面…」；SFU 回來後下一次重建（1、3、7、15、31 秒…之後每 8 秒）就自己連上，別人看到她、聽到她。超過 60 秒才回來就停在「聲音與畫面中斷了」＋「重試」 | `e2e/chaos.spec.ts`、`tests/app/RoomMedia.test.ts` |
+| 4 | **SFU 的 API 卡住**（不回應） | 單元測試：fetch 永遠不回 | Worker 等 `REALTIME_TIMEOUT_MS`（10 秒）就回 502 `upstream_error`，瀏覽器照第 3 項重建，不會永遠卡在「正在連接」 | `tests/worker/chaos.test.ts` |
+| 5 | **TURN 不可達**（API 卡住或失敗） | 預覽：一位成員的 `/api/turn/*` 永遠不回應；單元測試：Cloudflare 的 TURN API 卡住、拒絕、回錯 | 瀏覽器等 `ICE_CONFIG_TIMEOUT_MS`（6 秒）就用預設的 STUN 連（Worker 自己等 Cloudflare `TURN_API_TIMEOUT_MS` 5 秒後也回「只有 STUN」）；一般網路照常互看互聽，只有擋 UDP 的網路連不上 | `e2e/chaos.spec.ts`、`tests/worker/chaos.test.ts`、`tests/worker/turn.test.ts`、`tests/app/RoomMedia.test.ts` |
+| 6 | **媒體路徑本身斷掉**（UDP 被擋、Wi-Fi 斷） | 擁有者：手機關 Wi-Fi 30 秒（§5 短版第 11 步，AC-2.5） | ICE `disconnected` 4 秒內自己好就沒事，否則重建 session；回來後互看互聽 | 擁有者（瀏覽器測試做不到：Playwright 擋不了 WebRTC 的 UDP） |
+| 7 | **TURN 的轉送本身斷掉** | 擁有者：`?ice=relay` 加入（§5 第 12 步）時，在路由器或防火牆擋 `turn.cloudflare.com` | 只走 TURN 的人連不上並看到「聲音與畫面中斷了」；其他人不受影響 | 擁有者（選做） |
+| 8 | **正式站部署時有人在開會** | 擁有者：開一場測試會議（電腦＋手機），合併任何一個 PR 讓它自動部署 | 部署會重啟所有 Durable Object，等於第 1 項：兩邊顯示「連線中斷，正在重新連線…」後幾秒內回來，畫面與聲音沒有斷 | 擁有者（每次部署其實都是一次演練） |
+
+### 怎麼跑
+
+- **單元測試**：`npm test` 就有（`tests/worker/chaos.test.ts`、`tests/app/RoomMedia.test.ts`）。
+- **預覽的瀏覽器演練**：每個 PR 的 CI job `chaos`（`preview.yml`，Playwright 的 `chaos` project）跑 `e2e/chaos.spec.ts`，每項多久恢復寫在 job 的 summary。**自己一個 job**：一個 runner 的網路 10 分鐘只能開 10 間房（`shared/abuse.ts`），和 `e2e` 擠在一起時後面的測試都開不了房（#59 第一次跑就是這樣）。不是必過的檢查。手動跑：`BASE_URL=https://longtalk-pr-<號>.genelee-pro.workers.dev npm run test:e2e -- --project=chaos`。對正式站跑時第 1 項會自己跳過（端點回 404）。
+- **演練端點**只在 `CHAOS_DRILLS` 是 `"1"` 的部署存在（`wrangler.jsonc` 的 `env.preview.vars`）；沒有 token，因為預覽是丟棄式的、房間是測試自己開的。**不要**把它加到最上層的 `vars` 或 `wrangler deploy --var`（測試會擋）。
+
+### 結果
+
+第一次在 PR 預覽跑（#59，2026-11-13，GitHub Actions 的 headless Chromium，Chrome 的假鏡頭與麥克風）：
+
+| 演練 | 結果 |
+| --- | --- |
+| 1 殺 RoomDO | 通過：殺掉後 **1.8 秒**聊天又送得到（Bob 的訊息經新的 object 到 Alice）；兩人都回到原位、殺掉前的聊天還在、畫面與聲音沒有斷 |
+| 3 SFU 連不上 20 秒 | 通過：期間 Carol 在會議裡、聊天送得到、畫面寫「正在連接／恢復」；SFU 回來後 **15 秒**兩邊互看互聽，沒有按任何東西 |
+| 5 TURN 卡住 | 通過：Bob 加入後 **13.5 秒**兩邊互看互聽（等 ICE 設定 6 秒＋連線） |
+| 1、2、4、5 的單元測試 | 通過（`tests/worker/chaos.test.ts`、`tests/app/RoomMedia.test.ts`） |
+| 6–8 | 擁有者還沒跑；跑完把結果寫在這裡 |
+
+**演練中發現的**：
+
+- **Realtime 與 TURN 的 API 卡住時沒有逾時**（已修，見上）。
+- **斷線時打的聊天訊息不會自己送出**：輸入框保留文字並寫「連線中斷，訊息還沒送出；連上後再按一次送出」，重新連上後要再按一次。這是原本的設計（不重複送），演練照這個行為寫。
+- **一個網路 10 分鐘只能開 10 間房**，CI 的 e2e 也受限：演練因此是自己一個 job。

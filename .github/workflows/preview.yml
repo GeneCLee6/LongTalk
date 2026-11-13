@@ -271,13 +271,74 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # O2 (e11-t12): the chaos drills against this preview (e2e/chaos.spec.ts, DEPLOY.md §14): TURN
+  # unreachable, the SFU unreachable and back, the room's Durable Object killed mid-meeting. A job
+  # of its own: its rooms would push the `e2e` job's runner past the room-creation limit, and a
+  # drill that fails must not hide the interop test. Skipped like `e2e`. Not a required check.
+  chaos:
+    needs: deploy
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_URL: ${{ needs.deploy.outputs.url }}
+      SFU: ${{ needs.deploy.outputs.sfu }}
+      CLOUDFLARE_API_TOKEN: ''
+      CLOUDFLARE_ACCOUNT_ID: ''
+    steps:
+      - name: Is there a preview with the SFU?
+        id: check
+        run: |
+          if [ -z "$BASE_URL" ] || [ "$SFU" != "true" ]; then
+            echo "::notice::No preview with the Realtime SFU; skipping the chaos drills"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.check.outputs.run == 'true'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@v7
+        if: steps.check.outputs.run == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies and Chromium
+        if: steps.check.outputs.run == 'true'
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Chaos drills against the preview
+        if: steps.check.outputs.run == 'true'
+        # How long each drill took to heal goes to the job summary too
+        run: |
+          set +e
+          npm run test:e2e -- --project=chaos 2>&1 | tee chaos.log
+          status=${PIPESTATUS[0]}
+          grep '\[drill\]' chaos.log >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - uses: actions/upload-artifact@v4
+        if: failure() && steps.check.outputs.run == 'true'
+        with:
+          name: chaos
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+
   # e11-t05 (AC-11.5): hammers this preview's room creation and WebSockets within reason
   # (scripts/abuse.ts, about a minute) and checks each limit answers: Turnstile (the preview's test
   # keys), the creation limit, a frame flood, an oversized frame, the connection rate, the security
   # headers, and with PREVIEW_ADMIN_TOKEN the blocklist. After the browser tests (both e2e jobs), so the limits it
   # spends for the runner's network never get in their way. Skipped when there is no preview.
   abuse:
-    needs: [deploy, e2e, e2e-firefox]
+    needs: [deploy, e2e, e2e-firefox, chaos]
     if: always() && github.event.action != 'closed' && needs.deploy.outputs.url != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10

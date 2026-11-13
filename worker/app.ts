@@ -6,6 +6,7 @@ import type { UsageState } from '../shared/usage.ts'
 import type { GuardDeps } from './abuse.ts'
 import { handleAdminBlocks } from './admin-blocks.ts'
 import type { ClientKeyEnv } from './client-key.ts'
+import { CHAOS_PATH, handleChaos, type ChaosEnv } from './chaos.ts'
 import { handleCspReport } from './csp-report.ts'
 import {
   clientKey,
@@ -34,7 +35,14 @@ import type { UsageDO } from './usage-do.ts'
 import { USAGE_OBJECT, type UsageEnv } from './usage.ts'
 
 export interface Env
-  extends SfuEnv, TurnEnv, UsageEnv, TelemetryEnv, TurnstileEnv, ClientKeyEnv, FilesEnv {
+  extends SfuEnv,
+    TurnEnv,
+    UsageEnv,
+    TelemetryEnv,
+    TurnstileEnv,
+    ClientKeyEnv,
+    FilesEnv,
+    ChaosEnv {
   ASSETS: Fetcher
   ROOM: DurableObjectNamespace<RoomDO>
   /** One object for the whole deployment: the month's Realtime egress (e11-t13) */
@@ -160,6 +168,11 @@ async function handleApi(
   }
   if (url.pathname.startsWith('/api/turn/')) {
     return handleTurn(request, env, { room: (roomId) => env.ROOM.get(env.ROOM.idFromName(roomId)) })
+  }
+  if (url.pathname.startsWith(CHAOS_PATH)) {
+    return handleChaos(request, env, url, {
+      room: (roomId) => env.ROOM.get(env.ROOM.idFromName(roomId)),
+    })
   }
   if (url.pathname === '/api/usage') {
     if (request.method !== 'GET') {

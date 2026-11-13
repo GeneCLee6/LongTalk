@@ -48,6 +48,7 @@ import { requestClientKey } from './client-key.ts'
 import { GUARD_OBJECT } from './guard.ts'
 import type { OffenceKind } from '../shared/abuse.ts'
 import { ACCOUNT_HEADER } from './session.ts'
+import { chaosEnabled } from './chaos.ts'
 
 /**
  * What each hibernatable socket carries, so the connections survive the object waking up;
@@ -316,6 +317,15 @@ export class RoomDO extends DurableObject<Env> {
     await this.ctx.storage.deleteAll()
     await this.ctx.storage.deleteAlarm()
     this.alarmAt = null
+  }
+
+  /**
+   * RPC from the chaos drill (worker/chaos.ts, previews only): throws this object away as a crash
+   * would; the sockets close and the next request builds it again from storage
+   */
+  async chaosKill(): Promise<void> {
+    if (!chaosEnabled(this.env)) return
+    this.ctx.abort('chaos drill')
   }
 
   /** RPC from the SFU proxy (worker/sfu.ts) before every call */
