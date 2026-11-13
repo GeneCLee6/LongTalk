@@ -90,7 +90,8 @@ import type { VideoDemandStore } from './videoDemand.ts'
 // is desired and not yet received, and unsubscribes what is received and no longer desired.
 // Calling it again with the same list does nothing, so it can run on every room patch. A
 // subscription that fails ("not there yet": the publisher's first packets have not reached the
-// SFU; or a refused call) is retried with backoff, 2, 4, 8 s up to every RETRY_MAX_MS, for as long
+// SFU; or a refused call) is retried with backoff, 2, 4, 8 s (a screen: from 0.4 s, in a batch of
+// its own) up to every RETRY_MAX_MS, for as long
 // as the track is listed: the publisher may only become ready later. A change to the listed track
 // (its publisher reported it again) retries at once. A publish that fails is retried the same way.
 //
@@ -99,8 +100,9 @@ import type { VideoDemandStore } from './videoDemand.ts'
 // they draw each track (`demand`, videoDemand.ts); a change (a resize, a page turned, a strip
 // scrolled, a tile hidden) or a new subscription recomputes every layer after LAYER_DEBOUNCE_MS
 // (media/layers.ts: size, visibility, budget, hysteresis), and only the ones that changed go to
-// the SFU. A camera starts at medium and a screen at high until its tile reports. Without a
-// demand store nothing is recomputed.
+// the SFU. A camera starts at medium until its tile reports. A screen starts at medium too and
+// keeps it until its first frames are drawn (each switch waits for a keyframe), with keyframe
+// nudges meanwhile (SCREEN_KEYFRAME_NUDGES_MS). Without a demand store nothing is recomputed.
 //
 // Only what is in sight (L1, e2-t18, e10-t01; media/subscriptions.ts, `visibleOnly`): a camera is
 // received when a tile shows it (demand.inSight(): Stage says so, TileSeat reports it), when
@@ -239,6 +241,8 @@ export interface RoomMediaOptions {
   retryDelayMs?: number
   /** Longest wait between retries */
   retryMaxMs?: number
+  /** Wait before the first retry of a screen subscription (SCREEN_RETRY_DELAY_MS) */
+  screenRetryDelayMs?: number
   /** How long a dropped media connection may take to come back by itself before a rebuild */
   disconnectGraceMs?: number
   /** A session this long without failing resets the rebuild backoff */
@@ -282,8 +286,26 @@ export const STATS_POLL_MS = 2_000
 export const KEEP_WHEN_CUT = 2
 /** A kept camera stays this long after it was last listed (the speaker changes often) */
 export const KEEP_HOLD_MS = 15_000
-/** The layer a received video starts with, before its tile reports (e2-t12) */
-export const INITIAL_LAYER: Record<'cam' | 'screen', Layer> = { cam: 'medium', screen: 'high' }
+/**
+ * The layer a received video starts with, before its tile reports (e2-t12). A screen starts at
+ * `h` (was `f`): the layer the sharer surely sends from its first frame (Chrome turns `f` on only
+ * once its estimate allows, encoding.ts), and a keyframe about a quarter of 1080p's, so the
+ * picture shows sooner; it moves up once it is there (SCREEN_FIRST_FRAME_HOLD_MS)
+ */
+export const INITIAL_LAYER: Record<'cam' | 'screen', Layer> = { cam: 'medium', screen: 'medium' }
+/**
+ * A new screen keeps its first layer until its first frames are drawn (its tile reports the
+ * picture's size), at most this long: every layer switch waits for a keyframe of the new layer,
+ * and a still screen sends one only when asked, so a switch before the first picture only delays it
+ */
+export const SCREEN_FIRST_FRAME_HOLD_MS = 4_000
+/**
+ * A screen subscription asks the SFU for its layer again this long after it lands (a keyframe
+ * request upstream), and once more at the second time if its tile has drawn nothing yet
+ */
+export const SCREEN_KEYFRAME_NUDGES_MS: readonly [number, number] = [300, 1_500]
+/** The first retry of a screen that could not be subscribed: everyone is waiting for it */
+export const SCREEN_RETRY_DELAY_MS = 400
 
 /** Errors that a new session would not fix */
 const FINAL_ERRORS: ReadonlySet<MediaTransportErrorCode> = new Set([
@@ -442,6 +464,11 @@ export class RoomMedia {
   private readonly attempts = new Map<string, number>()
   /** Tracks that ended on their own (their publisher stopped them) while still listed */
   private readonly ended = new Set<string>()
+  /** Received screens with no picture yet, by trackKey: when they were received */
+  private readonly screenSince = new Map<string, number>()
+  /** Keyframe nudges waiting to be sent (SCREEN_KEYFRAME_NUDGES_MS) */
+  private readonly nudgeTimers = new Set<Timer>()
+  private readonly screenRetryDelayMs: number
 
   constructor(options: RoomMediaOptions) {
     this.createTransport = options.createTransport ?? null
@@ -453,6 +480,7 @@ export class RoomMedia {
     this.statsIntervalMs = options.statsIntervalMs ?? STATS_INTERVAL_MS
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS
     this.retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS
+    this.screenRetryDelayMs = options.screenRetryDelayMs ?? SCREEN_RETRY_DELAY_MS
     this.disconnectGraceMs = options.disconnectGraceMs ?? DISCONNECT_GRACE_MS
     this.stableAfterMs = options.stableAfterMs ?? STABLE_AFTER_MS
     this.backoff = options.backoff ?? new Backoff({ giveUpAfterMs: RECONNECT_GRACE_MS })
@@ -725,7 +753,7 @@ export class RoomMedia {
   reconcile(): void {
     this.updatePaused()
     if (this.closed || this.state.status !== 'connected') return
-    const missing: { key: string; track: MemberTrack; muted: boolean }[] = []
+    const missing: { key: string; track: MemberTrack; muted: boolean; kind: TrackKind }[] = []
     for (const [key, track] of this.desired) {
       if (key in this.state.received || this.pending.has(key) || this.ended.has(key)) continue
       if (!this.wants(key)) {
@@ -734,7 +762,7 @@ export class RoomMedia {
         continue
       }
       if (this.retryTimers.has(key)) continue
-      missing.push({ key, track, muted: track.muted })
+      missing.push({ key, track, muted: track.muted, kind: track.kind })
     }
     const going = Object.keys(this.state.received).filter((key) => !this.wants(key))
     if (going.length > 0) {
@@ -992,7 +1020,29 @@ export class RoomMedia {
   /** Asks the SFU for each received video's layer, where it changed (media/layers.ts) */
   private applyLayers(): void {
     if (this.closed || !this.demand || !this.ready || this.state.status !== 'connected') return
-    this.askLayers(chooseLayers(this.receivedInputs(), this.layerBudget()))
+    const chosen = chooseLayers(this.receivedInputs(), this.layerBudget())
+    // A new screen keeps its first layer until its picture is there (SCREEN_FIRST_FRAME_HOLD_MS)
+    for (const key of this.heldScreens()) {
+      const layer = this.state.layers[key]
+      if (layer) chosen.set(key, layer)
+    }
+    this.askLayers(chosen)
+  }
+
+  /** Received screens still waiting for their first picture, within SCREEN_FIRST_FRAME_HOLD_MS */
+  private heldScreens(): string[] {
+    const held: string[] = []
+    const now = this.now()
+    for (const [key, since] of this.screenSince) {
+      const received = this.state.received[key]
+      const drawn = received && this.demand?.get(received.track)?.sourceShortSide
+      if (!received || drawn || now - since >= SCREEN_FIRST_FRAME_HOLD_MS) {
+        this.screenSince.delete(key)
+        continue
+      }
+      held.push(key)
+    }
+    return held
   }
 
   private layerBudget(): number {
@@ -1302,9 +1352,12 @@ export class RoomMedia {
       })
       this.reportTracks()
       // A new publish sends every layer; applyScreenTop applies the uplink's ceiling (e2-t15),
-      // applyScreenMode the share mode (e3-t06)
+      // applyScreenMode the share mode (e3-t06). A new share starts with its top layer: a step
+      // the uplink took before it would turn `f` off at once (adaptation.ts shareStarted)
       this.sendingScreenTop = 'high'
       this.sendingScreenMode = null
+      const uplink = this.uplink.shareStarted()
+      if (uplink !== this.state.uplink) this.update({ uplink })
     } catch (error) {
       if (this.closed || transport !== this.transport) return
       const code = errorCode(error)
@@ -1479,6 +1532,10 @@ export class RoomMedia {
         layers[key] = layer
         arrived = true
       }
+      if (track.kind === 'screen') {
+        this.screenSince.set(key, this.now())
+        this.nudgeKeyFrames(transport, key, result.value.track)
+      }
     })
     if (this.closed) return
     this.update({ received, layers })
@@ -1486,19 +1543,48 @@ export class RoomMedia {
     if (gone.length > 0) await transport.unsubscribeMany(gone).catch(() => undefined)
   }
 
+  /**
+   * Asks the SFU for a new screen's layer again (MediaTransport.requestKeyFrame): at the first
+   * nudge in any case, at the second only while its tile has drawn nothing. A still screen sends a
+   * keyframe only when asked, and the SFU merges requests (ADR-001: about 0.4 a second reach the
+   * sharer), so a first keyframe missed would otherwise cost seconds.
+   */
+  private nudgeKeyFrames(transport: MediaTransport, key: string, track: MediaStreamTrack): void {
+    const [soon, later] = SCREEN_KEYFRAME_NUDGES_MS
+    const nudge = (onlyIfBlank: boolean) => {
+      const timer = setTimeout(
+        () => {
+          this.nudgeTimers.delete(timer)
+          const received = this.state.received[key]
+          if (this.closed || transport !== this.transport || received?.track !== track) return
+          if (onlyIfBlank && this.demand?.get(track)?.sourceShortSide) return
+          void transport.requestKeyFrame(received).catch(() => undefined)
+        },
+        onlyIfBlank ? later : soon,
+      )
+      this.nudgeTimers.add(timer)
+    }
+    nudge(false)
+    nudge(true)
+  }
+
   private retryLater(key: string): void {
     const attempts = (this.attempts.get(key) ?? 0) + 1
     this.attempts.set(key, attempts)
-    const timer = setTimeout(() => {
-      this.retryTimers.delete(key)
-      this.reconcile()
-    }, this.retryWait(attempts))
+    const screen = this.desired.get(key)?.kind === 'screen'
+    const timer = setTimeout(
+      () => {
+        this.retryTimers.delete(key)
+        this.reconcile()
+      },
+      this.retryWait(attempts, screen ? this.screenRetryDelayMs : this.retryDelayMs),
+    )
     this.retryTimers.set(key, timer)
   }
 
-  /** The wait before retry number `attempts`: doubling from retryDelayMs up to retryMaxMs */
-  private retryWait(attempts: number): number {
-    const delay = Math.min(this.retryDelayMs * 2 ** (attempts - 1), this.retryMaxMs)
+  /** The wait before retry number `attempts`: doubling from `base` up to retryMaxMs */
+  private retryWait(attempts: number, base = this.retryDelayMs): number {
+    const delay = Math.min(base * 2 ** (attempts - 1), this.retryMaxMs)
     return Math.round(delay * (0.85 + Math.random() * 0.3))
   }
 
@@ -1521,6 +1607,9 @@ export class RoomMedia {
   private clearRetries(): void {
     for (const timer of this.retryTimers.values()) clearTimeout(timer)
     this.retryTimers.clear()
+    for (const timer of this.nudgeTimers) clearTimeout(timer)
+    this.nudgeTimers.clear()
+    this.screenSince.clear()
     this.attempts.clear()
     if (this.publishTimer !== null) clearTimeout(this.publishTimer)
     this.publishTimer = null
@@ -1639,6 +1728,8 @@ export class RoomMedia {
     const before = this.uplink.state
     const after = this.uplink.step({
       pressure: verdict === 'poor' ? 'bandwidth' : limit,
+      // Heavy loss is real congestion; the encoder's own limit may be a new share's ramp-up
+      encoderOnly: verdict !== 'poor' && limit === 'bandwidth',
       clear: limit === null && verdict === 'good',
       cam: sends('cam'),
       screen: sends('screen'),
@@ -1681,6 +1772,7 @@ export class RoomMedia {
     for (const key of keys) {
       delete received[key]
       delete layers[key]
+      this.screenSince.delete(key)
     }
     this.update({ received, layers })
   }

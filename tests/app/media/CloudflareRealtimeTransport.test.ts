@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CloudflareRealtimeTransport } from '../../../src/media/CloudflareRealtimeTransport.ts'
+import {
+  CloudflareRealtimeTransport,
+  SCREEN_KEYFRAME_AFTER_MS,
+} from '../../../src/media/CloudflareRealtimeTransport.ts'
 
 // A scripted stand-in for RTCPeerConnection: enough to check that the transport makes the
 // Realtime calls in the documented order with the documented bodies. The real browser path is
@@ -343,6 +346,88 @@ describe('CloudflareRealtimeTransport', () => {
     expect(calls.at(-2)?.body).toEqual({
       tracks: [{ location: 'remote', sessionId: 'them', trackName: 'mic-1' }],
     })
+  })
+
+  it('asks for the layer a subscription already has again, as a keyframe nudge', async () => {
+    const { transport, calls } = setup({
+      'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+      'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+        requiresImmediateRenegotiation: true,
+        sessionDescription: { type: 'offer', sdp: 'pull-mid-3' },
+        tracks: [{ mid: '3', sessionId: 'them', trackName: 'screen-1' }],
+      },
+      'PUT /api/sfu/abcdefghij/sessions/me/renegotiate': {},
+      'PUT /api/sfu/abcdefghij/sessions/me/tracks/update': { tracks: [{ mid: '3' }] },
+    })
+    await transport.connect()
+    const ref = { sessionId: 'them', trackName: 'screen-1' }
+    // Not subscribed: nothing asked, nothing thrown
+    await transport.requestKeyFrame(ref)
+    await transport.subscribe(ref, { layer: 'medium' })
+    await transport.requestKeyFrame(ref)
+    await transport.requestKeyFrame(ref)
+    const updates = calls.filter((c) => c.url.endsWith('/tracks/update'))
+    expect(updates.map((c) => c.body)).toEqual(
+      Array(2).fill({
+        tracks: [
+          {
+            location: 'remote',
+            mid: '3',
+            sessionId: 'them',
+            trackName: 'screen-1',
+            simulcast: {
+              preferredRid: 'h',
+              priorityOrdering: 'none',
+              ridNotAvailable: 'asciibetical',
+            },
+          },
+        ],
+      }),
+    )
+  })
+
+  it('has a published screen send a fresh keyframe a moment after its first packets', async () => {
+    vi.useFakeTimers()
+    try {
+      const { transport, pc } = setup({
+        'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+        'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+          sessionDescription: { type: 'answer', sdp: 'sfu-answer' },
+          tracks: [{ mid: '0', trackName: 'x' }],
+        },
+      })
+      const generated: string[] = []
+      const add = pc.addTransceiver.bind(pc)
+      pc.addTransceiver = (t: unknown, init?: unknown) => {
+        const transceiver = add(t, init)
+        const kind = (t as { label: string }).label
+        Object.assign(transceiver.sender, {
+          generateKeyFrame: vi.fn(async () => void generated.push(kind)),
+        })
+        return transceiver
+      }
+      await transport.connect()
+      const video = (label: string) => ({ kind: 'video', label }) as unknown as MediaStreamTrack
+      await transport.publish(video('cam'), { kind: 'cam' })
+      await transport.publish(video('screen'), { kind: 'screen' })
+      await vi.advanceTimersByTimeAsync(SCREEN_KEYFRAME_AFTER_MS - 1)
+      expect(generated).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(generated).toEqual(['screen'])
+      // A browser without generateKeyFrame: nothing happens, nothing throws
+      const plain = setup({
+        'POST /api/sfu/abcdefghij/sessions': { sessionId: 'me' },
+        'POST /api/sfu/abcdefghij/sessions/me/tracks': {
+          sessionDescription: { type: 'answer', sdp: 'sfu-answer' },
+          tracks: [{ mid: '0', trackName: 'x' }],
+        },
+      })
+      await plain.transport.connect()
+      await plain.transport.publish(video('screen'), { kind: 'screen' })
+      await vi.advanceTimersByTimeAsync(SCREEN_KEYFRAME_AFTER_MS)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('answers an SFU offer that comes back from tracks/update, and asks again after a refusal', async () => {

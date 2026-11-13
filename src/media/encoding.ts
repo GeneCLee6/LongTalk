@@ -60,6 +60,16 @@ export interface SimulcastLayer {
  * Bitrates follow libwebrtc's own simulcast ladder for these sizes, the top layer a little under
  * its 2.5 Mbps for 720p (a receiver only asks for it for a big tile). The screen's second layer
  * is for small screens and thin links: half size at a lower frame rate.
+ *
+ * A new share's first frames (field complaint 2026-11-13, 「分享要等很久才看得到」): Chrome only
+ * turns a top layer on once its estimate covers the lower layer plus the top one's minimum (about
+ * 0.6 + 0.8 Mbps here), and a share often starts below that, so `f` comes seconds late while `h`
+ * goes out from the first frame. The screen stays two layers anyway: single-layer (even only in
+ * small rooms, which grow) would send 1080p to phones and thin links with nothing to fall back
+ * to, and starting with only `f` active would do the same for the first seconds. Instead a viewer
+ * starts at `h` (RoomMedia INITIAL_LAYER: a small keyframe, on a layer that is surely flowing)
+ * and moves to `f` once the picture is there; the publish resets the uplink's screen step
+ * (adaptation.ts shareStarted), and the new allocation makes Chrome probe upward by itself.
  */
 export const SIMULCAST: Record<'cam' | 'screen', readonly SimulcastLayer[]> = {
   cam: [

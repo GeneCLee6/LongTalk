@@ -89,6 +89,15 @@ describe('subscribeBatches', () => {
     expect(subscribeBatches([])).toEqual([])
   })
 
+  it('puts screens first, in a batch of their own', () => {
+    const batches = subscribeBatches([
+      { id: 'mic', muted: false, kind: 'mic' },
+      { id: 'screen', muted: false, kind: 'screen' },
+      { id: 'cam', muted: true, kind: 'cam' },
+    ])
+    expect(batches.map((b) => b.map((t) => t.id))).toEqual([['screen'], ['mic', 'cam']])
+  })
+
   it('puts muted tracks last', () => {
     const [first, second] = subscribeBatches([...tracks(1, true), ...tracks(2)], 2)
     expect(first.map((t) => t.id)).toEqual(['u0', 'u1'])

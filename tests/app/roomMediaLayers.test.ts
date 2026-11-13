@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ClientMessage, MemberTrack } from '../../shared/protocol.ts'
 import { FakeSfu } from '../../src/media/FakeTransport.ts'
 import type { VideoDemand } from '../../src/media/layers.ts'
-import { RoomMedia } from '../../src/room/RoomMedia.ts'
+import {
+  RoomMedia,
+  SCREEN_FIRST_FRAME_HOLD_MS,
+  SCREEN_KEYFRAME_NUDGES_MS,
+} from '../../src/room/RoomMedia.ts'
 import { VideoDemandStore } from '../../src/room/videoDemand.ts'
 
 // H1 (e2-t11, e2-t12): RoomMedia publishes cameras and screens in simulcast layers and asks for
@@ -125,25 +129,86 @@ describe('RoomMedia: simulcast layers (e2-t11, e2-t12)', () => {
     expect(bobTransport.preferredLayers.get(camKey)).toBe('low')
   })
 
-  it('starts a received screen at high and keeps a share box on it', async () => {
+  it('starts a received screen at medium, holds it until its picture shows, then sizes it', async () => {
     const { alice, aliceSent, bob, bobTransport, demand } = await room()
     const screen = fakeTrack('video')
     await alice.setScreen(screen)
     bob.setDesired(listed(aliceSent))
     await settle()
     const key = Object.keys(bob.getState().received).find((k) => k.includes('/screen-'))!
-    expect(bobTransport.preferredLayers.get(key)).toBe('high')
+    // `h`: surely sent from the sharer's first frame, and a small keyframe
+    expect(bobTransport.preferredLayers.get(key)).toBe('medium')
     const box = {}
+    // A big share box, no picture yet: no switch (it would wait for another keyframe)
     demand.report(screen, box, drawn(1500, 840))
     await debounced()
     expect(bobTransport.layerRequests.filter((r) => r.key === key)).toEqual([])
+    // The first frames (half of a 1080-line screen): the box needs the top layer
+    demand.report(screen, box, { ...drawn(1500, 840), sourceShortSide: 540 })
+    await debounced()
+    expect(bobTransport.preferredLayers.get(key)).toBe('high')
     // A phone's small share box: the screen's second layer (it has no third)
-    demand.report(screen, box, drawn(390, 220))
+    demand.report(screen, box, { ...drawn(390, 220), sourceShortSide: 1080 })
     await debounced()
     expect(bobTransport.preferredLayers.get(key)).toBe('medium')
-    demand.report(screen, box, drawn(390, 220, false))
+    demand.report(screen, box, { ...drawn(390, 220, false), sourceShortSide: 1080 })
     await debounced()
     expect(bobTransport.preferredLayers.get(key)).toBe('medium')
+  })
+
+  it('stops holding a screen that shows nothing after SCREEN_FIRST_FRAME_HOLD_MS', async () => {
+    const { alice, aliceSent, bob, bobTransport, demand } = await room()
+    const screen = fakeTrack('video')
+    await alice.setScreen(screen)
+    vi.useFakeTimers()
+    try {
+      bob.setDesired(listed(aliceSent))
+      await vi.advanceTimersByTimeAsync(0)
+      const key = Object.keys(bob.getState().received).find((k) => k.includes('/screen-'))!
+      demand.report(screen, {}, drawn(1500, 840))
+      await vi.advanceTimersByTimeAsync(DEBOUNCE * 3)
+      expect(bobTransport.preferredLayers.get(key)).toBe('medium')
+      await vi.advanceTimersByTimeAsync(SCREEN_FIRST_FRAME_HOLD_MS)
+      demand.report(screen, {}, drawn(1501, 840))
+      await vi.advanceTimersByTimeAsync(DEBOUNCE * 3)
+      expect(bobTransport.preferredLayers.get(key)).toBe('high')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('nudges a new screen for a keyframe, and again only while nothing is drawn', async () => {
+    const { alice, aliceSent, bob, bobTransport, demand } = await room()
+    const screen = fakeTrack('video')
+    await alice.setScreen(screen)
+    vi.useFakeTimers()
+    try {
+      bob.setDesired(listed(aliceSent))
+      await vi.advanceTimersByTimeAsync(0)
+      const key = Object.keys(bob.getState().received).find((k) => k.includes('/screen-'))!
+      const [soon, later] = SCREEN_KEYFRAME_NUDGES_MS
+      await vi.advanceTimersByTimeAsync(soon)
+      expect(bobTransport.keyFrameRequests).toEqual([key])
+      await vi.advanceTimersByTimeAsync(later - soon)
+      expect(bobTransport.keyFrameRequests).toEqual([key, key])
+
+      // Another share whose picture is there by the second nudge: one request only
+      await alice.setScreen(null)
+      bob.setDesired(listed(aliceSent))
+      await vi.advanceTimersByTimeAsync(0)
+      const second = fakeTrack('video')
+      await alice.setScreen(second)
+      bob.setDesired(listed(aliceSent))
+      await vi.advanceTimersByTimeAsync(0)
+      const next = Object.keys(bob.getState().received).find(
+        (k) => k.includes('/screen-') && k !== key,
+      )!
+      demand.report(second, {}, { ...drawn(1500, 840), sourceShortSide: 540 })
+      await vi.advanceTimersByTimeAsync(later)
+      expect(bobTransport.keyFrameRequests.filter((k) => k === next)).toEqual([next])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('forgets the layers of a track that left, and asks nothing without a demand store', async () => {

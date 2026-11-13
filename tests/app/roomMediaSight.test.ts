@@ -238,7 +238,7 @@ describe('RoomMedia: only what is in sight (L1)', () => {
     expect(cams).toHaveLength(1)
   })
 
-  it('a screen is always received, starting at its top layer', async () => {
+  it('a screen is always received, starting at its second layer', async () => {
     const { transport, bob, tracks } = await room(1)
     const screen = {
       sessionId: tracks[0].sessionId,
@@ -253,7 +253,7 @@ describe('RoomMedia: only what is in sight (L1)', () => {
     })
     bob.setDesired([...tracks, screen])
     await flush()
-    expect(transport.preferredLayers.get(`${screen.sessionId}/${screen.trackName}`)).toBe('high')
+    expect(transport.preferredLayers.get(`${screen.sessionId}/${screen.trackName}`)).toBe('medium')
   })
 
   it('without visibleOnly everything is received, in a batch', async () => {

@@ -88,6 +88,8 @@ import {
   type AnnotationPolicy,
 } from '../../shared/roles.ts'
 import { useAnnotationStore } from '../room/useAnnotationStore.ts'
+import { useMarkedOnMyShareNotice } from '../room/useMarkedOnMyShareNotice.ts'
+import { useSharePip } from '../room/useSharePip.ts'
 import { SharePicker } from '../components/SharePicker.tsx'
 import { BoardStripTile } from '../components/BoardStripTile.tsx'
 import { SettingsDialog } from '../components/SettingsDialog.tsx'
@@ -1343,6 +1345,47 @@ function Room({
   // Our own share in the main area, where its marks show (J3): only while we share
   const [ownViewWanted, setOwnViewWanted] = useState(false)
   if (ownViewWanted && sharingScreen === null) setOwnViewWanted(false)
+  // What we share may show this page (a whole screen, the meeting itself, or not known to be a
+  // window or a tab): our own view and the floating window then start with the marks only (H5)
+  const ownMirrorRisk =
+    selfCaptureKind !== null ||
+    (screenShare.surface?.surface !== 'window' && screenShare.surface?.surface !== 'browser')
+  // The floating window above other apps (Document Picture-in-Picture, Chrome and Edge)
+  const sharePip = useSharePip(sharingScreen !== null)
+  // Someone drew on our share: we cannot see it unless we look, so we are told. Where our own view
+  // would not show this page again (a window, or a tab other than the meeting), it also opens by
+  // itself, once a share; with a mirror risk only the toast offers it
+  const ownViewOpened = useRef<MediaStreamTrack | null>(null)
+  useMarkedOnMyShareNotice(annotationStore, sharingScreen && state.you, (authors) => {
+    if (!sharingScreen) return
+    const first = memberName.current(authors[0])
+    const text = !first
+      ? strings.screenShare.markingAnon
+      : authors.length > 1
+        ? strings.screenShare.markingMany(first, authors.length - 1)
+        : strings.screenShare.marking(first)
+    const pipOpen = sharePip.window !== null
+    const inFront = pageInFront()
+    const watching = pipOpen || (ownViewWanted && inFront)
+    const opens = !ownMirrorRisk && !ownViewWanted && ownViewOpened.current !== sharingScreen
+    if (opens) {
+      ownViewOpened.current = sharingScreen
+      setOwnViewWanted(true)
+    }
+    if (!watching) {
+      const look =
+        ownViewWanted || opens
+          ? []
+          : [{ label: strings.screenShare.markingLook, onClick: () => setOwnViewWanted(true) }]
+      const float =
+        sharePip.supported && !pipOpen
+          ? [{ label: strings.screenShare.pipOpen, onClick: sharePip.open }]
+          : []
+      show(text, 'neutral', { actions: [...look, ...float] })
+    }
+    // The meeting is behind the shared app: a system notification, only if already allowed
+    if (!inFront && !pipOpen) notifySystem(text)
+  })
   const chooseShare = (memberId: string) => {
     setOwnViewWanted(false)
     setChosenShare(memberId)
@@ -2157,13 +2200,7 @@ function Room({
         }}
         recording={recordingText}
         picker={mainPicker}
-        own={{
-          // Not known to be a window or a tab: it may be everything, the meeting included
-          mirrorRisk:
-            selfCaptureKind !== null ||
-            (screenShare.surface?.surface !== 'window' &&
-              screenShare.surface?.surface !== 'browser'),
-        }}
+        own={{ mirrorRisk: ownMirrorRisk }}
       />
     ) : mainSharer ? (
       <ShareTile
@@ -2360,6 +2397,14 @@ function Room({
                       }
                     : null
                 }
+                pip={
+                  sharePip.supported
+                    ? {
+                        open: sharePip.window !== null,
+                        onToggle: sharePip.window ? sharePip.close : sharePip.open,
+                      }
+                    : null
+                }
                 selfCapture={
                   selfCaptureShown
                     ? {
@@ -2370,6 +2415,18 @@ function Room({
                     : null
                 }
               />
+            )}
+            {sharePip.window && sharingScreen && state.you && (
+              <Suspense fallback={null}>
+                <SharePip
+                  pipWindow={sharePip.window}
+                  track={sharingScreen}
+                  store={annotationStore}
+                  layer={state.you}
+                  nameOf={nameOnMarks}
+                  mirrorRisk={ownMirrorRisk}
+                />
+              </Suspense>
             )}
             <StageBox>
               {inRoom && (
@@ -2882,6 +2939,31 @@ function useShareStartedNotice(
   }, [sharerIds, you, name, show])
 }
 
+/** This page is in front: visible, and the window has the focus (not the app being shared) */
+const pageInFront = (): boolean =>
+  document.visibilityState === 'visible' &&
+  (typeof document.hasFocus !== 'function' || document.hasFocus())
+
+/**
+ * A system notification, for when the meeting's tab is behind what we share: only where it was
+ * already allowed (never asking in the middle of a share), and never failing the room if refused
+ */
+function notifySystem(body: string): void {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+  try {
+    const note = new Notification(strings.screenShare.markingNotifyTitle, {
+      body,
+      tag: 'longtalk-marks',
+    })
+    note.onclick = () => {
+      window.focus()
+      note.close()
+    }
+  } catch {
+    // Some browsers only notify from a service worker: the toast is there when they come back
+  }
+}
+
 /** Someone else opened the whiteboard (J3): it may have just taken the main area */
 function useBoardOpenedNotice(
   by: string | null,
@@ -3100,6 +3182,9 @@ const StatsPanel = lazy(() => import('../components/StatsPanel.tsx'))
 
 /** The whiteboard (J3, e7-t06): its own chunk, loaded when someone first looks at it (rule 6) */
 const Whiteboard = lazy(() => import('../annotate/Whiteboard.tsx'))
+
+/** The sharer's floating window: its own chunk, loaded once the window is open (rule 6) */
+const SharePip = lazy(() => import('../annotate/SharePip.tsx'))
 
 /** 錄影設定 (I4, e8-t03): its own chunk, like the recorder */
 const RecordDialog = lazy(() => import('../components/RecordDialog.tsx'))

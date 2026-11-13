@@ -23,7 +23,12 @@ export interface ShareCameraGuardOptions {
   waitMs?: number
 }
 
-export const CAMERA_OFF_WAIT_MS = 3_000
+/**
+ * Only a fallback: the page calls cameraGone as soon as the camera is neither open nor sent
+ * (RoomMedia's replaceTrack(null), normally within a frame or two), and RoomMedia's queue applies
+ * the camera before the screen anyway. Was 3 s, every one of them added to the share's start
+ */
+export const CAMERA_OFF_WAIT_MS = 1_000
 
 const NOTHING: ShareCameraGuardOptions = {
   cameraOn: () => false,

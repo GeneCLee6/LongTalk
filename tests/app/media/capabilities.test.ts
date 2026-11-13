@@ -3,6 +3,7 @@ import doc from '../../../docs/BROWSER-SUPPORT.md?raw'
 import {
   CAPABILITIES,
   canChooseSpeaker,
+  canDocumentPip,
   canCopy,
   canMeasureLevel,
   canSuppressNoise,
@@ -63,6 +64,7 @@ function fullBrowser(): CapabilityEnv {
     MediaStreamTrackProcessor: class {},
     MediaStreamTrackGenerator: class {},
     VideoFrame: class {},
+    documentPictureInPicture: { requestWindow() {} },
     MediaRecorder: class {
       static isTypeSupported(type: string) {
         return type.startsWith('video/webm')
@@ -106,6 +108,13 @@ describe('capabilities (e11-t04)', () => {
     expect(canSuppressNoise({ ...fullBrowser(), WebAssembly: undefined })).toBe(false)
     // SharedArrayBuffer (cross-origin isolation) is not asked for
     expect('SharedArrayBuffer' in fullBrowser()).toBe(false)
+  })
+
+  it('the floating window needs documentPictureInPicture.requestWindow', () => {
+    expect(canDocumentPip(fullBrowser())).toBe(true)
+    expect(canDocumentPip({ ...fullBrowser(), documentPictureInPicture: undefined })).toBe(false)
+    expect(canDocumentPip({ documentPictureInPicture: {} })).toBe(false)
+    expect(canDocumentPip({ documentPictureInPicture: null })).toBe(false)
   })
 
   it('passkeys need PublicKeyCredential and navigator.credentials (I2)', () => {

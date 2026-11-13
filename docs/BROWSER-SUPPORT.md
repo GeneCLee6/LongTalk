@@ -1,6 +1,6 @@
 # BROWSER-SUPPORT — 瀏覽器支援
 
-最後更新 2026-11-06（L4 加了 `backgroundBlur`、`memberVolume`；加了 `shareStopsCamera`；J1 加了 `fullscreen`；2026-11-04 I4 加了 `localRecording`；2026-11-03 H6 完整版，`e2-t16`；B4 初版 `e11-t04`，之後 C2、D2、G4、H4、H5 各加了幾列）。這份是相容矩陣（AC-2.8、AC-11.6）：每個 `capabilities.ts` 偵測的能力 × 六個目標瀏覽器、沒有時怎麼做、哪些在 CI 跑過、哪些等實機。實機的測法在 [`DEPLOY.md`](../DEPLOY.md) §5「實機測試計畫」。
+最後更新 2026-11-13（分享者的浮動視窗加了 `documentPip`；2026-11-06 L4 加了 `backgroundBlur`、`memberVolume`；加了 `shareStopsCamera`；J1 加了 `fullscreen`；2026-11-04 I4 加了 `localRecording`；2026-11-03 H6 完整版，`e2-t16`；B4 初版 `e11-t04`，之後 C2、D2、G4、H4、H5 各加了幾列）。這份是相容矩陣（AC-2.8、AC-11.6）：每個 `capabilities.ts` 偵測的能力 × 六個目標瀏覽器、沒有時怎麼做、哪些在 CI 跑過、哪些等實機。實機的測法在 [`DEPLOY.md`](../DEPLOY.md) §5「實機測試計畫」。
 
 目標瀏覽器（`PRD/00-prd.md` §9）：Chrome／Edge 最近兩版、Firefox 最近兩版、Safari 17+（macOS）、iOS Safari 17+、Android Chrome。
 
@@ -46,6 +46,7 @@
 | 分享畫面全螢幕（`document.fullscreenEnabled`） | `fullscreen` | ○ | ○ | ○ | ○ | ✕ | ○ | 分享格的控制列沒有全螢幕鈕、雙擊與 F 不作用；縮放與平移照常（`e3-t11`）。iPhone 的 Safari 只有 `<video>` 自己的全螢幕（iPad 有），標註疊不上去，所以不用。實機確認在 `DEPLOY.md` §5 第 29 步 |
 | 背景模糊（`Worker`、`OffscreenCanvas` 能開 WebGL、WebAssembly SIMD，加上 `MediaStreamTrackProcessor`＋`MediaStreamTrackGenerator`＋`VideoFrame` 或 `canvas.captureStream`） | `backgroundBlur` | ● CI | ○ | ○ | ○ | ✕ | ✕ | 設定的「視訊」頁不顯示「背景模糊」（`e6-t06`）。**手機與平板**即使偵測到也不顯示（觸控為主的裝置，`useMediaSettings`）：大檔案與手機的 CPU 沒驗證過。Chromium 走 Insertable Streams（背景分頁也持續）；Firefox、Safari 走 canvas，背景分頁可能停格。CI：headless Chromium 實際載入並跑過（`e2e/local/blur.spec.ts`）。MediaPipe 就算用 CPU 也要 WebGL：CI 的 Linux Firefox 開不了 WebGL，所以不顯示開關；Linux WebKit 頁面上有、worker 裡沒有，偵測看不出來，打開時提示「無法開啟背景模糊」並關掉（`ENGINE_DIFFERENCES` 不比這格，`browsers.spec.ts` 檢查這兩種情況）。Firefox 的 canvas 路只在 Windows 版的 Playwright Firefox 本機跑過一次；Firefox、Safari 本身要實機（`DEPLOY.md` §5 第 33 步）。真的筆電的 CPU 與輪廓都要實機看 |
 | 每人接收音量（`<audio>.volume` 能改） | `memberVolume` | ● CI | ○ | ○ | ○ | ✕ | ○ | 參與者面板不顯示音量滑桿，說明請用裝置的音量鍵；音量條照常（`e6-t08`）。iPhone、iPad 的 `volume` 唯讀（WebKit 的桌面版可以改）。超過 100% 走 Web Audio，同一個 `<audio>` 播放，`setSinkId` 照常。CI：headless Chromium 經真的 PeerConnection 量到 40% 與 200%（`e2e/local/blur.spec.ts`） |
+| 浮動視窗（Document Picture-in-Picture，`documentPictureInPicture.requestWindow`，只在 HTTPS） | `documentPip` | ○ | ○ | ✕ | ✕ | ✕ | ✕ | 「你正在分享畫面」條沒有「浮動視窗」鈕，有人畫標註時的 toast 也沒有這個按鈕；分享者照樣收到 toast「Bob 正在你的分享畫面上畫」（分頁在背景且已允許通知時另有系統通知），按「看標註」或分享視窗／分頁時自動打開「看我的畫面與標註」。Chrome／Edge 116+ 的桌面版才有；要使用者按一下才能開（不會自己跳出來）。分享整個螢幕時浮動視窗也會被分享進去，所以預設只畫標註、不放畫面（同防鏡像的規則）。偵測：Playwright 的 Chromium（HTTPS 頁面）有，Firefox、WebKit 沒有；實際開窗要實機（Chrome、Edge） |
 | 分享時先關鏡頭（預防措施，不是能力；`getDisplayMedia` 加上 `navigator.vendor` 是 `Apple Computer, Inc.`） | `shareStopsCamera` | ✕ | ✕ | ✕ | ● CI | ✕ | ✕ | 這一列的 ✕ 是「不需要」：照常分享，鏡頭和分享一起送。有的瀏覽器（實際上就是 Mac 的 Safari）按分享、選好畫面後先關鏡頭，確定不再送了才發布分享，用 toast 說明原因；分享時鏡頭鈕是灰的並說明；停止分享時，是這個機制關的鏡頭就打開，本來就關著的不動。依據與怎麼拿掉在 §3。CI：Playwright 的 Linux WebKit（`e2e/crossbrowser.spec.ts`）；真的 Safari 未驗證 |
 
 **CI 每次跑什麼**（都不是必過的檢查，`DEPLOY.md` §7）：

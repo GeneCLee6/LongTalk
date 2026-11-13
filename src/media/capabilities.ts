@@ -101,6 +101,13 @@ export interface Capabilities {
    */
   memberVolume: boolean
   /**
+   * window.documentPictureInPicture (Chrome and Edge 116+ on the desktop): the sharer's 浮動視窗, a
+   * small always-on-top window with their share and the marks on it, to watch while working in
+   * what they share. Without it the sharing bar has no such button; the toast and 看我的畫面與標註
+   * still tell and show them
+   */
+  documentPip: boolean
+  /**
    * A precaution, not an ability: this browser can share and is WebKit (in practice Mac Safari).
    * Sending a camera and a screen at once went wrong on Playwright's Linux WebKit (ADR-001
    * 「WebKit 同時送鏡頭與分享」), so the camera goes off while sharing (src/room/ShareCameraGuard.ts).
@@ -136,6 +143,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'fullscreen',
   'backgroundBlur',
   'memberVolume',
+  'documentPip',
   'shareStopsCamera',
 ]
 
@@ -157,6 +165,7 @@ export interface CapabilityEnv {
   MediaStreamTrackProcessor?: unknown
   MediaStreamTrackGenerator?: unknown
   VideoFrame?: unknown
+  documentPictureInPicture?: { requestWindow?: unknown } | null
   document?: {
     fullscreenEnabled?: boolean
     createElement?: (tag: 'audio') => { volume: number }
@@ -393,6 +402,11 @@ export function canSetMemberVolume(env: CapabilityEnv = browser()): boolean {
   }
 }
 
+/** Whether a page can open a Document Picture-in-Picture window (Chromium on the desktop) */
+export function canDocumentPip(env: CapabilityEnv = browser()): boolean {
+  return typeof env.documentPictureInPicture?.requestWindow === 'function'
+}
+
 /**
  * Whether the camera goes off while sharing (ADR-001 「WebKit 同時送鏡頭與分享」): no API can tell
  * that two encoders fail together, so this asks for the engine. navigator.vendor is not the user
@@ -431,6 +445,7 @@ export function detectCapabilities(env: CapabilityEnv = browser()): Capabilities
     fullscreen: canFullscreen(env),
     backgroundBlur: canBlurBackground(env),
     memberVolume: canSetMemberVolume(env),
+    documentPip: canDocumentPip(env),
     shareStopsCamera: shareStopsCamera(env),
   }
 }

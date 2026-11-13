@@ -6,6 +6,7 @@ import { Backoff } from '../../src/room/backoff.ts'
 import {
   LOW_QUALITY_VIDEO,
   RoomMedia,
+  SCREEN_RETRY_DELAY_MS,
   type IceConfig,
   type RoomMediaOptions,
 } from '../../src/room/RoomMedia.ts'
@@ -236,6 +237,22 @@ describe('RoomMedia: desired / actual subscriptions (e2-t04)', () => {
     a.media.setDesired([ghost])
     await vi.advanceTimersByTimeAsync(0)
     expect(subscribe).toHaveBeenCalledTimes(tries + 1)
+    await a.media.close()
+  })
+
+  it('retries a screen that could not be subscribed after SCREEN_RETRY_DELAY_MS', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = member(sfu, { retryDelayMs: 2000 })
+    await a.media.start({ mic: null, cam: null })
+    const subscribe = vi.spyOn(a.transport, 'subscribe')
+    a.media.setDesired([
+      { sessionId: 'nobody', trackName: 'screen-1', kind: 'screen', muted: false },
+    ])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(subscribe).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(SCREEN_RETRY_DELAY_MS * 1.15)
+    expect(subscribe).toHaveBeenCalledTimes(2)
     await a.media.close()
   })
 
@@ -703,7 +720,8 @@ describe('RoomMedia: sharing the screen (e3-t01)', () => {
     // Everyone else receives it like any track
     b.media.setDesired(listed(a))
     await settle()
-    expect(Object.values(b.media.getState().received).map((r) => r.kind)).toEqual(['mic', 'screen'])
+    // The screen goes first, in a batch of its own (subscriptions.ts subscribeBatches)
+    expect(Object.values(b.media.getState().received).map((r) => r.kind)).toEqual(['screen', 'mic'])
     await a.media.setScreen(null)
     expect(kinds(a)).toEqual(['mic'])
     expect(sfu.published.size).toBe(1)
@@ -841,8 +859,8 @@ describe("RoomMedia: the screen's sound (e3-t04)", () => {
     b.media.setDesired(listed(a))
     await settle()
     expect(Object.values(b.media.getState().received).map((r) => r.kind)).toEqual([
-      'mic',
       'screen',
+      'mic',
       'screenAudio',
     ])
   })
