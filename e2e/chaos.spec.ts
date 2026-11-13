@@ -64,6 +64,12 @@ async function join(
   await page.getByRole('textbox', { name: strings.prejoin.nameLabel }).fill(name)
   await page.getByRole('button', { name: strings.prejoin.join, exact: true }).click()
   await expect(page.getByRole('region', { name: strings.room.grid })).toBeVisible()
+  // The chat stays open from here on: its button's name changes with unread messages
+  await page
+    .getByRole('toolbar', { name: strings.devices.controls })
+    .getByRole('button', { name: strings.toolbar.chat, exact: true })
+    .click()
+  await expect(page.getByRole('textbox', { name: strings.chat.inputLabel })).toBeVisible()
   return { name, context, page }
 }
 
@@ -133,17 +139,20 @@ async function expectReceiving(viewer: Member, other: Member, timeout = 30_000) 
     .toBeGreaterThan(AUDIBLE)
 }
 
-async function say(member: Member, text: string) {
+/**
+ * Sends a chat message. While the room's socket is down the box keeps the text and says to send
+ * again once connected (ChatPanel): so Enter is pressed again until it goes, up to `timeout`
+ */
+async function say(member: Member, text: string, timeout = 5_000) {
   const box = member.page.getByRole('textbox', { name: strings.chat.inputLabel })
-  if (!(await box.isVisible())) await toolbarButton(member, strings.toolbar.chat).click()
   await box.fill(text)
-  await box.press('Enter')
-  await expect(box).toHaveValue('')
+  await expect(async () => {
+    await box.press('Enter')
+    await expect(box).toHaveValue('', { timeout: 1_000 })
+  }).toPass({ timeout, intervals: [500] })
 }
 
 async function expectChat(member: Member, text: string, timeout = 30_000) {
-  const box = member.page.getByRole('textbox', { name: strings.chat.inputLabel })
-  if (!(await box.isVisible())) await toolbarButton(member, strings.toolbar.chat).click()
   await expect(member.page.getByRole('log', { name: strings.chat.messages })).toContainText(text, {
     timeout,
   })
@@ -212,9 +221,10 @@ drill(
     await say(carol, '我的媒體連不上，但聊天可以')
     await expectChat(alice, '我的媒體連不上，但聊天可以')
     await expect(
-      carol.page.getByText(strings.room.mediaReconnecting).or(
-        carol.page.getByText(strings.room.mediaConnecting),
-      ),
+      carol.page
+        .getByText(strings.room.mediaReconnecting)
+        .or(carol.page.getByText(strings.room.mediaConnecting))
+        .first(),
     ).toBeVisible()
     expect(await remoteVideo(alice, carol).count()).toBe(0)
 
@@ -246,7 +256,7 @@ drill(
     expect(res.status()).toBe(200)
 
     // Both come back by themselves: a message after the kill goes through the new object
-    await say(bob, '殺掉之後的訊息')
+    await say(bob, '殺掉之後的訊息', 60_000)
     await expectChat(alice, '殺掉之後的訊息')
     console.log(`[drill] DO killed: chat works again after ${(Date.now() - killed) / 1000}s`)
     for (const member of [alice, bob]) {

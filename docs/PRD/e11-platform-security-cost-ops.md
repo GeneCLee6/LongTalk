@@ -72,7 +72,7 @@ depends_on: []
 - [x] AC-11.6 — `BROWSER-SUPPORT.md` 完整且與 `capabilities.ts` 一致。（H6 #35：18 項能力 × 6 個瀏覽器全部有記號與退路；一致性兩道檢查：`tests/app/media/capabilities.test.ts` 比對列、順序、欄位與記號，`e2e/local/browsers.spec.ts` 在 Chromium、Firefox、WebKit 裡跑 app 自己的偵測和 Chrome、Firefox、Safari 欄比對。實機的 ● 是 AC-2.8 的事）
 - [x] AC-11.7 — CSP、HSTS、Permissions-Policy、COOP；`npm audit` 無高風險；secrets 不進前端（lint 擋）。（I1 #36：`public/_headers`＝`shared/security-headers.ts`；CI 的 `npm audit --omit=dev --audit-level=high`；`scripts/secrets.ts` 在 lint 與 budget）
 - [x] AC-11.8 — 隱私權政策頁、資料保留表、錄影同意清單、刪除請求流程；R2 到期刪除與 D1 備份有排程測試。（I5 #40 做完後半句：R2 到期刪除、D1 備份、還原演練都有假時鐘的排程測試。I6 #43 做完前半句：`/privacy` 繁中與英文，保留表的數字直接讀常數、常數變了測試失敗；同意清單在頁面與 `e8` 文件；刪除請求：登入者在 `/me`，其他人照 `shared/privacy.ts` 的 `PRIVACY_CONTACT`，擁有者的步驟在 `DEPLOY.md` §13。這條勾的是「這些東西都有」，**不代表**法律上已經審過：律師要看的問題在 `NEXT.md`）
-- [x] AC-11.9 — E2EE 可行性 ADR。（O2 #PR：`docs/adr-002-e2ee.md`。結論：在 Realtime 上做得到（Cloudflare 的 Orange Meets 已經這樣做、SFU 不用改），但只給朋友用、擁有者自己維運，多擋的只有 Cloudflare 的機器，代價是相容性與雲端錄影類功能，所以**現在不做**；寫了觸發條件與一天的 spike 步驟。不涉及媒體實作，不用兩台裝置）
+- [x] AC-11.9 — E2EE 可行性 ADR。（O2 #59：`docs/adr-002-e2ee.md`。結論：在 Realtime 上做得到（Cloudflare 的 Orange Meets 已經這樣做、SFU 不用改），但只給朋友用、擁有者自己維運，多擋的只有 Cloudflare 的機器，代價是相容性與雲端錄影類功能，所以**現在不做**；寫了觸發條件與一天的 spike 步驟。不涉及媒體實作，不用兩台裝置）
 - [ ] AC-11.10 — 多租戶：帳號配額、方案、擁有者後台。
 - [x] AC-11.11 — **只用免費額度**：Realtime（SFU＋TURN）每月流出有計數；達 800 GB 新連線預設低畫質、達 950 GB 不再建立新的視訊 session（只留音訊）、每月 1 日歸零；門檻可設定、有測試、`/api/usage` 可查。
 
@@ -99,9 +99,9 @@ depends_on: []
 
 ### M3
 
-- [x] `e11-t10` E2EE 可行性研究 ADR（`docs/adr-002-e2ee.md`：威脅模型、Encoded Transform 的瀏覽器支援、對錄影／標註／白板／代理／分組的影響、金鑰怎麼發的三個選項；決定現在不做，觸發條件與 spike 步驟） · AC-11.9 · S · O2 #PR
+- [x] `e11-t10` E2EE 可行性研究 ADR（`docs/adr-002-e2ee.md`：威脅模型、Encoded Transform 的瀏覽器支援、對錄影／標註／白板／代理／分組的影響、金鑰怎麼發的三個選項；決定現在不做，觸發條件與 spike 步驟） · AC-11.9 · S · O2 #59
 - [ ] `e11-t11` 多租戶：配額、方案、擁有者後台（與 E1 `e1-t19`） · AC-11.10 · M · ← e1-t12
-- [x] `e11-t12` 混沌演練清單與執行（殺 DO、斷 SFU、TURN 不可達）（`DEPLOY.md` §14 八項清單；`tests/worker/chaos.test.ts` 每次提交跑、`e2e/chaos.spec.ts` 每個 PR 預覽跑；預覽才有的 `POST /api/chaos/rooms/<id>/kill`（`worker/chaos.ts`，`CHAOS_DRILLS`）；演練找到並修掉：SFU 與 TURN 的 API 卡住時沒有逾時（Worker 10 秒／5 秒、瀏覽器等 ICE 6 秒）。前提 `e10-t03` 跟著 L2 跳過，負載部分沒做。AC-11.3 不勾：告警還是只有 `/admin` 的旗標） · AC-11.3 · S · O2 #PR
+- [x] `e11-t12` 混沌演練清單與執行（殺 DO、斷 SFU、TURN 不可達）（`DEPLOY.md` §14 八項清單；`tests/worker/chaos.test.ts` 每次提交跑、`e2e/chaos.spec.ts` 每個 PR 預覽跑；預覽才有的 `POST /api/chaos/rooms/<id>/kill`（`worker/chaos.ts`，`CHAOS_DRILLS`）；演練找到並修掉：SFU 與 TURN 的 API 卡住時沒有逾時（Worker 10 秒／5 秒、瀏覽器等 ICE 6 秒）。前提 `e10-t03` 跟著 L2 跳過，負載部分沒做。AC-11.3 不勾：告警還是只有 `/admin` 的旗標） · AC-11.3 · S · O2 #59
 
 ## 風險與對策
 

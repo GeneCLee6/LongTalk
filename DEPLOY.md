@@ -923,7 +923,7 @@ X-Frame-Options: DENY
 ### 怎麼跑
 
 - **單元測試**：`npm test` 就有（`tests/worker/chaos.test.ts`、`tests/app/RoomMedia.test.ts`）。
-- **預覽的瀏覽器演練**：每個 PR 的 CI `e2e` 會跑 `e2e/chaos.spec.ts`（和 interop 同一個 job）。手動跑：`BASE_URL=https://longtalk-pr-<號>.genelee-pro.workers.dev npm run test:e2e -- --project=chromium chaos.spec.ts`。對正式站跑時第 1 項會自己跳過（端點回 404）。
+- **預覽的瀏覽器演練**：每個 PR 的 CI job `chaos`（`preview.yml`，Playwright 的 `chaos` project）跑 `e2e/chaos.spec.ts`，每項多久恢復寫在 job 的 summary。**自己一個 job**：一個 runner 的網路 10 分鐘只能開 10 間房（`shared/abuse.ts`），和 `e2e` 擠在一起時後面的測試都開不了房（#59 第一次跑就是這樣）。不是必過的檢查。手動跑：`BASE_URL=https://longtalk-pr-<號>.genelee-pro.workers.dev npm run test:e2e -- --project=chaos`。對正式站跑時第 1 項會自己跳過（端點回 404）。
 - **演練端點**只在 `CHAOS_DRILLS` 是 `"1"` 的部署存在（`wrangler.jsonc` 的 `env.preview.vars`）；沒有 token，因為預覽是丟棄式的、房間是測試自己開的。**不要**把它加到最上層的 `vars` 或 `wrangler deploy --var`（測試會擋）。
 
 ### 結果

@@ -46,7 +46,19 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: ['local/**', 'crossbrowser.spec.ts'],
+      testIgnore: ['local/**', 'crossbrowser.spec.ts', 'chaos.spec.ts'],
+      use: {
+        browserName: 'chromium',
+        channel: process.env.PW_CHANNEL || undefined,
+        permissions: ['camera', 'microphone'],
+        launchOptions: { args: chromiumFakeMedia },
+      },
+    },
+    {
+      // O2 (e11-t12): the chaos drills, a CI job of their own (`chaos`, DEPLOY.md §14): they open
+      // rooms of their own, and the runner's network may create only so many (shared/abuse.ts)
+      name: 'chaos',
+      testMatch: 'chaos.spec.ts',
       use: {
         browserName: 'chromium',
         channel: process.env.PW_CHANNEL || undefined,
