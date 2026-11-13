@@ -1627,6 +1627,15 @@ function Room({
     send({ t: 'host', action: 'muteAll' })
     show(strings.participants.mutedAll)
   }
+  // Who the panel's search or filter left (O1, e10-t06): RoomDO checks each one again
+  const onMuteMembers = (memberIds: string[]) => {
+    send({ t: 'host', action: 'muteMembers', memberIds })
+    show(strings.participants.mutedShown(memberIds.length))
+  }
+  const onStartMuted = (on: boolean) => {
+    send({ t: 'host', action: 'startMuted', on })
+    show(on ? strings.participants.startMutedOnNow : strings.participants.startMutedOffNow)
+  }
   const onEndMeeting = () => {
     endingSelf.current = true
     send({ t: 'host', action: 'endMeeting' })
@@ -2144,10 +2153,13 @@ function Room({
       sharerIds={staffWide ? allSharerIds : sharerIds}
       onAction={onMemberAction}
       onMuteAll={onMuteAll}
+      onMuteMembers={onMuteMembers}
       onEndMeeting={onEndMeeting}
       waiting={waitingList}
       locked={roomInfo?.locked ?? false}
       waitingRoom={roomInfo?.waitingRoom ?? false}
+      startMuted={roomInfo?.startMuted === true}
+      onStartMuted={onStartMuted}
       annotationPolicy={annotationPolicy}
       onAnnotationPolicy={onAnnotationPolicy}
       annotationLocked={roomInfo?.allowAnnotation === false}

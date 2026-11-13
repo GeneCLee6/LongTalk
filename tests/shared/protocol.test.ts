@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_CLIENT_MESSAGE_CHARS,
+  MAX_MEMBERS,
   MAX_NAME_CHARS,
   MAX_SHARES,
   PROTOCOL_VERSION,
@@ -257,6 +258,31 @@ describe('protocol', () => {
       '{"t":"host"}',
     ]) {
       expect(parseClientMessage(bad), bad).toBeNull()
+    }
+  })
+
+  it('parses muting several members and the start-muted switch (O1)', () => {
+    expect(
+      parseClientMessage('{"t":"host","action":"muteMembers","memberIds":["m-1","m-2","m-1"]}'),
+    ).toEqual({ t: 'host', action: 'muteMembers', memberIds: ['m-1', 'm-2'] })
+    expect(parseClientMessage('{"t":"host","action":"startMuted","on":true}')).toEqual({
+      t: 'host',
+      action: 'startMuted',
+      on: true,
+    })
+    for (const bad of [
+      { t: 'host', action: 'muteMembers' },
+      { t: 'host', action: 'muteMembers', memberIds: [] },
+      { t: 'host', action: 'muteMembers', memberIds: 'm-1' },
+      { t: 'host', action: 'muteMembers', memberIds: ['m-1', 'a b'] },
+      {
+        t: 'host',
+        action: 'muteMembers',
+        memberIds: Array.from({ length: MAX_MEMBERS + 1 }, (_, i) => `m-${i}`),
+      },
+      { t: 'host', action: 'startMuted' },
+    ]) {
+      expect(parseClientMessage(JSON.stringify(bad)), JSON.stringify(bad).slice(0, 80)).toBeNull()
     }
   })
 

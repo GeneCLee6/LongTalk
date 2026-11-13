@@ -197,6 +197,9 @@ const HOST_RULE: Readonly<Record<HostMessage['action'], Action>> = {
   endMeeting: 'endMeeting',
   lock: 'lockRoom',
   waitingRoom: 'waitingRoom',
+  // O1 (e10-t06): the batch is a room action; each member in it is checked as muteMember too
+  startMuted: 'startMuted',
+  muteMembers: 'muteAll',
   admit: 'admit',
   admitAll: 'admit',
   deny: 'admit',
@@ -2319,6 +2322,22 @@ export class RoomHost {
           this.notify(id, { t: 'notice', notice: 'muted', by: memberId, all: true })
         }
         this.publish()
+        return
+      case 'muteMembers': {
+        // Who the panel's search or filter left (O1): each as muteMember, the rest skipped
+        let changed = false
+        for (const id of message.memberIds) {
+          if (!this.allowed(memberId, 'muteMember', id) || !this.muteTrack(id, 'mic')) continue
+          this.notify(id, { t: 'notice', notice: 'muted', by: memberId })
+          changed = true
+        }
+        if (changed) this.publish()
+        return
+      }
+      case 'startMuted':
+        // Only for who comes in from now on: who is here keeps the microphone as it is
+        if ((this.info!.startMuted === true) === message.on) return
+        this.setRoom({ startMuted: message.on })
         return
       case 'endMeeting':
         this.endMeeting()
