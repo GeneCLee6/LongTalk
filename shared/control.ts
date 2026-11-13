@@ -3,8 +3,8 @@
 // helpers all three share. The threat model and every decision behind these shapes is
 // docs/PRD/f-remote-control-security.md; read it before changing anything here.
 //
-// NOT WIRED YET. Nothing imports this file in N1, and none of it is part of PROTOCOL_VERSION
-// (shared/protocol.ts, 23 today). Where it plugs in:
+// N2 wires the agent socket (pairing, `agentHello`, the agent's screen); the control messages
+// themselves are not part of PROTOCOL_VERSION until N3. Where it plugs in:
 // - N2 (e9-t02): the agent connects on its own socket, GET /api/rooms/<roomId>/agent?v=
 //   AGENT_PROTOCOL_VERSION, never the browsers' /ws: the room tags each socket as `browser` or
 //   `agent` at the upgrade and accepts agent messages (parseAgentMessage) only on agent sockets and
@@ -46,6 +46,14 @@
 //    CONTROL_IDLE_RELEASE_MS without a batch.
 // 5. Either side, the host, a timer or a rule (leaving, a breakout move, the meeting ending…) ends
 //    it: `controlEnd` with the reason to both, and `RoomView.control` loses the entry.
+
+import {
+  parseClientMessage,
+  type LeaveMessage,
+  type ShareMessage,
+  type TracksMessage,
+  type UnshareMessage,
+} from './protocol.ts'
 
 // ── Limits ───────────────────────────────────────────────────────────────────────────────────
 
@@ -819,8 +827,22 @@ export type AgentStopMessage = { t: 'controlStop'; grant: string; reason: AgentS
  */
 export type ControlMuteMessage = { t: 'controlMute'; ms: number }
 
+/**
+ * What the agent sends about its screen (N2, e9-t03), the same shapes a browser sends on /ws
+ * (shared/protocol.ts `share`, `unshare`, `tracks`) plus `leave`: it publishes through the same SFU
+ * proxy with its own token. Nothing else of a browser's is accepted on an agent socket.
+ */
+export type AgentMediaMessage = TracksMessage | ShareMessage | UnshareMessage | LeaveMessage
+
+/** The kinds of AgentMediaMessage, parsed exactly as on a browser socket */
+export const AGENT_MEDIA_KINDS: readonly string[] = ['tracks', 'share', 'unshare', 'leave']
+
 export type AgentMessage =
-  AgentHelloMessage | ControlAnswerMessage | AgentStopMessage | ControlMuteMessage
+  | AgentHelloMessage
+  | ControlAnswerMessage
+  | AgentStopMessage
+  | ControlMuteMessage
+  | AgentMediaMessage
 
 // ── Room → agent ─────────────────────────────────────────────────────────────────────────────
 
@@ -979,6 +1001,16 @@ export function parseAgentMessage(raw: string): AgentMessage | null {
       return typeof value.ms === 'number' && CONTROL_MUTE_OPTIONS_MS.includes(value.ms)
         ? { t: 'controlMute', ms: value.ms }
         : null
+    case 'tracks':
+    case 'share':
+    case 'unshare':
+    case 'leave': {
+      // Called lazily, so the import cycle once protocol.ts imports this file (N3) is harmless
+      const message = parseClientMessage(raw)
+      return message !== null && AGENT_MEDIA_KINDS.includes(message.t)
+        ? (message as AgentMediaMessage)
+        : null
+    }
     default:
       return null
   }

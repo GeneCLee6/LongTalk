@@ -75,6 +75,8 @@ export const PERMISSIONS = {
   votePoll: { who: IN_ROOM, on: 'self', since: 'L5' },
   /** Ask the sharer for remote control (N, E9; the sharer still has to accept) */
   requestControl: { who: IN_ROOM, on: 'self', since: 'N' },
+  /** Pair one's own computer (N2, e9-t02): ask for a pairing code, remove one's own computer */
+  pairComputer: { who: IN_ROOM, on: 'self', since: 'N2' },
 
   // ── What is done to the whole room ──
   /** The room's name (C2, e1-t05) */
