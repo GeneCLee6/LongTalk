@@ -10,6 +10,8 @@ import type {
 } from '../../shared/protocol.ts'
 import { scopeView } from '../../shared/breakout.ts'
 import type { Reaction } from '../../shared/reactions.ts'
+import { dictionary, useLocale } from '../strings.ts'
+import { nameAgents } from './agentNames.ts'
 import { watchNetwork } from './network.ts'
 import { RoomConnection, type ChatSendResult, type RoomConnectionState } from './RoomConnection.ts'
 import { clearSession, loadClientId, loadSession, saveSession } from './session.ts'
@@ -17,7 +19,8 @@ import { clearSession, loadClientId, loadSession, saveSession } from './session.
 export interface RoomConnectionHandle {
   /**
    * The connection's state. While breakout rooms are open (L3) `state.view` is scoped to this
-   * member's own room (shared/breakout.ts scopeView): media, tiles, shares and hands see only it
+   * member's own room (shared/breakout.ts scopeView): media, tiles, shares and hands see only it.
+   * A desktop agent's `name` is already what to show (N2, agentNames.ts nameAgents)
    */
   state: RoomConnectionState
   /** The whole room's view, every breakout room included: only the host's panels read it (L3) */
@@ -83,10 +86,16 @@ export function useRoomConnection(
     }
   }, [connection])
   const raw = useSyncExternalStore(connection.subscribe, connection.getState)
+  // Desktop agents named 「<owner> 的電腦」 (N2) in the language chosen now
+  const locale = useLocale()
+  const named = useMemo(
+    () => (raw.view ? nameAgents(raw.view, dictionary(locale).agent) : null),
+    [raw.view, locale],
+  )
   const state = useMemo(() => {
-    const view = raw.view && raw.you ? scopeView(raw.view, raw.you) : raw.view
+    const view = named && raw.you ? scopeView(named, raw.you) : named
     return view === raw.view ? raw : { ...raw, view }
-  }, [raw])
+  }, [raw, named])
   const leave = useCallback(
     (host?: string) => {
       connection.stop({ leave: true, host })
@@ -96,7 +105,7 @@ export function useRoomConnection(
   )
   return {
     state,
-    fullView: raw.view,
+    fullView: named,
     leave,
     send: connection.send,
     retry: connection.retry,

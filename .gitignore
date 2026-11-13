@@ -46,3 +46,7 @@ lighthouse-report/
 
 # The cross-browser suite's report of what each browser detected (e2e/local/browsers.spec.ts)
 browser-report/
+
+# The desktop agent (agent/README.md): Rust build output and Tauri's generated schemas
+agent/src-tauri/target/
+agent/src-tauri/gen/

@@ -22,9 +22,11 @@ import {
   type ErrorCode,
   type LobbyMessage,
   type NoticeMessage,
+  type PairCodeMessage,
   type ReactionMessage,
   type RoomView,
 } from '../../shared/protocol.ts'
+import { PAIRING_CODE_TTL_MS } from '../../shared/control.ts'
 import { REACTION_RATE, type Reaction } from '../../shared/reactions.ts'
 import { PASSWORD_WAIT_MS } from '../../shared/password.ts'
 import { Backoff } from './backoff.ts'
@@ -70,6 +72,19 @@ export type RoomStatus =
   | 'rateLimited'
   | 'recordingDeclined'
 
+/**
+ * The pairing code this member asked for (N2, e9-t02; `pairCode`, to us alone). `code` null: it
+ * was used, voided or ran out. `deadline` is this browser's own clock: PAIRING_CODE_TTL_MS from
+ * when it arrived, never later than the room's `expiresAt` would say (a clock ahead of the room's
+ * would otherwise end it early, one behind would keep it too long). `seq` grows with every
+ * `pairCode`, so whoever asked can tell the answer from what was there before.
+ */
+export interface PairCodeState {
+  code: string | null
+  deadline: number | null
+  seq: number
+}
+
 /** Where we are in the waiting room (F2): the latest `lobby` */
 export type LobbyState = Pick<LobbyMessage, 'position' | 'count' | 'room' | 'hostPresent'> & {
   /** The meeting is being recorded (I4): the waiting screen says so */
@@ -107,6 +122,8 @@ export interface RoomConnectionState {
   passwordWaitUntil: number | null
   /** What we answered to the poll on now (L5, `pollVoted`): the view does not say on an anonymous one */
   pollVote: { poll: number; choices: number[] } | null
+  /** The latest pairing code the room gave us (N2), on this socket; null before any */
+  pairCode: PairCodeState | null
 }
 
 /** The bits of WebSocket the connection uses, so tests can pass a fake */
@@ -240,6 +257,8 @@ export class RoomConnection {
    * it was not that history, so whatever comes next is new
    */
   private firstReplayUntil: number | null = null
+  /** How many `pairCode` arrived, on any socket: PairCodeState.seq */
+  private pairSeq = 0
   private state: RoomConnectionState = {
     status: 'connecting',
     you: null,
@@ -252,6 +271,7 @@ export class RoomConnection {
     lobby: null,
     passwordWaitUntil: null,
     pollVote: null,
+    pairCode: null,
   }
   /** The room's CHAT_RATE, checked here too so a refused message stays in the box */
   private readonly chatRate = new ChatRateLimit()
@@ -343,6 +363,7 @@ export class RoomConnection {
       lobby: null,
       passwordWaitUntil: null,
       pollVote: null,
+      pairCode: null,
     })
     this.open()
   }
@@ -506,6 +527,8 @@ export class RoomConnection {
           welcomes: this.state.welcomes + 1,
           lobby: null,
           pollVote: null,
+          // A code from an earlier socket may be gone: ask again rather than show a stale one
+          pairCode: null,
         })
         this.firstReplayUntil = null
         return
@@ -549,6 +572,11 @@ export class RoomConnection {
           ...this.state,
           pollVote: { poll: message.poll, choices: message.choices },
         })
+        return
+      case 'pairCode':
+        // Only after this socket's welcome, which clears what an earlier socket heard (N2)
+        if (this.rev < 0) return
+        this.receivePairCode(message)
         return
       case 'error':
         for (const listener of this.errorListeners) listener(message.code)
@@ -605,6 +633,17 @@ export class RoomConnection {
         return
       }
     }
+  }
+
+  /** `pairCode` (N2): kept in the state for the 連接我的電腦 dialog */
+  private receivePairCode({ code, expiresAt }: PairCodeMessage): void {
+    const now = Date.now()
+    const deadline =
+      code === null
+        ? null
+        : now + Math.min(PAIRING_CODE_TTL_MS, Math.max(0, (expiresAt ?? Infinity) - now))
+    this.pairSeq += 1
+    this.update({ ...this.state, pairCode: { code, deadline, seq: this.pairSeq } })
   }
 
   /** Sends a message if the socket is open; dropped otherwise (the room resends state on join) */

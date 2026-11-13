@@ -48,15 +48,15 @@ depends_on: [E2, E3, E11]
 - [ ] AC-9.1 — 代理可安裝（Windows、macOS）、以連結或代碼＋配對碼加入房間、發布螢幕軌、托盤狀態。
 - [ ] AC-9.2 — 請求→系統層對話框→同意（限時／直到中斷）／拒絕；60 秒到期；全員提示；被控端紅框與「中斷」按鈕；Esc 連按中斷。
 - [ ] AC-9.3 — 滑鼠、鍵盤、滾輪、組合鍵、輸入法文字正確注入；端到端延遲 < 150 ms（同區域）。
-- [ ] AC-9.4 — 威脅模型文件；事件簽章與序號、速率上限、時限；代理日誌；無人值守不可能（測試驗證）。
+- [ ] AC-9.4 — 威脅模型文件；事件綁定授權（伺服器判斷）與序號、速率上限、時限；代理日誌；無人值守不可能（測試驗證）。（2026-11-13 擁有者決定改字，原文「事件簽章與序號」，理由見 f-doc Q2）
       _N1（2026-11-13）：威脅模型文件、協定與它的 parser／序號／速率 helper 已完成；其餘要 N3、N4 實作並通過 `f-remote-control-security.md` §8 的測試才勾。「事件簽章」建議改字（改成「事件綁定授權與序號」），見該文件 Q2；AC 原文保留到擁有者決定。_
 - [ ] AC-9.5 — macOS 權限引導；Linux X11 可用；多螢幕切換。
 
 ## Task 拆分（M3；動工前再細拆）
 
 - [x] `e9-t01` 威脅模型與功能 PRD [`f-remote-control-security.md`](f-remote-control-security.md)；協定 `shared/control.ts` 定稿 · AC-9.4 · S（#54）
-- [ ] `e9-t02` Tauri 代理骨架：加入房間、配對碼、托盤、更新機制 · AC-9.1 · M · ← e9-t01
-- [ ] `e9-t03` 代理擷取螢幕並以 `MediaTransport` 發布（多螢幕） · AC-9.1 · M · ← e9-t02
+- [x] `e9-t02` Tauri 代理骨架：加入房間、配對碼、托盤、更新機制（N2，#PR：`agent/`、`worker/room-pairing.ts`；更新機制要擁有者產生簽章金鑰才開） · AC-9.1 · M · ← e9-t01
+- [x] `e9-t03` 代理擷取螢幕並以 `MediaTransport` 發布（多螢幕）（N2，#PR：代理的 WebView2 用 `getDisplayMedia` 選螢幕、沿用 `CloudflareRealtimeTransport`，網路都經 Rust） · AC-9.1 · M · ← e9-t02
 - [ ] `e9-t04` 同意流程：RoomDO 請求與時限、系統對話框、全員提示、紅框與中斷 · AC-9.2 · M · ← e9-t03
 - [ ] `e9-t05` 控制事件通道：~~DataChannel／WebSocket、簽章~~、序號、速率（N1 決定：RoomDO WebSocket 轉送＋授權綁連線，見 f-doc §5.5、Q2） · AC-9.3, AC-9.4 · M · ← e9-t04
 - [ ] `e9-t06` 滑鼠鍵盤注入（Windows、macOS）、輸入法文字 · AC-9.3 · M · ← e9-t05

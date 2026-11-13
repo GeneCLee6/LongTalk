@@ -103,6 +103,13 @@ import {
 import { RoomAnnotations, type AnnotationSegment, type AnnotationWrite } from './room-annotations.ts'
 import { Scheduler, type Schedule } from './scheduler.ts'
 import type { PersistentRoomInfo } from '../shared/account.ts'
+import {
+  AGENT_PROTOCOL_VERSION,
+  parseAgentMessage,
+  type AgentHelloMessage,
+  type AgentServerMessage,
+} from '../shared/control.ts'
+import { RoomPairing, type PairingState } from './room-pairing.ts'
 
 /**
  * The server estimate counts at most this long between two flushes: the sweep flushes every
@@ -121,6 +128,11 @@ const MAX_REPORT_GAP_MS = 6 * SWEEP_INTERVAL_MS
  */
 export interface RoomSockets {
   send(connId: string, message: ServerMessage): void
+  /**
+   * What goes to a desktop agent's socket only (N2, shared/control.ts AgentServerMessage). Optional
+   * for tests that never pair
+   */
+  post?(connId: string, message: AgentServerMessage): void
   close(connId: string, code: number, reason: string): void
 }
 
@@ -136,7 +148,12 @@ export type SessionRecord = {
   sfu?: string | null
   /** The browser's own id from `join` (F1; absent in rooms stored before v9): what a ban is on */
   client?: string | null
+  /** A desktop agent's (N2): who issued its pairing code, as they were then, for `agentWelcome` */
+  pairedBy?: PairedBy | null
 }
+
+/** The member whose pairing code brought a desktop agent in, with their name at the time (N2) */
+export type PairedBy = { id: string; name: string }
 
 /**
  * A removed member's browser (F1, AC-1.4): `client` is the id its `join` carried. Kept until
@@ -217,6 +234,8 @@ export type OpenSocket = {
   ip?: string | null
   /** The account signed in on the upgrade (I2), as the Worker checked it; null for none */
   account?: string | null
+  /** A desktop agent's socket (/api/rooms/<id>/agent, N2), not a browser's (/ws) */
+  agent?: boolean
 }
 
 /**
@@ -260,6 +279,8 @@ export type RestoreExtras = {
   interact?: InteractState | null
   /** The breakout rooms and who is in which (L3) */
   breakout?: BreakoutState | null
+  /** Open pairing codes and wrong codes still counting (N2) */
+  pairing?: PairingState | null
 }
 
 /** A persistent room's meeting that has read its saved whiteboard (J4, e7-t08) */
@@ -316,6 +337,8 @@ export interface RoomStorage {
   saveInteract?(state: InteractState): void
   /** The breakout rooms and who is in which (L3), saved whenever they change; null: none open */
   saveBreakout?(state: BreakoutState | null): void
+  /** Open pairing codes and wrong codes still counting (N2), saved whenever they change; null: none */
+  savePairing?(state: PairingState | null): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -412,6 +435,11 @@ type Connection = {
   joining: boolean
   /** The account signed in when it opened (I2), null for none */
   account: string | null
+  /**
+   * A desktop agent's socket (N2): only agent messages are taken on it (parseAgentMessage), and it
+   * gets no room view, chat or strokes; a browser's socket never takes an agent message
+   */
+  agent: boolean
 }
 
 type Session = {
@@ -421,6 +449,8 @@ type Session = {
   sfu: string | null
   /** The browser's own id from its last `join`, null when it sent none */
   client: string | null
+  /** A desktop agent's: who paired it (N2); null for a browser */
+  pairedBy: PairedBy | null
 }
 
 /** The last `stats` a member sent on its current SFU session */
@@ -514,6 +544,8 @@ export class RoomHost {
   private readonly interactRate = new ChatRateLimit(INTERACT_RATE)
   /** The breakout rooms and who is in which (L3, e10-t04) */
   private breakout = new RoomBreakout()
+  /** Open pairing codes and the wrong-code limits (N2, e9-t02) */
+  private pairing = new RoomPairing()
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -572,12 +604,13 @@ export class RoomHost {
     this.annotationStrokes.clear()
     this.interact = new RoomInteract(info ? extras.interact : null)
     this.breakout = new RoomBreakout(info ? extras.breakout : null)
+    this.pairing = new RoomPairing(info ? extras.pairing : null)
     this.pollRate.clear()
     this.interactRate.clear()
     this.reported = 0
     this.usage = usage?.state ?? 'normal'
     this.usageAt = usage?.at ?? this.deps.now()
-    for (const { conn, openedAt, ip, account } of sockets) {
+    for (const { conn, openedAt, ip, account, agent } of sockets) {
       this.conns.set(conn, {
         member: null,
         openedAt,
@@ -585,6 +618,7 @@ export class RoomHost {
         ip: ip ?? null,
         joining: false,
         account: account ?? null,
+        agent: agent === true,
       })
     }
     for (const record of sessions) {
@@ -613,6 +647,7 @@ export class RoomHost {
         awaySince: record.awaySince,
         sfu: record.sfu ?? null,
         client: record.client ?? null,
+        pairedBy: record.pairedBy ?? null,
       })
       this.byToken.set(record.token, record.member.id)
     }
@@ -627,6 +662,10 @@ export class RoomHost {
     // And for who is in a breakout room (L3)
     for (const id of this.breakout.assigned) {
       if (!this.inRoomMember(id) && this.breakout.forget(id)) this.saveBreakout()
+    }
+    // And for pairing codes whose member left (N2)
+    for (const id of this.pairingOwners()) {
+      if (!this.inRoomMember(id) && this.pairing.cancel(id)) this.savePairing()
     }
     // The same for the spotlight (G2)
     const spotlight = this.info?.spotlight ?? null
@@ -915,6 +954,8 @@ export class RoomHost {
         this.saveBoard()
       } else if (job === 'breakout') {
         this.tickBreakout()
+      } else if (job === 'pairing') {
+        this.expirePairing()
       } else if (job === 'ended' && !this.info) {
         // The ended meeting's tombstone ran out (F3): from now on its id is simply not found
         this.endedUntil = null
@@ -950,8 +991,9 @@ export class RoomHost {
    * address as addressKey keeps it (null when unknown: not limited). At most ROOM_CONNECT_RATE
    * upgrades per address (I1): over it CloseCode.rateLimited, which the browser does not retry.
    */
-  admit(version: string | null, ip: string | null = null): Admission {
-    if (version !== String(PROTOCOL_VERSION)) {
+  admit(version: string | null, ip: string | null = null, agent = false): Admission {
+    // A desktop agent's socket has a version of its own (N2, shared/control.ts)
+    if (version !== String(agent ? AGENT_PROTOCOL_VERSION : PROTOCOL_VERSION)) {
       return { ok: false, code: CloseCode.versionMismatch, reason: 'protocol version mismatch' }
     }
     if (ip !== null && !this.connectRate.take(ip, this.deps.now())) {
@@ -975,7 +1017,12 @@ export class RoomHost {
    * An admitted socket is live; it has JOIN_TIMEOUT_MS to send `join`. `ip` is its network
    * address as worker/password.ts addressKey keeps it (null when unknown)
    */
-  opened(connId: string, ip: string | null = null, account: string | null = null): void {
+  opened(
+    connId: string,
+    ip: string | null = null,
+    account: string | null = null,
+    agent = false,
+  ): void {
     const now = this.deps.now()
     this.conns.set(connId, {
       member: null,
@@ -984,6 +1031,7 @@ export class RoomHost {
       ip,
       joining: false,
       account,
+      agent,
     })
     this.reschedule()
   }
@@ -1031,6 +1079,11 @@ export class RoomHost {
     }
     this.heartbeat(connId, this.deps.now())
     if (raw === HEARTBEAT_PING) return
+    // A desktop agent's socket takes agent messages only, a browser's never (N2, threat model T-02)
+    if (conn.agent) {
+      this.agentMessage(connId, conn, raw)
+      return
+    }
     const message = parseClientMessage(raw)
     // Before `join` nothing else is accepted, and `join` only once (also while one is checked)
     if (!message || (conn.member === null) !== (message.t === 'join') || conn.joining) {
@@ -1167,7 +1220,239 @@ export class RoomHost {
         // saying so is on its way
         this.recall(conn.member!, (now) => this.breakout.close(now, message.now))
         return
+      case 'pairStart':
+        this.pairStart(connId, conn.member!)
+        return
+      case 'pairCancel':
+        if (this.pairing.cancel(conn.member!)) this.pairingChanged()
+        this.deps.sockets.send(connId, { t: 'pairCode', code: null, expiresAt: null })
+        return
+      case 'agentRemove':
+        this.agentRemove(connId, conn.member!, message.memberId)
+        return
     }
+  }
+
+  // ── Desktop agents (N2, e9-t02; docs/PRD/f-remote-control-security.md §5.1) ──────────────────
+
+  /** A desktop agent member (`Member.agent`), not a person */
+  private isAgent(memberId: string | null): boolean {
+    return memberId !== null && this.members.get(memberId)?.agent !== undefined
+  }
+
+  /** The agent members whose pairing code `owner` issued (one at most) */
+  private agentsOf(owner: string): string[] {
+    const found: string[] = []
+    for (const member of this.members.values()) {
+      if (member.agent?.owner === owner) found.push(member.id)
+    }
+    return found
+  }
+
+  /** The members holding an open pairing code */
+  private pairingOwners(): string[] {
+    return this.pairing.stored.codes.map((entry) => entry.owner)
+  }
+
+  private post(connId: string, message: AgentServerMessage): void {
+    this.deps.sockets.post?.(connId, message)
+  }
+
+  /** Tells the member, if connected, that its code is gone (used, voided or run out) */
+  private codeGone(memberId: string): void {
+    const conn = this.sessions.get(memberId)?.conn
+    if (conn) this.deps.sockets.send(conn, { t: 'pairCode', code: null, expiresAt: null })
+  }
+
+  private savePairing(): void {
+    this.deps.storage.savePairing?.(this.pairing.empty ? null : this.pairing.stored)
+  }
+
+  private pairingChanged(): void {
+    this.savePairing()
+    this.reschedule()
+  }
+
+  /**
+   * `pairStart`: a new one-time code for this member (worker/roles.ts `pairComputer`, within
+   * INTERACT_RATE), replacing any it had; `pair_busy` while its computer is in the room
+   */
+  private pairStart(connId: string, memberId: string): void {
+    if (!this.mayInteract(connId, memberId, 'pairComputer')) return
+    if (this.agentsOf(memberId).length > 0) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'pair_busy' })
+      return
+    }
+    const { code, expiresAt } = this.pairing.issue(memberId, this.deps.now())
+    this.pairingChanged()
+    this.deps.sockets.send(connId, { t: 'pairCode', code, expiresAt })
+  }
+
+  /**
+   * `agentRemove` (「這不是我」, 「中斷我的電腦」): only the member who paired the computer, and only
+   * their own; the agent is closed with CloseCode.removed like anyone a host removes (no ban: an
+   * agent has no browser id, and pairing again needs a new code anyway)
+   */
+  private agentRemove(connId: string, memberId: string, targetId: string): void {
+    const target = this.members.get(targetId)
+    if (!this.allowed(memberId, 'pairComputer') || target?.agent?.owner !== memberId) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    this.removeMember(targetId)
+  }
+
+  /** A frame on a desktop agent's socket: `agentHello` first and only once, then its media */
+  private agentMessage(connId: string, conn: Connection, raw: string): void {
+    const message = parseAgentMessage(raw)
+    if (!message || (conn.member === null) !== (message.t === 'agentHello')) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'bad_message' })
+      return
+    }
+    switch (message.t) {
+      case 'agentHello':
+        this.agentHello(connId, conn, message)
+        return
+      case 'tracks':
+        this.setTracks(conn.member!, message)
+        return
+      case 'share':
+        this.startShare(connId, conn.member!)
+        return
+      case 'unshare':
+        this.endShare(conn.member!)
+        return
+      case 'leave':
+        this.conns.delete(connId)
+        this.remove(conn.member!)
+        this.deps.sockets.close(connId, 1000, 'left')
+        this.publish()
+        return
+      default:
+        // `controlAnswer`, `controlStop`, `controlMute`: remote control comes in N3
+        this.deps.sockets.send(connId, { t: 'error', code: 'bad_message' })
+    }
+  }
+
+  /**
+   * `agentHello`. With a token: the agent comes back within RECONNECT_GRACE_MS as the same member
+   * (an unknown token, or a browser's, closes the socket with CloseCode.passwordRequired: pair
+   * again). With a pairing code: a network out of tries (PAIRING_NETWORK_FAIL_RATE) is closed with
+   * CloseCode.rateLimited before the code is looked at; a wrong code closes the socket at once with
+   * CloseCode.passwordWrong (one guess per upgrade) and counts against the network and the room; the
+   * right one makes the agent a member of the room: no password, lock or waiting room (the code's
+   * owner vouched for it), but MAX_MEMBERS holds, and it lands in its owner's breakout room.
+   */
+  private agentHello(connId: string, conn: Connection, hello: AgentHelloMessage): void {
+    if (hello.token !== null) {
+      this.agentBack(connId, conn, hello.token)
+      return
+    }
+    const now = this.deps.now()
+    if (this.pairing.blocked(conn.ip, now)) {
+      this.deps.offence?.(connId, conn.ip, 'connectLimit')
+      this.refuse(connId, CloseCode.rateLimited, 'pairing refused')
+      return
+    }
+    // Before the code is looked at: a full room tells nothing about it, and keeps it for later
+    if (this.members.size >= MAX_MEMBERS) {
+      this.refuse(connId, CloseCode.roomFull, 'room full')
+      return
+    }
+    const ownerId = this.pairing.take(hello.pairing!, now)
+    if (ownerId === null) {
+      const { voided } = this.pairing.fail(conn.ip, now)
+      this.pairingChanged()
+      for (const id of voided) {
+        this.notify(id, { t: 'notice', notice: 'pairingVoided', by: id })
+        this.codeGone(id)
+      }
+      this.refuse(connId, CloseCode.passwordWrong, 'wrong pairing code')
+      return
+    }
+    this.pairingChanged()
+    this.codeGone(ownerId)
+    const owner = this.members.get(ownerId)
+    // Never expected: a member's code goes when it leaves, and none is issued while it has a computer
+    if (!owner || !this.inRoomMember(ownerId) || this.agentsOf(ownerId).length > 0) {
+      this.refuse(connId, CloseCode.passwordWrong, 'pairing code void')
+      return
+    }
+    const memberId = this.deps.newMemberId()
+    const token = this.deps.newToken()
+    this.members.set(memberId, {
+      id: memberId,
+      name: hello.device,
+      role: 'participant',
+      joinedAt: now,
+      reconnecting: false,
+      tracks: [],
+      hand: null,
+      signal: null,
+      mayRecord: false,
+      agent: { owner: ownerId, device: hello.device, platform: hello.platform },
+    })
+    this.sessions.set(memberId, {
+      token,
+      conn: connId,
+      awaySince: null,
+      sfu: null,
+      client: null,
+      pairedBy: { id: ownerId, name: owner.name },
+    })
+    this.byToken.set(token, memberId)
+    conn.member = memberId
+    // In its owner's breakout room, if they are in one (L3)
+    const group = this.groupOf(ownerId)
+    if (group !== null && this.breakout.move(memberId, group)) this.saveBreakout()
+    this.publish()
+    this.agentWelcome(connId, memberId)
+    this.notify(ownerId, { t: 'notice', notice: 'agentPaired', by: memberId })
+  }
+
+  /** `agentHello` with a token: the agent member it belongs to, taken over by this socket */
+  private agentBack(connId: string, conn: Connection, token: string): void {
+    const memberId = this.byToken.get(token)
+    if (memberId === undefined || !this.isAgent(memberId)) {
+      this.refuse(connId, CloseCode.passwordRequired, 'unknown token')
+      return
+    }
+    const session = this.sessions.get(memberId)!
+    if (session.conn !== null && session.conn !== connId) {
+      this.conns.delete(session.conn)
+      this.deps.sockets.close(session.conn, CloseCode.replaced, 'session taken over')
+    }
+    session.conn = connId
+    session.awaySince = null
+    conn.member = memberId
+    this.setMember(memberId, { reconnecting: false })
+    this.publish()
+    this.agentWelcome(connId, memberId)
+  }
+
+  /** The agent is in the room: who paired it and the room's name, for its local confirmation */
+  private agentWelcome(connId: string, memberId: string): void {
+    const session = this.sessions.get(memberId)!
+    this.post(connId, {
+      t: 'agentWelcome',
+      memberId,
+      token: session.token,
+      owner: session.pairedBy?.id ?? '',
+      ownerName: session.pairedBy?.name ?? '',
+      // null: the agent shows the default name made from `createdBy`, as the browsers do
+      roomName: this.info!.name,
+      createdBy: this.info!.createdBy,
+    })
+  }
+
+  /**
+   * The `pairing` job: codes that ran out are gone (their members get `pairCode` null), and old
+   * wrong codes stop counting
+   */
+  private expirePairing(): void {
+    const expired = this.pairing.prune(this.deps.now())
+    this.savePairing()
+    for (const id of expired) this.codeGone(id)
   }
 
   /** The breakout rooms changed: stored, and everyone sees it */
@@ -1309,10 +1594,12 @@ export class RoomHost {
     }
     for (const id of moved.keys()) {
       const conn = this.sessions.get(id)?.conn ?? null
-      if (conn !== null && this.inRoomMember(id)) this.sendChatHistory(conn, true)
+      if (conn !== null && this.inRoomMember(id) && !this.isAgent(id)) {
+        this.sendChatHistory(conn, true)
+      }
     }
-    for (const [conn, { member }] of this.conns) {
-      if (member === null || !this.inRoomMember(member)) continue
+    for (const [conn, { member, agent }] of this.conns) {
+      if (member === null || agent || !this.inRoomMember(member)) continue
       if (everyone || moved.has(member) || rooms.has(this.groupOf(member))) {
         this.sendAnnotations(conn)
       }
@@ -1605,8 +1892,9 @@ export class RoomHost {
 
   /** Sends the connection its member's snapshot of the strokes */
   private sendAnnotations(connId: string): void {
-    const memberId = this.conns.get(connId)?.member ?? null
-    if (memberId === null) return
+    const conn = this.conns.get(connId)
+    const memberId = conn?.member ?? null
+    if (memberId === null || conn?.agent) return
     for (const frame of this.snapshotFor(memberId)) this.deps.sockets.send(connId, frame)
   }
 
@@ -1741,7 +2029,8 @@ export class RoomHost {
     const recordings = Object.values(this.info?.recordings ?? {})
     if (recordings.length === 0) return due
     for (const member of this.members.values()) {
-      if (member.role === 'waiting' || member.reconnecting) continue
+      // A desktop agent (N2) has nobody to ask: its screen is shared by the person at it, on purpose
+      if (member.role === 'waiting' || member.reconnecting || member.agent) continue
       const cameIn = this.cameIn.get(member.id) ?? this.deps.now()
       for (const recording of recordings) {
         if (recording.memberId === member.id || recording.consented.includes(member.id)) continue
@@ -2076,7 +2365,8 @@ export class RoomHost {
   /** Whether `memberId` is in the meeting and connected: someone who can take a role (F3) */
   private present(memberId: string): boolean {
     const member = this.members.get(memberId)
-    return !!member && member.role !== 'waiting' && !member.reconnecting
+    // A desktop agent (N2) never takes a role
+    return !!member && member.role !== 'waiting' && !member.reconnecting && !member.agent
   }
 
   /**
@@ -2085,7 +2375,8 @@ export class RoomHost {
    */
   private setCohost(by: string, memberId: string, on: boolean): void {
     const member = this.members.get(memberId)
-    if (!member || member.role !== (on ? 'participant' : 'cohost')) return
+    // A desktop agent (N2) runs nothing: it stays a participant
+    if (!member || member.agent || member.role !== (on ? 'participant' : 'cohost')) return
     this.notify(memberId, { t: 'notice', notice: on ? 'madeCohost' : 'cohostRevoked', by })
     this.setMember(memberId, { role: on ? 'cohost' : 'participant' })
     this.publish()
@@ -2360,6 +2651,7 @@ export class RoomHost {
    * is marked `regroup`: the browser must not take any of it for new messages
    */
   private sendChatHistory(connId: string, regroup = false): void {
+    if (this.conns.get(connId)?.agent) return
     const group = this.groupOf(this.conns.get(connId)?.member ?? null)
     const visible = this.chat.filter((message) => chatVisible(message, group))
     for (let start = 0; start === 0 || start < visible.length; start += CHAT_CHUNK) {
@@ -2766,7 +3058,9 @@ export class RoomHost {
    */
   private join(connId: string, message: JoinMessage): void | Promise<void> {
     const { token, client } = message
-    const known = token === null ? undefined : this.byToken.get(token)
+    // A desktop agent's token is not a browser's (N2, T-02): it joins as nobody the room knows
+    const found = token === null ? undefined : this.byToken.get(token)
+    const known = found !== undefined && this.isAgent(found) ? undefined : found
     // A persistent room's owner (I2) is never kept out: no ban, lock, password or waiting room
     const owner = this.ownerConn(connId)
     // A persistent room outlives its meetings (I2): someone coming back with a token of the one
@@ -2919,6 +3213,7 @@ export class RoomHost {
         awaySince: null,
         sfu: null,
         client,
+        pairedBy: null,
       })
       this.byToken.set(newToken, memberId)
     }
@@ -2973,7 +3268,8 @@ export class RoomHost {
 
   /** A connection whose member is in the room (not waiting, F2): it gets patches and chat */
   private inRoom(conn: Connection): boolean {
-    return conn.member !== null && !this.isWaiting(conn.member)
+    // A desktop agent's socket (N2) gets none of it
+    return conn.member !== null && !conn.agent && !this.isWaiting(conn.member)
   }
 
   private markAway(memberId: string): void {
@@ -3018,8 +3314,37 @@ export class RoomHost {
     this.interactRate.forget(memberId)
     // Someone who left is in no breakout room; coming back (a new member) lands in the main room
     if (this.breakout.forget(memberId)) this.saveBreakout()
+    // Their pairing code goes; their computer stays, nobody's now (N2)
+    if (this.pairing.cancel(memberId)) this.savePairing()
+    for (const id of this.agentsOf(memberId)) {
+      const agent = this.members.get(id)!.agent!
+      this.setMember(id, { agent: { ...agent, owner: null } })
+    }
     this.lobbies.delete(memberId)
     this.cameIn.delete(memberId)
+  }
+
+  /**
+   * Desktop agents never keep a room alive on their own (N2): once no person is a member any more
+   * (the last one left, or their RECONNECT_GRACE_MS ran out; someone waiting counts as a person),
+   * every agent is closed with CloseCode.ended and forgotten, and the room takes its usual
+   * empty-room path. Run by `publish`, which every removal goes through.
+   */
+  private dropOrphanAgents(): void {
+    const agents: string[] = []
+    for (const member of this.members.values()) {
+      if (!member.agent) return
+      agents.push(member.id)
+    }
+    for (const id of agents) {
+      const conn = this.sessions.get(id)?.conn ?? null
+      if (conn !== null) {
+        this.conns.delete(conn)
+        this.socketRate.forget(conn)
+        this.deps.sockets.close(conn, CloseCode.ended, 'nobody left')
+      }
+      this.remove(id)
+    }
   }
 
   /** Members are replaced, never mutated: `sent` shares their objects */
@@ -3036,6 +3361,7 @@ export class RoomHost {
       awaySince: session.awaySince,
       sfu: session.sfu,
       client: session.client,
+      ...(session.pairedBy ? { pairedBy: session.pairedBy } : {}),
     }))
   }
 
@@ -3050,8 +3376,8 @@ export class RoomHost {
     let host: Member | null = null
     let candidate: Member | null = null
     for (const member of this.members.values()) {
-      // Someone waiting is not in the meeting: never the host (F2)
-      if (member.role === 'waiting') continue
+      // Someone waiting is not in the meeting: never the host (F2); nor a desktop agent (N2)
+      if (member.role === 'waiting' || member.agent) continue
       if (member.role === 'host') {
         // Never two hosts (a defensive repair: nothing makes a second one)
         if (host) this.setMember(member.id, { role: 'participant' })
@@ -3092,7 +3418,7 @@ export class RoomHost {
     const host = [...this.members.values()].find((member) => member.role === 'host')
     const away = host?.reconnecting ? (this.sessions.get(host.id)?.awaySince ?? null) : null
     const someoneConnected = [...this.members.values()].some(
-      (member) => !member.reconnecting && member.role !== 'waiting',
+      (member) => !member.reconnecting && member.role !== 'waiting' && !member.agent,
     )
     if (away !== null && someoneConnected) this.schedule.set('handoff', away + HOST_HANDOFF_MS)
     else this.schedule.clear('handoff')
@@ -3130,6 +3456,10 @@ export class RoomHost {
     const breakoutDue = this.breakout.due()
     if (breakoutDue === null) this.schedule.clear('breakout')
     else this.schedule.set('breakout', breakoutDue)
+    // The next pairing code to run out, or wrong code to stop counting (N2); none, no job
+    const pairingDue = this.pairing.due()
+    if (pairingDue === null) this.schedule.clear('pairing')
+    else this.schedule.set('pairing', pairingDue)
     const stored = JSON.stringify(this.schedule)
     if (stored !== this.storedSchedule) {
       this.storedSchedule = stored
@@ -3188,8 +3518,9 @@ export class RoomHost {
     this.annotationStrokes.clear()
     // The poll, the countdown and the agenda are the meeting's; what is stored goes below
     this.interact = new RoomInteract()
-    // So are the breakout rooms (L3)
+    // So are the breakout rooms (L3), and the pairing codes (N2)
     this.breakout.reset()
+    this.pairing.reset()
     this.pollRate.clear()
     this.interactRate.clear()
     this.bans.clear()
@@ -3234,6 +3565,7 @@ export class RoomHost {
    * is about to get its welcome), then their lobby to who waits (F2)
    */
   private publish(except: ReadonlySet<string> = NO_CONNS): void {
+    this.dropOrphanAgents()
     this.assignHost()
     this.reschedule()
     const next = this.view()

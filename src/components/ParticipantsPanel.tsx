@@ -22,6 +22,7 @@ import { ConfirmDialog } from './ConfirmDialog.tsx'
 import {
   CamIcon,
   CamOffIcon,
+  ComputerIcon,
   HandIcon,
   MicIcon,
   MicOffIcon,
@@ -74,6 +75,11 @@ export interface ParticipantsPanelProps {
    * the whole room's and the list is grouped by room, the main room first
    */
   breakout?: BreakoutView | null
+  /**
+   * Remove our own computer (N2, e9-t02; `agentRemove`): 中斷 on its row, for its owner only. A
+   * host removes anyone's computer from the menu, like anyone else
+   */
+  onAgentRemove?: (memberId: string) => void
 }
 
 /** What the panel shows of each person's sound (e6-t08): local to this browser */
@@ -157,6 +163,7 @@ export function ParticipantsPanel({
   onRecordAction = noop,
   audio,
   breakout = null,
+  onAgentRemove = noop,
 }: ParticipantsPanelProps) {
   const [confirm, setConfirm] = useState<
     | { type: 'remove'; member: Member }
@@ -205,7 +212,9 @@ export function ParticipantsPanel({
     // Co-hosts and handing over (F3): only the host, never on oneself; handing over only to
     // someone connected
     const roles: MenuItem[] = []
-    if (canActOn(role, 'setCohost', member.role, self)) {
+    // A computer (N2) is nobody's co-host, host or recorder: only stopping its share and removing it
+    const person = !member.agent
+    if (person && canActOn(role, 'setCohost', member.role, self)) {
       roles.push(
         member.role === 'cohost'
           ? {
@@ -220,7 +229,7 @@ export function ParticipantsPanel({
             },
       )
     }
-    if (canActOn(role, 'makeHost', member.role, self) && !member.reconnecting) {
+    if (person && canActOn(role, 'makeHost', member.role, self) && !member.reconnecting) {
       roles.push({
         id: 'makeHost',
         label: strings.participants.makeHost,
@@ -236,7 +245,12 @@ export function ParticipantsPanel({
         onSelect: () => onRecordAction('stop', member.id),
       })
     }
-    if (!recordingOff && member.role !== 'host' && canActOn(role, 'allowRecord', member.role, self)) {
+    if (
+      person &&
+      !recordingOff &&
+      member.role !== 'host' &&
+      canActOn(role, 'allowRecord', member.role, self)
+    ) {
       recording.push(
         member.mayRecord
           ? {
@@ -273,6 +287,10 @@ export function ParticipantsPanel({
     const micOn = !!mic && !mic.muted
     const camOn = !!cam && !cam.muted
     const items = itemsFor(member)
+    // A desktop agent (N2): a computer for an avatar, the computer's own name and system under
+    // its name, no microphone or camera to show, and 中斷 for whoever paired it
+    const agent = member.agent
+    const ours = agent !== undefined && agent.owner !== null && agent.owner === you
     const roleLabel =
       member.role === 'host'
         ? strings.participants.host
@@ -281,11 +299,22 @@ export function ParticipantsPanel({
           : null
     return (
       <Row key={member.id} aria-label={member.name} $away={member.reconnecting}>
-        <Avatar aria-hidden="true" style={{ background: avatarColor(member.name) }}>
-          {[...member.name][0]?.toUpperCase()}
-        </Avatar>
+        {agent ? (
+          <Avatar aria-hidden="true" $computer>
+            <ComputerIcon />
+          </Avatar>
+        ) : (
+          <Avatar aria-hidden="true" style={{ background: avatarColor(member.name) }}>
+            {[...member.name][0]?.toUpperCase()}
+          </Avatar>
+        )}
         <Who>
           <Name>{member.name}</Name>
+          {agent && (
+            <Hint>
+              {strings.agent.device(agent.device, strings.agent.platforms[agent.platform])}
+            </Hint>
+          )}
           <Tags>
             {handPlace.has(member.id) && (
               <HandTag
@@ -301,8 +330,8 @@ export function ParticipantsPanel({
             {member.reconnecting && <Tag $warn>{strings.participants.reconnecting}</Tag>}
             {recorderIds.includes(member.id) && <Tag $danger>{strings.record.tag}</Tag>}
           </Tags>
-          {audio && <LevelBar track={audio.levelOf(member.id)} />}
-          {audio?.volumeSupported && member.id !== you && (
+          {audio && !agent && <LevelBar track={audio.levelOf(member.id)} />}
+          {audio?.volumeSupported && member.id !== you && !agent && (
             <VolumeSlider
               label={strings.participants.volumeOf(member.name)}
               value={audio.volumeOf(member.id)}
@@ -328,23 +357,36 @@ export function ParticipantsPanel({
               <ScreenShareIcon />
             </State>
           )}
-          <State
-            role="img"
-            aria-label={micOn ? strings.participants.micOn : strings.participants.micOff}
-            title={micOn ? strings.participants.micOn : strings.participants.micOff}
-            $off={!micOn}
-          >
-            {micOn ? <MicIcon /> : <MicOffIcon />}
-          </State>
-          <State
-            role="img"
-            aria-label={camOn ? strings.participants.camOn : strings.participants.camOff}
-            title={camOn ? strings.participants.camOn : strings.participants.camOff}
-            $off={!camOn}
-          >
-            {camOn ? <CamIcon /> : <CamOffIcon />}
-          </State>
+          {!agent && (
+            <>
+              <State
+                role="img"
+                aria-label={micOn ? strings.participants.micOn : strings.participants.micOff}
+                title={micOn ? strings.participants.micOn : strings.participants.micOff}
+                $off={!micOn}
+              >
+                {micOn ? <MicIcon /> : <MicOffIcon />}
+              </State>
+              <State
+                role="img"
+                aria-label={camOn ? strings.participants.camOn : strings.participants.camOff}
+                title={camOn ? strings.participants.camOn : strings.participants.camOff}
+                $off={!camOn}
+              >
+                {camOn ? <CamIcon /> : <CamOffIcon />}
+              </State>
+            </>
+          )}
         </States>
+        {ours && (
+          <Button
+            variant="secondary"
+            aria-label={strings.agent.disconnectLabel(member.name)}
+            onClick={() => onAgentRemove(member.id)}
+          >
+            {strings.agent.disconnect}
+          </Button>
+        )}
         {items.length > 0 && (
           <Menu
             label={strings.participants.actions(member.name)}
@@ -698,16 +740,22 @@ const Row = styled.li<{ $away: boolean }>`
   }
 `
 
-const Avatar = styled.span`
+const Avatar = styled.span<{ $computer?: boolean }>`
   display: inline-grid;
   place-items: center;
   flex: none;
   width: 32px;
   height: 32px;
   border-radius: ${radius.pill};
-  color: ${avatar.text};
+  background: ${({ $computer }) => ($computer ? color.surface2 : 'transparent')};
+  color: ${({ $computer }) => ($computer ? color.fg : avatar.text)};
   font-size: ${fontSize.small};
   font-weight: 700;
+
+  svg {
+    width: 18px;
+    height: 18px;
+  }
 `
 
 const Who = styled.span`

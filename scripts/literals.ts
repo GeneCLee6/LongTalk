@@ -8,14 +8,21 @@
 //
 // A line that really needs one says why with `// literal-ok: <reason>` on the same line.
 // The dictionaries (also the privacy policy's, src/privacy/policy.*), the tokens and the brand file
-// (src/brand.ts: the PWA's fixed colours) are where these belong and are not checked.
+// (src/brand.ts: the PWA's fixed colours) are where these belong and are not checked. The desktop
+// agent's page (agent/ui/src, e9-t02) follows the same rule with its own dictionary (i18n.ts).
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
-const ROOT = 'src'
+const ROOTS = ['src', 'agent/ui/src']
 // src/privacy/policy.*: the privacy page's text, a dictionary of its own per language (lazy, so
 // it stays out of the home page's JS budget; RULES.md §1)
-const ALLOWED = ['src/i18n/', 'src/styles/tokens.ts', 'src/brand.ts', 'src/privacy/policy.']
+const ALLOWED = [
+  'src/i18n/',
+  'src/styles/tokens.ts',
+  'src/brand.ts',
+  'src/privacy/policy.',
+  'agent/ui/src/i18n.ts',
+]
 
 const checks: { name: string; pattern: RegExp }[] = [
   { name: 'Chinese text', pattern: /[　-〿㐀-鿿＀-￯]/u },
@@ -56,7 +63,7 @@ function withoutComments(source: string): string {
 }
 
 const problems: string[] = []
-for (const path of files(ROOT)) {
+for (const path of ROOTS.flatMap(files)) {
   const file = relative('.', path).split(sep).join('/')
   if (!/\.tsx?$/.test(file) || ALLOWED.some((allowed) => file.startsWith(allowed))) continue
   const lines = withoutComments(readFileSync(path, 'utf8')).split('\n')

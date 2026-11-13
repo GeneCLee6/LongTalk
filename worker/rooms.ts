@@ -13,7 +13,8 @@ import { turnstileSiteKey, verifyTurnstile } from './turnstile.ts'
 /** Tries this many fresh ids before giving up (a collision at ~59 bits is not expected at all) */
 const CREATE_ATTEMPTS = 3
 
-const ROOM_PATH = /^\/api\/rooms\/([^/]+)(\/ws)?$/
+/** /api/rooms/<id>, its browsers' socket /ws, and a desktop agent's socket /agent (N2) */
+const ROOM_PATH = /^\/api\/rooms\/([^/]+)(\/ws|\/agent)?$/
 
 const noStore = { 'cache-control': 'no-store' }
 
@@ -28,7 +29,8 @@ export interface RoomsDeps {
 /**
  * /api/rooms/*: POST /api/rooms creates a room and answers its id; GET /api/rooms/<id> answers
  * its RoomSummary (pre-join screen); GET /api/rooms/<id>/ws is the room's WebSocket, handed to
- * its RoomDO (protocol in shared/protocol.ts). `<id>` is a random id or a persistent room's slug
+ * its RoomDO (protocol in shared/protocol.ts); GET /api/rooms/<id>/agent is a desktop agent's
+ * WebSocket (N2, shared/control.ts), handed to the RoomDO the same way. `<id>` is a random id or a persistent room's slug
  * (I2, shared/slug.ts). For a signed-in browser (I2) the summary says who it is (`viewer`: its
  * account's name, and whether it owns the room), and a persistent room's upgrade carries the
  * account to the room in ACCOUNT_HEADER (its owner is the host there).
@@ -84,7 +86,7 @@ export async function handleRooms(
   // Only a persistent room has an owner to recognise, so only its upgrades look the session up
   const headers = new Headers(request.headers)
   headers.delete(ACCOUNT_HEADER)
-  if (!isRoomId(roomId)) {
+  if (!isRoomId(roomId) && match[2] === '/ws') {
     const signedIn = await signedInAccount(request, env, false)
     if (signedIn) headers.set(ACCOUNT_HEADER, signedIn.account.id)
   }

@@ -858,8 +858,24 @@ export type AgentWelcomeMessage = {
   /** The member who issued the pairing code: the computer is shown as theirs */
   owner: string
   ownerName: string
-  roomName: string
+  /**
+   * The room's name; null when it has none, and the agent shows 「{createdBy} 的會議室」 as the
+   * browsers do (strings.ts room.defaultName)
+   */
+  roomName: string | null
+  createdBy: string | null
 }
+
+// How the room closes an agent socket (shared/protocol.ts CloseCode), as the agent reads them:
+// - `passwordWrong` (4402): the pairing code was wrong, used or ran out: ask for a new one
+// - `rateLimited` (4420): too many wrong codes from this network: wait (PAIRING_NETWORK_FAIL_RATE)
+// - `passwordRequired` (4401): the token is unknown (the grace ran out, or not an agent's): pair again
+// - `roomFull` (4409): MAX_MEMBERS; the code is kept, try again later
+// - `removed` (4403): the owner (「這不是我」) or a host removed this computer
+// - `replaced` (4410): the same agent connected again elsewhere
+// - `ended` (4411): the meeting ended, or no person is left in the room
+// - `versionMismatch`: AGENT_PROTOCOL_VERSION is not the room's: update the agent
+
 /**
  * Someone asks to control this computer: show the system dialog (after pausing any injection). `name`
  * is the name the requester chose, not verified, and the dialog says so. No 「已登入」 badge: a

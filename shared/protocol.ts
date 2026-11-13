@@ -783,6 +783,7 @@ export type ServerMessage =
   | NoticeMessage
   | LobbyMessage
   | ReactionMessage
+  | PairCodeMessage
 
 // ── Browser → server ─────────────────────────────────────────────────────────────────────────
 
@@ -1390,6 +1391,11 @@ export function parseServerMessage(raw: string): ServerMessage | null {
         value.room !== null &&
         typeof value.hostPresent === 'boolean'
         ? (value as LobbyMessage)
+        : null
+    case 'pairCode':
+      return (value.code === null || typeof value.code === 'string') &&
+        (value.expiresAt === null || typeof value.expiresAt === 'number')
+        ? (value as PairCodeMessage)
         : null
     case 'reaction':
       return typeof value.from === 'string' && isReaction(value.emoji)

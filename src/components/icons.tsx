@@ -546,3 +546,13 @@ export function ClearIcon() {
     </svg>
   )
 }
+
+/** A laptop: a desktop agent (N2, e9-t02), someone's computer rather than a person */
+export function ComputerIcon() {
+  return (
+    <svg {...common}>
+      <rect x="4" y="5" width="16" height="11" rx="1.5" />
+      <path d="M2 19h20" />
+    </svg>
+  )
+}

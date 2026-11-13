@@ -195,6 +195,19 @@ test('the room, its panels, menus and dialogs have no axe violations', async ({
   await page.keyboard.press('Escape')
   await expect(record).toHaveCount(0)
 
+  // 更多 › 連接我的電腦 (N2): what it is, then a pairing code (hidden), then cancelled
+  await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
+  await page.getByRole('menuitem', { name: strings.agent.menu }).click()
+  const pair = page.getByRole('dialog', { name: strings.agent.title })
+  await expect(pair).toBeVisible()
+  await expectNoViolations(page, 'connect my computer')
+  await pair.getByRole('button', { name: strings.agent.generate }).click()
+  await expect(pair.getByText(strings.agent.codeHidden)).toBeAttached()
+  await expectNoViolations(page, 'pairing code')
+  await pair.getByRole('button', { name: strings.agent.cancelCode }).click()
+  await page.keyboard.press('Escape')
+  await expect(pair).toHaveCount(0)
+
   // 更多 › 投票與計時 (L5): the host's forms, then a poll on with the countdown and the agenda bar
   await toolbar.getByRole('button', { name: strings.toolbar.more, exact: true }).click()
   await page.getByRole('menuitem', { name: strings.interact.menu }).click()

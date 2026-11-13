@@ -12,7 +12,8 @@ export type Schedule = Record<string, number>
  * a denied one, F2), `waiting` (the next one in the waiting room to wait too long, F2),
  * `guesses` (the next wrong password guess to stop counting, F3), `ended` (an ended meeting's
  * tombstone runs out, F3), `board` (a persistent room's changed whiteboard goes to R2, J4),
- * `breakout` (the breakout rooms' time runs out, or their recall's grace does, L3).
+ * `breakout` (the breakout rooms' time runs out, or their recall's grace does, L3), `pairing` (the
+ * next pairing code runs out, or a wrong code stops counting, N2).
  */
 export class Scheduler {
   private readonly due = new Map<string, number>()

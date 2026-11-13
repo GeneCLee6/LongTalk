@@ -7,6 +7,7 @@ import { strings } from '../strings.ts'
 import { color, fontSize, radius, space } from '../styles/tokens.ts'
 import { Button } from './Button.tsx'
 import {
+  ComputerIcon,
   DownloadIcon,
   FullscreenExitIcon,
   FullscreenIcon,
@@ -78,6 +79,11 @@ export interface ShareTileProps {
    * would show itself over and over (e3-t09); it starts hidden, leaving the marks on a blank sheet.
    */
   own?: { mirrorRisk: boolean } | null
+  /**
+   * The sharer is a desktop agent (N2, e9-t02): the tag is its name, 「<owner> 的電腦」, with a
+   * computer, rather than 「… 的畫面」
+   */
+  computer?: boolean
 }
 
 /**
@@ -102,6 +108,7 @@ export function ShareTile({
   annotations = null,
   recording = null,
   own = null,
+  computer = false,
 }: ShareTileProps) {
   const videoRef = useTrack<HTMLVideoElement>(video)
   const frameRef = useRef<HTMLElement>(null)
@@ -167,7 +174,14 @@ export function ShareTile({
             <AnnotationLayer {...annotations} editing={ready && annotating} />
           </Suspense>
         )}
-        <Tag>{own ? text.ownLabel : text.label(name)}</Tag>
+        <Tag>
+          {computer && !own && (
+            <TagIcon>
+              <ComputerIcon />
+            </TagIcon>
+          )}
+          {own ? text.ownLabel : computer ? name : text.label(name)}
+        </Tag>
         {fullscreen.active && recording && <RecordingTag>{recording}</RecordingTag>}
         {picker && <PickerSlot>{picker}</PickerSlot>}
         {own && (
@@ -354,5 +368,19 @@ const ShowMain = styled.button`
 
   &:hover {
     background: ${color.hover};
+  }
+`
+
+/** The computer before a desktop agent's name on the tag (N2) */
+const TagIcon = styled.span`
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: ${space(1)};
+  vertical-align: -2px;
+
+  svg {
+    width: 100%;
+    height: 100%;
   }
 `
