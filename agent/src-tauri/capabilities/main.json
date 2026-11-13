@@ -16,6 +16,7 @@
     "allow-api-fetch",
     "allow-control-state",
     "allow-control-stop",
-    "allow-control-mute"
+    "allow-control-mute",
+    "allow-shared-screen"
   ]
 }

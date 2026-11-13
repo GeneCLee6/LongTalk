@@ -17,9 +17,19 @@
 // Remote control (N3, control.rs, §5.2–§5.4): the room's control frames go to control.rs and never
 // to the page; the consent dialog, the red border and the floating 中斷 button are windows of their
 // own (control_windows.rs), and only the consent window may answer (capabilities/consent.json).
+//
+// Injection (N4, inject/, escape.rs, agent_log.rs; §5.4, §5.6, §5.8, §5.10): an accepted batch is
+// planned against what is held (blocked combinations are not pressed, shown ones are named on the
+// 中斷 window) and performed by the OS's injector, which refuses presses aimed at the agent's own
+// windows; while someone controls this computer a physical Escape ×3 stops it (Windows), so does a
+// locked session; it starts with a system notification and a red tray icon; every request,
+// answer, start, end and blocked or shown combination goes to the agent log, nothing typed ever.
 
+mod agent_log;
 mod control;
 mod control_windows;
+mod escape;
+mod inject;
 mod origin;
 mod session;
 mod socket;
@@ -27,6 +37,7 @@ mod tray;
 #[cfg(feature = "updater")]
 mod updater;
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -36,9 +47,12 @@ use serde_json::json;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
-use control::{Control, ControlRefusal, ControlView, Decision, Effects, StopReason};
+use agent_log::{AgentLog, Entry};
+use control::{Control, ControlEvent, ControlRefusal, ControlView, Decision, Effects, StopReason};
+use inject::{Injector, Platform, Screen, Skipped};
 use session::{Outgoing, Phase, Refusal, Session};
 use socket::{Out, SocketEvent, SocketHandle};
+use tauri_plugin_notification::NotificationExt;
 
 /** The session's phase, sent to the window after every change */
 pub const SESSION_EVENT: &str = "agent://session";
@@ -52,6 +66,15 @@ pub struct AgentState {
     pub control: Mutex<Control>,
     pub socket: Mutex<Option<SocketHandle>>,
     pub tray: Mutex<Option<tray::Tray>>,
+    /** N4: the OS's injector, and which screen the share shows (from the captured size) */
+    injector: Mutex<Box<dyn Injector>>,
+    captured: Mutex<Option<(u32, u32)>>,
+    screen: Mutex<Option<Screen>>,
+    pub log: Mutex<AgentLog>,
+    /** The physical Escape ×3 hook, only while someone controls this computer (escape.rs) */
+    escape: Mutex<Option<escape::Watch>>,
+    /** What was logged once for the live grant (a skip, a dropped batch) */
+    logged_once: Mutex<HashSet<&'static str>>,
     next_socket: AtomicU32,
     clock: Instant,
     http: reqwest::Client,
@@ -64,6 +87,12 @@ impl AgentState {
             control: Mutex::new(Control::new()),
             socket: Mutex::new(None),
             tray: Mutex::new(None),
+            injector: Mutex::new(inject::injector()),
+            captured: Mutex::new(None),
+            screen: Mutex::new(None),
+            log: Mutex::new(AgentLog::new(None)),
+            escape: Mutex::new(None),
+            logged_once: Mutex::new(HashSet::new()),
             next_socket: AtomicU32::new(1),
             clock: Instant::now(),
             // No redirects: a response can never send the agent to another host
@@ -88,13 +117,85 @@ impl AgentState {
     }
 
     /**
-     * What a control step asks for: its frames to the room. Its `release` is what N4 will inject
-     * (nothing is injected before N4); the windows follow `changed` (notify_control)
+     * What a control step asks for: what it releases is injected first (nothing stays held), then
+     * its frames go to the room, and a grant that ended is logged; the windows follow `changed`
+     * (notify_control)
      */
-    fn apply(&self, effects: &Effects) {
+    pub(crate) fn apply(&self, effects: &Effects) {
+        if !effects.release.is_empty() {
+            self.inject(&effects.release, &[], &control::Held::new());
+        }
         for frame in &effects.send {
             self.send_raw(Out::Text(frame.clone()));
         }
+        if let Some(ended) = &effects.ended {
+            self.log.lock().unwrap().write(&Entry::Ended {
+                grant: &ended.grant,
+                reason: &ended.reason,
+            });
+        }
+    }
+
+    /** Writes `what` to the log once for the live grant */
+    fn log_once(&self, what: &'static str) {
+        if self.logged_once.lock().unwrap().insert(what) {
+            self.log.lock().unwrap().write(&Entry::Skipped { what });
+        }
+    }
+
+    /**
+     * Plans and performs `release` then `events` (inject/), logs what it blocked or skipped, and
+     * returns the names of the combinations to show on the 中斷 window
+     */
+    fn inject(
+        &self,
+        release: &[ControlEvent],
+        events: &[ControlEvent],
+        held_before: &control::Held,
+    ) -> Vec<String> {
+        let screen = *self.screen.lock().unwrap();
+        let plan = inject::plan(
+            release,
+            events,
+            held_before,
+            screen.as_ref(),
+            Platform::current(),
+        );
+        {
+            let mut log = self.log.lock().unwrap();
+            for entry in agent_log::entries_for(&plan) {
+                log.write(&entry);
+            }
+        }
+        if plan.no_screen {
+            self.log_once("noScreen");
+        }
+        let skipped = self.injector.lock().unwrap().perform(&plan.actions);
+        for kind in skipped {
+            self.log_once(match kind {
+                Skipped::AgentWindow => "agentWindow",
+                Skipped::SecureDesktop => "secureDesktop",
+                Skipped::UnknownKey => "unknownKey",
+                Skipped::Refused => "refusedByOs",
+            });
+        }
+        plan.warned
+    }
+
+    /** The screen the share shows, for the pointer (inject::pick_screen) */
+    fn pick_screen(&self) {
+        let captured = *self.captured.lock().unwrap();
+        let screens = self.injector.lock().unwrap().screens();
+        *self.screen.lock().unwrap() = inject::pick_screen(&screens, captured);
+    }
+
+    fn room(&self) -> String {
+        self.session
+            .lock()
+            .unwrap()
+            .room()
+            .unwrap_or_default()
+            .to_owned()
     }
 
     /** `leave`, then close the socket: the room removes the member at once */
@@ -130,37 +231,134 @@ pub fn notify_control(app: &AppHandle) {
         tray::sync_control(tray, &view);
     }
     control_windows::sync(app, dialog, granted);
+    sync_escape(app, granted);
     let _ = app.emit(CONTROL_EVENT, view);
+}
+
+/**
+ * The Escape hook lives exactly as long as a grant (escape.rs, T-17): started when control starts,
+ * dropped (unhooked) when it ends
+ */
+fn sync_escape(app: &AppHandle, granted: bool) {
+    let state = app.state::<AgentState>();
+    let mut watch = state.escape.lock().unwrap();
+    match (granted, watch.is_some()) {
+        (true, false) => {
+            let app = app.clone();
+            *watch = escape::Watch::start(move || {
+                // From the hook's thread: hand it to the runtime, never stop inside the hook
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    stop_control(&app, StopReason::Escape);
+                });
+            });
+        }
+        (false, true) => *watch = None,
+        _ => {}
+    }
+}
+
+/** Control just started: the log, the screen to aim at, a system notification (§5.4) */
+fn on_grant_started(app: &AppHandle) {
+    let state = app.state::<AgentState>();
+    let (grant, controller, minutes) = {
+        let control = state.control.lock().unwrap();
+        let Some(grant) = control.grant() else {
+            return;
+        };
+        (
+            grant.grant.clone(),
+            grant.controller_name.clone(),
+            grant
+                .ends_at
+                .map(|end| end.saturating_sub(grant.started_at) / 60_000),
+        )
+    };
+    state.logged_once.lock().unwrap().clear();
+    state.pick_screen();
+    state.log.lock().unwrap().write(&Entry::Started {
+        room: &state.room(),
+        grant: &grant,
+        controller: &controller,
+        minutes,
+    });
+    let (title, body) = tray::notification(&controller, cfg!(target_os = "windows"));
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 /** A control frame from the room (socket.rs): to control.rs, never to the page */
 pub fn on_control_frame(app: &AppHandle, kind: &str, value: &serde_json::Value, raw: &str) {
     let state = app.state::<AgentState>();
     let now = state.now();
-    let changed = {
-        let mut control = state.control.lock().unwrap();
-        match kind {
-            "controlAsk" => control.on_ask(value, now),
-            "controlAskEnd" => value
-                .get("request")
-                .and_then(|r| r.as_str())
-                .is_some_and(|request| control.on_ask_end(request)),
-            "controlStart" => control.on_start(value, now),
-            "controlEnd" => {
-                let grant = value.get("grant").and_then(|g| g.as_str()).unwrap_or("");
-                let effects = control.on_end(grant);
-                state.apply(&effects);
-                effects.changed
+    let str_of = |name: &str| value.get(name).and_then(|v| v.as_str()).unwrap_or("");
+    let mut started = false;
+    let changed = match kind {
+        "controlAsk" => {
+            let asked = state.control.lock().unwrap().on_ask(value, now);
+            if asked {
+                let from = value.get("from");
+                let from_field = |name: &str| {
+                    from.and_then(|f| f.get(name))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                };
+                state.log.lock().unwrap().write(&Entry::Asked {
+                    room: &state.room(),
+                    request: str_of("request"),
+                    from_name: from_field("name"),
+                    from_id: from_field("id"),
+                });
             }
-            "controlForward" => {
-                // N4 injects `release` then `events`; until then a batch only moves the seq and the
-                // held set. What it carried is never logged or kept (D11)
-                let _ = control.on_forward(raw, now);
-                false
-            }
-            _ => false,
+            asked
         }
+        "controlAskEnd" => state.control.lock().unwrap().on_ask_end(str_of("request")),
+        "controlStart" => {
+            started = state.control.lock().unwrap().on_start(value, now);
+            if !started {
+                state.log.lock().unwrap().write(&Entry::StartRefused);
+            }
+            started
+        }
+        "controlEnd" => {
+            let effects = state
+                .control
+                .lock()
+                .unwrap()
+                .on_end(str_of("grant"), str_of("reason"));
+            state.apply(&effects);
+            effects.changed
+        }
+        "controlForward" => {
+            let accepted = state.control.lock().unwrap().on_forward(raw, now);
+            match accepted {
+                Ok(batch) => {
+                    // Injected, then forgotten: what a batch carried is never logged or kept (D11)
+                    let warned = state.inject(&batch.release, &batch.events, &batch.held_before);
+                    let mut control = state.control.lock().unwrap();
+                    let mut shown = false;
+                    for name in warned {
+                        shown |= control.hint(name, now);
+                    }
+                    shown
+                }
+                Err(dropped) => {
+                    match dropped {
+                        control::Dropped::Malformed => state.log_once("malformedBatch"),
+                        control::Dropped::OtherGrant => state.log_once("otherGrantBatch"),
+                        control::Dropped::Stale => state.log_once("staleBatch"),
+                        control::Dropped::Invalid => state.log_once("invalidBatch"),
+                        // After the end, or while the hourly question is up: expected
+                        control::Dropped::NotGranted | control::Dropped::Paused => {}
+                    }
+                    false
+                }
+            }
+        }
+        _ => false,
     };
+    if started {
+        on_grant_started(app);
+    }
     if changed {
         notify_control(app);
     }
@@ -174,6 +372,13 @@ fn start_control_clock(app: &AppHandle) {
         loop {
             interval.tick().await;
             let state = app.state::<AgentState>();
+            // A locked session or a screen saver ends control (§5.3 step 5); unlocking does not
+            // bring it back
+            let granted = state.control.lock().unwrap().granted();
+            if granted && inject::session_locked() {
+                stop_control(&app, StopReason::Locked);
+                continue;
+            }
             let effects = state.control.lock().unwrap().tick(state.now());
             state.apply(&effects);
             if effects.changed {
@@ -495,6 +700,11 @@ fn control_answer(
         .map_err(control_refusal);
     notify_control(&app);
     let effects = effects?;
+    state.log.lock().unwrap().write(&Entry::Answered {
+        request: &request,
+        decision: decision.wire(),
+        mute_ms,
+    });
     state.apply(&effects);
     Ok(())
 }
@@ -535,11 +745,33 @@ fn control_mute(state: State<'_, AgentState>, ms: u64) -> Result<(), String> {
 }
 
 /**
- * TODO(N4, e9-t07): agent windows ignore injected input (§5.8, T-04): a low-level mouse and
- * keyboard hook that drops events flagged LLMHF_INJECTED / LLKHF_INJECTED while an agent window
- * has focus (Windows), the event source pid check on macOS. Nothing is injected before N4.
+ * The captured share's size (the page reads it from the track's settings), so the pointer lands
+ * on the screen it shows (inject::pick_screen); `monitor` false (a window or a tab) or no size
+ * keeps the pointer still. It only aims: it cannot start, widen or extend control.
  */
-fn guard_against_injected_input(_app: &AppHandle) {}
+#[tauri::command]
+fn shared_screen(
+    state: State<'_, AgentState>,
+    width: Option<u32>,
+    height: Option<u32>,
+    monitor: bool,
+) {
+    let size = match (monitor, width, height) {
+        (true, Some(w), Some(h)) if w > 0 && h > 0 && w <= 16_384 && h <= 16_384 => Some((w, h)),
+        _ => None,
+    };
+    *state.captured.lock().unwrap() = size;
+    state.pick_screen();
+}
+
+/** 「開啟日誌」 in the tray: the agent log's folder */
+pub fn open_log(app: &AppHandle) {
+    let state = app.state::<AgentState>();
+    let dir = state.log.lock().unwrap().dir().map(|d| d.to_path_buf());
+    if let Some(dir) = dir {
+        agent_log::open_folder(&dir);
+    }
+}
 
 pub fn run() {
     tauri::Builder::default()
@@ -547,6 +779,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app)
         }))
+        .plugin(tauri_plugin_notification::init())
         .manage(AgentState::new())
         .invoke_handler(tauri::generate_handler![
             agent_info,
@@ -562,14 +795,16 @@ pub fn run() {
             control_keep_going,
             control_stop,
             control_mute,
+            shared_screen,
         ])
         .setup(|app| {
             let handle = app.handle();
+            *app.state::<AgentState>().log.lock().unwrap() =
+                AgentLog::new(handle.path().app_log_dir().ok());
             let tray = tray::build(handle)?;
             *app.state::<AgentState>().tray.lock().unwrap() = Some(tray);
             notify(handle);
             start_control_clock(handle);
-            guard_against_injected_input(handle);
             #[cfg(feature = "updater")]
             updater::start(handle)?;
             Ok(())

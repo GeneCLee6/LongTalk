@@ -23,8 +23,10 @@
 //   in seq order (acceptSeq: a `gap` releases what is held first, `stale` and `invalid` are
 //   dropped), and everything held is released after CONTROL_IDLE_RELEASE_MS without a batch, when
 //   the grant ends and before any dialog (T-06, T-12).
-// Injecting what a batch says is N4 (e9-t06): `on_forward` returns the events, and the held set is
-// kept here already so the releases are right from the first injected key.
+// N4 (e9-t06, e9-t07): `on_forward` hands the accepted events, with what was held before them, to
+// inject/ (which judges each key against the held keys and performs them); every step that ends a
+// grant says so in `Effects::ended` (the agent log), and Escape x3 and a locked session stop it
+// (StopReason::Escape, StopReason::Locked).
 
 use std::collections::BTreeSet;
 
@@ -410,7 +412,11 @@ pub fn release_held(held: &Held) -> Vec<ControlEvent> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopReason {
     Button,
+    /** Escape three times within a second on the physical keyboard (escape.rs) */
+    Escape,
     Tray,
+    /** The session locked or the screen saver started (§5.3 step 5) */
+    Locked,
     Reconfirm,
     Quit,
 }
@@ -419,7 +425,9 @@ impl StopReason {
     pub fn wire(self) -> &'static str {
         match self {
             StopReason::Button => "button",
+            StopReason::Escape => "escape",
             StopReason::Tray => "tray",
+            StopReason::Locked => "locked",
             StopReason::Reconfirm => "reconfirm",
             StopReason::Quit => "quit",
         }
@@ -454,7 +462,12 @@ pub struct Grant {
     pub reconfirm_at: Option<u64>,
     /** The hourly question is showing: since when, until when */
     pub reconfirming: Option<(u64, u64)>,
+    /** A combination the controller pressed that the person is told about (N4): name, since when */
+    pub hint: Option<(String, u64)>,
 }
+
+/** How long 「Bob 按了 Win+R」 stays on the 中斷 window */
+pub const HINT_MS: u64 = 8_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Phase {
@@ -491,16 +504,39 @@ pub enum ControlView {
         left_ms: Option<u64>,
         /** The hourly question is up: ms left to answer, ms until its buttons work */
         reconfirm: Option<(u64, u64)>,
+        /** 「Bob 按了 Win+R」: the combination's name, for HINT_MS (N4) */
+        hint: Option<String>,
     },
 }
 
-/** What the caller does after a step: frames for the room, and whether to release held input */
+/** A grant that ended in this step, for the agent log (§5.10) */
+#[derive(Debug, PartialEq, Eq)]
+pub struct Ended {
+    pub grant: String,
+    /**
+     * Why: an AgentStopReason (this computer stopped it), `expired` (this computer's clock),
+     * `room:<ControlEndReason>` (the room ended it) or `socketClosed`
+     */
+    pub reason: String,
+}
+
+/** What the caller does after a step: frames for the room, input to release, what ended */
 #[derive(Debug, Default, PartialEq)]
 pub struct Effects {
     pub send: Vec<String>,
-    /** Up events to inject now (N4 injects them; N3 has injected nothing) */
+    /** Up events to inject now */
     pub release: Vec<ControlEvent>,
     pub changed: bool,
+    pub ended: Option<Ended>,
+}
+
+/** A forwarded batch taken: what to release first (a `gap`), the events, what was held before */
+#[derive(Debug, PartialEq)]
+pub struct Accepted {
+    pub release: Vec<ControlEvent>,
+    pub events: Vec<ControlEvent>,
+    /** What was held before this batch, after `release` (inject/ judges each key against it) */
+    pub held_before: Held,
 }
 
 /** Why a forwarded batch was not taken (for the log in N4; never its content) */
@@ -565,6 +601,11 @@ impl Control {
                         (shown + CONSENT_DIALOG_ARM_MS).saturating_sub(now),
                     )
                 }),
+                hint: grant
+                    .hint
+                    .as_ref()
+                    .filter(|(_, at)| now.saturating_sub(*at) < HINT_MS)
+                    .map(|(name, _)| name.clone()),
             },
         }
     }
@@ -765,19 +806,16 @@ impl Control {
             last_batch_at: now,
             reconfirm_at: expected.is_none().then_some(now + CONTROL_RECONFIRM_MS),
             reconfirming: None,
+            hint: None,
         });
         true
     }
 
     /**
-     * `controlForward`: the events to inject (N4), after the up events of whatever was held when
-     * this batch is a `gap`. Dropped, with why, unless it is the live grant's next batch.
+     * `controlForward`: the events to inject, after the up events of whatever was held when this
+     * batch is a `gap`. Dropped, with why, unless it is the live grant's next batch.
      */
-    pub fn on_forward(
-        &mut self,
-        raw: &str,
-        now: u64,
-    ) -> Result<(Vec<ControlEvent>, Vec<ControlEvent>), Dropped> {
+    pub fn on_forward(&mut self, raw: &str, now: u64) -> Result<Accepted, Dropped> {
         let Phase::Granted(grant) = &mut self.phase else {
             return Err(Dropped::NotGranted);
         };
@@ -800,23 +838,59 @@ impl Control {
         };
         grant.last = forward.seq.as_u64().unwrap_or(grant.last);
         grant.last_batch_at = now;
+        let held_before = grant.held.clone();
         for event in &forward.events {
             next_held(&mut grant.held, event);
         }
-        Ok((release, forward.events))
+        Ok(Accepted {
+            release,
+            events: forward.events,
+            held_before,
+        })
     }
 
-    /** `controlEnd`: the room ended the grant (or a start never came); everything held is let go */
-    pub fn on_end(&mut self, grant_id: &str) -> Effects {
+    /** A combination pressed that the person is told about (inject/ Verdict::Warn) */
+    pub fn hint(&mut self, name: String, now: u64) -> bool {
+        match &mut self.phase {
+            Phase::Granted(grant) => {
+                grant.hint = Some((name, now));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /** Ends the grant there is: releases what it holds and says why (the agent log) */
+    fn end_grant(&mut self, reason: String) -> Effects {
+        let Phase::Granted(grant) = &self.phase else {
+            return Effects::default();
+        };
+        let effects = Effects {
+            release: release_held(&grant.held),
+            changed: true,
+            ended: Some(Ended {
+                grant: grant.grant.clone(),
+                reason,
+            }),
+            ..Effects::default()
+        };
+        self.phase = Phase::Idle;
+        effects
+    }
+
+    /**
+     * `controlEnd`: the room ended the grant (or a start never came); everything held is let go.
+     * `reason` is the room's ControlEndReason, for the log only.
+     */
+    pub fn on_end(&mut self, grant_id: &str, reason: &str) -> Effects {
         match &self.phase {
             Phase::Granted(grant) if grant.grant == grant_id => {
-                let release = release_held(&grant.held);
-                self.phase = Phase::Idle;
-                Effects {
-                    release,
-                    changed: true,
-                    ..Effects::default()
-                }
+                let reason: String = reason
+                    .chars()
+                    .filter(char::is_ascii_alphanumeric)
+                    .take(24)
+                    .collect();
+                self.end_grant(format!("room:{reason}"))
             }
             _ => Effects::default(),
         }
@@ -830,15 +904,10 @@ impl Control {
         let Phase::Granted(grant) = &self.phase else {
             return Effects::default();
         };
-        let effects = Effects {
-            send: vec![
-                json!({ "t": "controlStop", "grant": grant.grant, "reason": reason.wire() })
-                    .to_string(),
-            ],
-            release: release_held(&grant.held),
-            changed: true,
-        };
-        self.phase = Phase::Idle;
+        let frame = json!({ "t": "controlStop", "grant": grant.grant, "reason": reason.wire() })
+            .to_string();
+        let mut effects = self.end_grant(reason.wire().to_owned());
+        effects.send.push(frame);
         effects
     }
 
@@ -906,13 +975,7 @@ impl Control {
             Phase::Granted(grant) => {
                 if grant.ends_at.is_some_and(|end| now >= end) {
                     // The room ends it too (`expired`); this side does not wait to stop injecting
-                    let release = release_held(&grant.held);
-                    self.phase = Phase::Idle;
-                    return Effects {
-                        release,
-                        changed: true,
-                        ..Effects::default()
-                    };
+                    return self.end_grant("expired".into());
                 }
                 if let Some((_, deadline)) = grant.reconfirming {
                     if now >= deadline {
@@ -940,6 +1003,18 @@ impl Control {
                         ..Effects::default()
                     };
                 }
+                // The hint on the 中斷 window goes away on its own
+                if grant
+                    .hint
+                    .as_ref()
+                    .is_some_and(|(_, at)| now.saturating_sub(*at) >= HINT_MS)
+                {
+                    grant.hint = None;
+                    return Effects {
+                        changed: true,
+                        ..Effects::default()
+                    };
+                }
                 Effects::default()
             }
             _ => Effects::default(),
@@ -950,15 +1025,7 @@ impl Control {
     pub fn on_socket_closed(&mut self) -> Effects {
         match &self.phase {
             Phase::Idle => Effects::default(),
-            Phase::Granted(grant) => {
-                let release = release_held(&grant.held);
-                self.phase = Phase::Idle;
-                Effects {
-                    release,
-                    changed: true,
-                    ..Effects::default()
-                }
-            }
+            Phase::Granted(_) => self.end_grant("socketClosed".into()),
             _ => {
                 self.phase = Phase::Idle;
                 Effects {
@@ -1252,7 +1319,8 @@ mod tests {
         let ok = control
             .on_forward(&forward(GRANT, 1, json!([key("KeyA", true)])), 3_000)
             .unwrap();
-        assert_eq!(ok.0, vec![]);
+        assert_eq!(ok.release, vec![]);
+        assert!(ok.held_before.is_empty());
         assert_eq!(control.grant().unwrap().held.len(), 1);
         assert_eq!(
             control.on_forward(&forward(GRANT, 1, json!([key("KeyA", false)])), 3_001),
@@ -1273,12 +1341,18 @@ mod tests {
             Err(Dropped::Invalid)
         );
         // A gap: what was held is released before the batch
-        let (release, events) = control
+        let Accepted {
+            release,
+            events,
+            held_before,
+        } = control
             .on_forward(
                 &forward(GRANT, 4, json!([{ "type": "move", "x": 0.5, "y": 0.5 }])),
                 3_002,
             )
             .unwrap();
+        // Judged against what is held after the release: nothing
+        assert!(held_before.is_empty());
         assert_eq!(
             release,
             vec![ControlEvent::Key {
@@ -1347,8 +1421,15 @@ mod tests {
         control
             .on_forward(&forward(GRANT, 2, json!([key("KeyD", true)])), 4_100)
             .unwrap();
-        let effects = control.on_end(GRANT);
+        let effects = control.on_end(GRANT, "hostStopped");
         assert_eq!(effects.release.len(), 1);
+        assert_eq!(
+            effects.ended,
+            Some(Ended {
+                grant: GRANT.into(),
+                reason: "room:hostStopped".into()
+            })
+        );
         assert!(!control.granted());
     }
 
@@ -1362,12 +1443,27 @@ mod tests {
         );
         assert!(!control.granted());
         assert!(control.stop(StopReason::Tray).send.is_empty());
+        // Escape x3 and a lock say so to the room
+        for (reason, wire) in [
+            (StopReason::Escape, "escape"),
+            (StopReason::Locked, "locked"),
+        ] {
+            let mut control = granted(Decision::Allow10);
+            let effects = control.stop(reason);
+            assert_eq!(
+                effects.send,
+                vec![json!({ "t": "controlStop", "grant": GRANT, "reason": wire }).to_string()]
+            );
+            assert_eq!(effects.ended.unwrap().reason, wire);
+        }
         // Turning the share off ends it too
         let mut control = granted(Decision::AllowUntilStop);
         assert_eq!(control.set_sharing(false).send.len(), 1);
         // And the socket closing ends it without a word (the room ends it as agentLeft)
         let mut control = granted(Decision::Allow10);
-        assert!(control.on_socket_closed().changed);
+        let effects = control.on_socket_closed();
+        assert!(effects.changed);
+        assert_eq!(effects.ended.unwrap().reason, "socketClosed");
         assert!(!control.granted());
     }
 
