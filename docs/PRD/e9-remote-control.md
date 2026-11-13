@@ -59,8 +59,8 @@ depends_on: [E2, E3, E11]
 - [x] `e9-t01` 威脅模型與功能 PRD [`f-remote-control-security.md`](f-remote-control-security.md)；協定 `shared/control.ts` 定稿 · AC-9.4 · S（#54）
 - [x] `e9-t02` Tauri 代理骨架：加入房間、配對碼、托盤、更新機制（N2，#55：`agent/`、`worker/room-pairing.ts`；更新機制要擁有者產生簽章金鑰才開） · AC-9.1 · M · ← e9-t01
 - [x] `e9-t03` 代理擷取螢幕並以 `MediaTransport` 發布（多螢幕）（N2，#55：代理的 WebView2 用 `getDisplayMedia` 選螢幕、沿用 `CloudflareRealtimeTransport`，網路都經 Rust） · AC-9.1 · M · ← e9-t02
-- [x] `e9-t04` 同意流程：RoomDO 請求與時限、系統對話框、全員提示、紅框與中斷 · AC-9.2 · M · ← e9-t03（N3，#PR：`worker/room-control.ts`、代理的 `control.rs`／`control_windows.rs`、分享格的「請求控制」；房間設定「允許遠端控制」；Esc×3、鎖定即結束、代理的視窗拒絕注入的輸入留給 N4 `e9-t07`）
-- [x] `e9-t05` 控制事件通道：~~DataChannel／WebSocket、簽章~~、序號、速率（N1 決定：RoomDO WebSocket 轉送＋授權綁連線，見 f-doc §5.5、Q2） · AC-9.3, AC-9.4 · M · ← e9-t04（N3，#PR：先解析再計數、`CONTROL_FRAME_RATE`、`acceptSeq`、超速只轉放開事件；控制端的 `ControlSender`；代理端驗證與按住的輸入，注入是 N4）
+- [x] `e9-t04` 同意流程：RoomDO 請求與時限、系統對話框、全員提示、紅框與中斷 · AC-9.2 · M · ← e9-t03（N3，#58：`worker/room-control.ts`、代理的 `control.rs`／`control_windows.rs`、分享格的「請求控制」；房間設定「允許遠端控制」；Esc×3、鎖定即結束、代理的視窗拒絕注入的輸入留給 N4 `e9-t07`）
+- [x] `e9-t05` 控制事件通道：~~DataChannel／WebSocket、簽章~~、序號、速率（N1 決定：RoomDO WebSocket 轉送＋授權綁連線，見 f-doc §5.5、Q2） · AC-9.3, AC-9.4 · M · ← e9-t04（N3，#58：先解析再計數、`CONTROL_FRAME_RATE`、`acceptSeq`、超速只轉放開事件；控制端的 `ControlSender`；代理端驗證與按住的輸入，注入是 N4）
 - [ ] `e9-t06` 滑鼠鍵盤注入（Windows、macOS）、輸入法文字 · AC-9.3 · M · ← e9-t05
 - [ ] `e9-t07` 中斷機制（Esc 連按、托盤、超時）與代理日誌 · AC-9.2, AC-9.4 · S · ← e9-t06
 - [ ] `e9-t08` 多平台：macOS 權限引導、Linux、安裝包與簽章 · AC-9.5 · M · ← e9-t06
