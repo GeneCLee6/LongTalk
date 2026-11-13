@@ -651,13 +651,16 @@ export class RoomConnection {
     if (this.socket?.readyState === OPEN) this.socket.send(JSON.stringify(message))
   }
 
-  /** Sends a chat message to everyone (D3, e5-t01); see ChatSendResult */
-  sendChat = (raw: string, now: number = Date.now()): ChatSendResult => {
+  /**
+   * Sends a chat message to everyone (D3, e5-t01), or (`to`, O4 e5-t09) privately to that member;
+   * see ChatSendResult. The room decides whether the private one may go (it answers `forbidden`)
+   */
+  sendChat = (raw: string, to: string | null = null, now: number = Date.now()): ChatSendResult => {
     const text = normalizeChatText(raw)
     if (text === null) return [...raw.trim()].length > MAX_CHAT_CHARS ? 'tooLong' : 'empty'
     if (this.state.status !== 'open' || this.socket?.readyState !== OPEN) return 'offline'
     if (!this.chatRate.take('self', now)) return 'rateLimited'
-    this.send({ t: 'chat', text })
+    this.send(to === null ? { t: 'chat', text } : { t: 'chat', text, to })
     return 'sent'
   }
 

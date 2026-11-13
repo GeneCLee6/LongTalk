@@ -24,7 +24,9 @@ export function ChatPreview({ message, onOpen, onDismiss }: ChatPreviewProps) {
         <Bubble key={message.id}>
           {/* Named by what it shows (axe label-content-name-mismatch), what it does said after */}
           <Open type="button" onClick={onOpen}>
-            <Name>{message.name}</Name>
+            <Name>
+              {message.to === undefined ? message.name : strings.chat.private.preview(message.name)}
+            </Name>
             <Text>
               {message.file ? strings.chat.file.message(message.file.name) : message.text}
             </Text>

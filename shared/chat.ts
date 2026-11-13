@@ -40,6 +40,13 @@ export type ChatMessage = {
    * main room. Only members of that room are sent it
    */
   group?: string
+  /**
+   * A private message (O4, e5-t09): the one member it is for, by id. Only the sender and this
+   * member are ever sent it (shared/breakout.ts chatVisible); absent: everyone in the room
+   */
+  to?: string
+  /** The recipient's name when it was sent (with `to`): 「私訊給 Bob」 after Bob left or renamed */
+  toName?: string
 }
 
 // Control characters (but the newline) and the bidirectional overrides that could make text
@@ -127,6 +134,8 @@ export function isChatMessage(value: unknown): value is ChatMessage {
     typeof message.at === 'number' &&
     (message.file === undefined || isChatFile(message.file)) &&
     (message.poll === undefined || isPollResult(message.poll)) &&
-    (message.group === undefined || typeof message.group === 'string')
+    (message.group === undefined || typeof message.group === 'string') &&
+    (message.to === undefined || typeof message.to === 'string') &&
+    (message.toName === undefined || typeof message.toName === 'string')
   )
 }

@@ -25,7 +25,7 @@ LongTalk 的產品需求都在這個資料夾。三層結構（為什麼是三�
 | [E2](e2-media-core-webrtc-sfu.md) | 媒體核心：WebRTC 與 SFU | 17／18 | 1／8 | 10 | 7 | in progress |
 | [E3](e3-screen-share.md) | 螢幕分享 | 11／11 | 0／6 | 5 | 5 | in progress |
 | [E4](e4-meeting-ui-experience.md) | 會議室介面與體驗 | 20／20 | 3／10 | 11 | 9 | in progress |
-| [E5](e5-chat-reactions-interaction.md) | 聊天、反應與互動 | 8／9 | 3／5 | 2 | 4 | in progress |
+| [E5](e5-chat-reactions-interaction.md) | 聊天、反應與互動 | 9／9 | 3／5 | 2 | 4 | in progress |
 | [E6](e6-audio-video-quality.md) | 音訊視訊品質 | 8／8 | 0／6 | 0 | 5 | in progress |
 | [E7](e7-annotation-whiteboard.md) | 畫筆標註與白板 | 9／9 | 4／5 | 0 | 0 | in progress（M2） |
 | [E8](e8-recording-transcript-ai.md) | 錄影、逐字稿與 AI 摘要 | 3／9 | 0／6 | 0 | 3 | in progress |

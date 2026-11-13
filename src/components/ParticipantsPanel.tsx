@@ -80,6 +80,14 @@ export interface ParticipantsPanelProps {
    * host removes anyone's computer from the menu, like anyone else
    */
   onAgentRemove?: (memberId: string) => void
+  /**
+   * Private messages (O4, e5-t09): whom we may write to (their menu offers 私訊, which opens the
+   * chat addressed to them), and for a host or co-host the room's switch
+   */
+  messageable?: readonly string[]
+  onPrivateMessage?: (memberId: string) => void
+  privateChat?: boolean
+  onPrivateChat?: (on: boolean) => void
 }
 
 /** What the panel shows of each person's sound (e6-t08): local to this browser */
@@ -164,6 +172,10 @@ export function ParticipantsPanel({
   audio,
   breakout = null,
   onAgentRemove = noop,
+  messageable = [],
+  onPrivateMessage,
+  privateChat = true,
+  onPrivateChat = noop,
 }: ParticipantsPanelProps) {
   const [confirm, setConfirm] = useState<
     | { type: 'remove'; member: Member }
@@ -192,6 +204,7 @@ export function ParticipantsPanel({
   const canAdmit = can(role, 'admit')
   const canSetPassword = can(role, 'setPassword')
   const canSetPolicy = can(role, 'annotationPolicy')
+  const canSetPrivateChat = can(role, 'privateChatPolicy')
   const toggleWaitingRoom = () => {
     if (waitingRoom && waiting.length > 0) setConfirm({ type: 'waitingOff' })
     else onWaitingRoom(!waitingRoom)
@@ -276,9 +289,26 @@ export function ParticipantsPanel({
             ? setConfirm({ type: 'remove', member })
             : onAction(action, member.id),
       }))
+    // 私訊 (O4) first: it is for everyone, not only hosts
+    const write: MenuItem[] =
+      onPrivateMessage && messageable.includes(member.id)
+        ? [
+            {
+              id: 'privateMessage',
+              label: strings.chat.private.menu,
+              onSelect: () => onPrivateMessage(member.id),
+            },
+          ]
+        : []
     // Removing stays last (the dangerous one)
     const remove = controls.filter((item) => item.id === 'remove')
-    return [...controls.filter((item) => item.id !== 'remove'), ...recording, ...roles, ...remove]
+    return [
+      ...write,
+      ...controls.filter((item) => item.id !== 'remove'),
+      ...recording,
+      ...roles,
+      ...remove,
+    ]
   }
 
   const rowOf = (member: Member) => {
@@ -406,7 +436,7 @@ export function ParticipantsPanel({
 
   return (
     <Root>
-      {(canLock || canWaitingRoom || canSetPassword || canSetPolicy) && (
+      {(canLock || canWaitingRoom || canSetPassword || canSetPolicy || canSetPrivateChat) && (
         <Settings aria-label={strings.participants.settings}>
           {canLock && (
             <Switch
@@ -422,6 +452,14 @@ export function ParticipantsPanel({
               hint={strings.participants.waitingRoomHint}
               on={waitingRoom}
               onToggle={toggleWaitingRoom}
+            />
+          )}
+          {canSetPrivateChat && (
+            <Switch
+              label={strings.chat.private.switch}
+              hint={strings.chat.private.switchHint}
+              on={privateChat}
+              onToggle={() => onPrivateChat(!privateChat)}
             />
           )}
           {canSetPolicy && (

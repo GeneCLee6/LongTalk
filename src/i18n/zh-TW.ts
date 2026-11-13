@@ -819,6 +819,28 @@ export const zhTWRoom = {
     preview: '新訊息',
     previewOpen: '打開聊天',
     openLink: (url: string) => `開啟連結 ${url}（新分頁）`,
+    // Private messages (O4, e5-t09)
+    private: {
+      recipient: '傳給',
+      everyone: '所有人',
+      // An option for a recipient who left or may no longer be written to
+      gone: (name: string) => `${name}（不在）`,
+      goneProblem: (name: string) => `${name} 已經離開或現在不能收私訊，請改選傳給誰。`,
+      placeholder: (name: string) => `私訊給 ${name}…`,
+      hint: (name: string) => `只有你和 ${name} 看得到，主持人也看不到。`,
+      // 「你 → 小潔（私訊）· 21:04」 above a private message
+      meta: (from: string, to: string, time: string) => `${from} → ${to}（私訊）· ${time}`,
+      spoken: (from: string, to: string, time: string) => `${from} 私訊 ${to}，${time}：`,
+      reply: '回覆',
+      replyLabel: (name: string) => `回覆 ${name}（私訊）`,
+      preview: (name: string) => `${name}（私訊）`,
+      // The participants panel: each person's menu, and the host's switch
+      menu: '私訊',
+      switch: '允許參與者互傳私訊',
+      switchHint: '關閉後，參與者只能私訊主持人與共同主持人；已經傳的不受影響',
+      switchedOn: '參與者現在可以互傳私訊',
+      switchedOff: '參與者現在只能私訊主持人與共同主持人',
+    },
     // Files in the chat (I5, e5-t05, e5-t06)
     file: {
       attach: '附加檔案',

@@ -274,7 +274,7 @@ describe('ChatPanel', () => {
     fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 })
     expect(onSend).not.toHaveBeenCalled()
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(onSend).toHaveBeenCalledExactlyOnceWith('第一行')
+    expect(onSend).toHaveBeenCalledExactlyOnceWith('第一行', null)
     expect(input).toHaveValue('')
   })
 
@@ -293,7 +293,7 @@ describe('ChatPanel', () => {
       expect(onSend).not.toHaveBeenCalled()
       now.mockReturnValue(10_000 + COMPOSITION_GRACE_MS + 50)
       fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 })
-      expect(onSend).toHaveBeenCalledExactlyOnceWith('你好')
+      expect(onSend).toHaveBeenCalledExactlyOnceWith('你好', null)
     } finally {
       now.mockRestore()
     }
@@ -314,7 +314,7 @@ describe('ChatPanel', () => {
       fireEvent.keyDown(input, { key: 'Enter' })
       expect(onSend).not.toHaveBeenCalled()
       fireEvent.click(screen.getByRole('button', { name: strings.chat.send }))
-      expect(onSend).toHaveBeenCalledExactlyOnceWith('第一行')
+      expect(onSend).toHaveBeenCalledExactlyOnceWith('第一行', null)
     } finally {
       vi.unstubAllGlobals()
     }

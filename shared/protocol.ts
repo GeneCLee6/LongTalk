@@ -212,6 +212,15 @@
 //    per member: a new pairing replaces nothing, it is refused until the old one leaves. When too
 //    many wrong codes void every open code the issuers get `notice` `pairingVoided`. An agent shares
 //    its screen through the same `share` / `tracks` as a browser, on its own socket.
+// 31. Private messages (O4, e5-t09): `chat` with `to` (a member id) is for that member alone
+//    (worker/roles.ts `privateChat`, shared/roles.ts mayMessagePrivately). The room refuses it with
+//    `forbidden` when the recipient is not in the meeting (gone, waiting, a computer, oneself), is in
+//    another breakout room, or the room's switch is off and neither end is a host or co-host. The
+//    message is an ordinary chat message with `ChatMessage.to` / `toName`, under the same CHAT_RATE
+//    and in the same CHAT_HISTORY, but only the sender and the recipient are ever sent it (live and
+//    in every history, after a move between breakout rooms too). Nobody else learns that it exists:
+//    no host, no recording. `host` `privateChat` with `on` sets `RoomInfo.privateChat` (a host or
+//    co-host, worker/roles.ts `privateChatPolicy`); absent means on. Messages already sent stay.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -261,6 +270,8 @@
 // v23 → v24 (N2): `pairStart`, `pairCancel`, `pairCode`, `agentRemove`, `Member.agent`, notices
 //   `agentPaired`, `pairingVoided`, error code `pair_busy`. A v23 browser would show a desktop
 //   agent as a stranger with a strange name.
+// v25 → v26 (O4): `chat.to`, `ChatMessage.to` / `toName`, `RoomInfo.privateChat`, `host` action
+//   `privateChat`. A v25 browser would show a private message as if everyone had seen it.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -296,7 +307,7 @@ import type { UsageState } from './usage.ts'
 import type { AgentPlatform } from './control.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 24
+export const PROTOCOL_VERSION = 26
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -438,6 +449,11 @@ export type RoomInfo = RoomInit & {
   startMuted?: boolean
   allowAnnotation?: boolean
   allowRecording?: boolean
+  /**
+   * Participants may message each other privately (O4, e5-t09); a host or co-host switches it
+   * (`host` `privateChat`). Off, they may still write to a host or co-host. Absent means true
+   */
+  privateChat?: boolean
 }
 
 /** The room's whiteboard while it is open: who opened it (its owner, as a sharer is of a share) */
@@ -841,8 +857,11 @@ export type UnshareMessage = { t: 'unshare' }
 /** Spotlight a member for everyone, or (null) end the spotlight (G2, e4-t11; host or co-host) */
 export type SpotlightMessage = { t: 'spotlight'; memberId: string | null }
 
-/** A chat message to everyone in the room (D3); `text` is normalizeChatText's */
-export type ChatClientMessage = { t: 'chat'; text: string }
+/**
+ * A chat message to everyone in the room (D3); `text` is normalizeChatText's. With `to` (O4,
+ * e5-t09): to that member alone
+ */
+export type ChatClientMessage = { t: 'chat'; text: string; to?: string }
 
 /** A reaction to everyone in the room (G3, e5-t03) */
 export type ReactClientMessage = { t: 'react'; emoji: Reaction }
@@ -872,8 +891,8 @@ export type HostRoomAction = 'muteAll' | 'endMeeting' | 'admitAll'
 /** Admit or turn away one person in the waiting room (F2); `memberId` says who */
 export type HostWaitingAction = 'admit' | 'deny'
 
-/** The room's switches (F2): `on` says which way */
-export type HostSwitchAction = 'lock' | 'waitingRoom'
+/** The room's switches (F2; `privateChat` O4): `on` says which way */
+export type HostSwitchAction = 'lock' | 'waitingRoom' | 'privateChat'
 
 /** The room's password (F3): a new one, or null to clear it */
 export type HostPasswordAction = 'setPassword'
@@ -911,7 +930,7 @@ const HOST_MEMBER_ACTIONS: readonly string[] = [
 ]
 const HOST_ROOM_ACTIONS: readonly string[] = ['muteAll', 'endMeeting', 'admitAll']
 const HOST_WAITING_ACTIONS: readonly string[] = ['admit', 'deny']
-const HOST_SWITCH_ACTIONS: readonly string[] = ['lock', 'waitingRoom']
+const HOST_SWITCH_ACTIONS: readonly string[] = ['lock', 'waitingRoom', 'privateChat']
 
 /** A host control (F1, e1-t07; F2); the room checks the member may (worker/roles.ts) */
 export type HostMessage =
@@ -1203,7 +1222,9 @@ export function parseClientMessage(raw: string): ClientMessage | null {
         : null
     case 'chat': {
       const text = normalizeChatText(value.text)
-      return text === null ? null : { t: 'chat', text }
+      if (text === null) return null
+      if (value.to === undefined) return { t: 'chat', text }
+      return isMemberId(value.to) ? { t: 'chat', text, to: value.to } : null
     }
     case 'react':
       return isReaction(value.emoji) ? { t: 'react', emoji: value.emoji } : null

@@ -94,9 +94,19 @@ export function scopeView(view: RoomView, you: string): RoomView {
   return { ...view, members, room: { ...view.room, shares, spotlight } }
 }
 
-/** Whether a member in `group` (null: the main room) sees this chat message */
-export const chatVisible = (message: ChatMessage, group: string | null): boolean =>
-  (message.group ?? null) === group
+/**
+ * Whether the member `memberId`, in `group` (null: the main room), sees this chat message. A
+ * private message (O4, e5-t09; `to`) is the sender's and the recipient's alone, wherever they are
+ * now: the room only lets it be sent within one room, and it stays their conversation after a move
+ */
+export const chatVisible = (
+  message: ChatMessage,
+  group: string | null,
+  memberId: string | null = null,
+): boolean =>
+  message.to !== undefined
+    ? memberId !== null && (memberId === message.from || memberId === message.to)
+    : (message.group ?? null) === group
 
 /**
  * Where the rooms are: `open` with the time left (null: no limit), or `closing` with the time left

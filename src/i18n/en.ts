@@ -813,6 +813,26 @@ export const enRoom: RoomStrings = {
     preview: 'New message',
     previewOpen: 'open the chat',
     openLink: (url: string) => `Open link ${url} (new tab)`,
+    private: {
+      recipient: 'To',
+      everyone: 'Everyone',
+      gone: (name: string) => `${name} (not here)`,
+      goneProblem: (name: string) =>
+        `${name} left or can’t get private messages right now. Choose who to send to.`,
+      placeholder: (name: string) => `Message ${name} privately…`,
+      hint: (name: string) => `Only you and ${name} can see this. Hosts can’t either.`,
+      meta: (from: string, to: string, time: string) => `${from} → ${to} (private) · ${time}`,
+      spoken: (from: string, to: string, time: string) => `${from} to ${to}, privately, ${time}:`,
+      reply: 'Reply',
+      replyLabel: (name: string) => `Reply to ${name} (private)`,
+      preview: (name: string) => `${name} (private)`,
+      menu: 'Message privately',
+      switch: 'Let participants message each other privately',
+      switchHint:
+        'When off, participants can only message hosts and co-hosts privately; messages already sent stay',
+      switchedOn: 'Participants can now message each other privately',
+      switchedOff: 'Participants can now only message hosts and co-hosts privately',
+    },
     file: {
       attach: 'Attach a file',
       attachHint: (max: string) => `Attach a file (up to ${max} each, deleted after 24 hours)`,

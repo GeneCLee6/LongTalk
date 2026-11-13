@@ -198,6 +198,14 @@ describe('chatVisible', () => {
     expect(chatVisible(message('g1'), 'g2')).toBe(false)
     expect(chatVisible(message('g1'), null)).toBe(false)
   })
+
+  it('shows a private message (O4) to its sender and recipient only, in any room', () => {
+    const dm: ChatMessage = { ...message('g1'), to: 'b', toName: 'B' }
+    expect(chatVisible(dm, 'g1', 'a')).toBe(true)
+    expect(chatVisible(dm, null, 'b')).toBe(true)
+    expect(chatVisible(dm, 'g1', 'c')).toBe(false)
+    expect(chatVisible(dm, 'g1')).toBe(false)
+  })
 })
 
 describe('breakoutRemaining', () => {
