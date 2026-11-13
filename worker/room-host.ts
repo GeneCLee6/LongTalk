@@ -97,6 +97,7 @@ import {
   mayClearLayer,
   mayCloseBoard,
   mayDraw,
+  mayMessagePrivately,
   mayOpenBoard,
   type Action,
 } from './roles.ts'
@@ -200,6 +201,8 @@ const HOST_RULE: Readonly<Record<HostMessage['action'], Action>> = {
   // O1 (e10-t06): the batch is a room action; each member in it is checked as muteMember too
   startMuted: 'startMuted',
   muteMembers: 'muteAll',
+  // O4 (e5-t09)
+  privateChat: 'privateChatPolicy',
   admit: 'admit',
   admitAll: 'admit',
   deny: 'admit',
@@ -1137,7 +1140,7 @@ export class RoomHost {
         this.endShare(conn.member!)
         return
       case 'chat':
-        this.addChat(connId, conn.member!, message.text)
+        this.addChat(connId, conn.member!, message.text, message.to)
         return
       case 'host':
         return this.control(connId, conn.member!, message)
@@ -2274,6 +2277,11 @@ export class RoomHost {
       case 'lock':
         this.setRoom({ locked: message.on })
         return
+      case 'privateChat':
+        // Messages already sent stay where they are; only new ones are checked (O4)
+        if ((this.info!.privateChat !== false) === message.on) return
+        this.setRoom({ privateChat: message.on })
+        return
       case 'waitingRoom':
         this.setRoom({ waitingRoom: message.on })
         // Nobody is left waiting behind a waiting room that is off (F2)
@@ -2359,6 +2367,7 @@ export class RoomHost {
         | 'startMuted'
         | 'allowAnnotation'
         | 'allowRecording'
+        | 'privateChat'
       >
     >,
   ): void {
@@ -2632,8 +2641,8 @@ export class RoomHost {
    * goes to everyone joined (the sender too: its acknowledgement). The room keeps the latest
    * CHAT_HISTORY; older ones leave storage.
    */
-  private addChat(connId: string, memberId: string, text: string): void {
-    if (!this.allowed(memberId, 'chat')) {
+  private addChat(connId: string, memberId: string, text: string, to?: string): void {
+    if (!this.allowed(memberId, 'chat') || (to !== undefined && !this.mayWrite(memberId, to))) {
       this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
       return
     }
@@ -2643,7 +2652,29 @@ export class RoomHost {
       return
     }
     const member = this.members.get(memberId)!
-    this.postChat({ id: ++this.chatId, from: memberId, name: member.name, text, at: now })
+    const recipient = to === undefined ? undefined : this.members.get(to)!
+    this.postChat({
+      id: ++this.chatId,
+      from: memberId,
+      name: member.name,
+      text,
+      at: now,
+      ...(recipient ? { to: recipient.id, toName: recipient.name } : {}),
+    })
+  }
+
+  /**
+   * Whether `memberId` may send `to` a private message (O4, e5-t09; CLAUDE.md rule 1): someone else
+   * in the meeting (not waiting, not a computer), in the same breakout room, and the room's switch
+   * or either end's role allows it (shared/roles.ts mayMessagePrivately)
+   */
+  private mayWrite(memberId: string, to: string): boolean {
+    const sender = this.members.get(memberId)
+    const recipient = this.members.get(to)
+    if (!sender || !recipient || to === memberId || recipient.agent || sender.agent) return false
+    if (!this.allowed(memberId, 'privateChat')) return false
+    if (this.groupOf(memberId) !== this.groupOf(to)) return false
+    return mayMessagePrivately(this.info?.privateChat !== false, sender.role, recipient.role)
   }
 
   /**
@@ -2658,7 +2689,10 @@ export class RoomHost {
     while (this.chat.length > CHAT_HISTORY) this.deps.storage.dropChat(this.chat.shift()!.id)
     const frame: ServerMessage = { t: 'chat', messages: [message] }
     for (const [id, conn] of this.conns) {
-      if (this.inRoom(conn) && chatVisible(message, this.groupOf(conn.member))) {
+      if (
+        this.inRoom(conn) &&
+        chatVisible(message, this.groupOf(conn.member), conn.member ?? null)
+      ) {
         this.deps.sockets.send(id, frame)
       }
     }
@@ -2671,8 +2705,9 @@ export class RoomHost {
    */
   private sendChatHistory(connId: string, regroup = false): void {
     if (this.conns.get(connId)?.agent) return
-    const group = this.groupOf(this.conns.get(connId)?.member ?? null)
-    const visible = this.chat.filter((message) => chatVisible(message, group))
+    const member = this.conns.get(connId)?.member ?? null
+    const group = this.groupOf(member)
+    const visible = this.chat.filter((message) => chatVisible(message, group, member))
     for (let start = 0; start === 0 || start < visible.length; start += CHAT_CHUNK) {
       const messages = visible.slice(start, start + CHAT_CHUNK)
       this.deps.sockets.send(connId, {

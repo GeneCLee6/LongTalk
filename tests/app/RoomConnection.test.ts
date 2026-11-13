@@ -666,7 +666,10 @@ describe('RoomConnection chat (D3, e5-t01)', () => {
     expect(t.connection.sendChat('字'.repeat(2001))).toBe('tooLong')
     expect(t.connection.sendChat('  hi\r\n  ')).toBe('sent')
     expect(t.socket.sent.at(-1)).toBe(JSON.stringify({ t: 'chat', text: 'hi' }))
-    for (let i = 0; i < 9; i++) t.connection.sendChat(`m${i}`, 1000)
-    expect(t.connection.sendChat('one too many', 1000)).toBe('rateLimited')
+    // O4 (e5-t09): a private message names its recipient
+    expect(t.connection.sendChat('psst', 'm2')).toBe('sent')
+    expect(t.socket.sent.at(-1)).toBe(JSON.stringify({ t: 'chat', text: 'psst', to: 'm2' }))
+    for (let i = 0; i < 8; i++) t.connection.sendChat(`m${i}`, null, 1000)
+    expect(t.connection.sendChat('one too many', null, 1000)).toBe('rateLimited')
   })
 })

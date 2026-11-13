@@ -85,3 +85,22 @@ describe('chat on the wire (protocol v8)', () => {
     expect(parseServerMessage(JSON.stringify({ t: 'chat' }))).toBeNull()
   })
 })
+
+describe('private messages on the wire (O4, e5-t09)', () => {
+  it('parses `to` when it is a member id, and refuses anything else', () => {
+    expect(parseClientMessage('{"t":"chat","text":"hi","to":"m2"}')).toEqual({
+      t: 'chat',
+      text: 'hi',
+      to: 'm2',
+    })
+    expect(parseClientMessage('{"t":"chat","text":"hi","to":5}')).toBeNull()
+    expect(parseClientMessage('{"t":"chat","text":"hi","to":null}')).toBeNull()
+  })
+
+  it('accepts a private message from the room, and refuses a malformed recipient', () => {
+    const message = { id: 1, from: 'm1', name: 'Gene', text: 'hi', at: 5, to: 'm2', toName: 'Bo' }
+    expect(isChatMessage(message)).toBe(true)
+    expect(isChatMessage({ ...message, to: 2 })).toBe(false)
+    expect(isChatMessage({ ...message, toName: null })).toBe(false)
+  })
+})

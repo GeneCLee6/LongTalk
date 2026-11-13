@@ -93,7 +93,7 @@ export const policy = (f: Facts): PolicyDocument => ({
               key: 'room',
               cells: [
                 'The room (Cloudflare Durable Object, one per room)',
-                `For the length of the meeting: the room’s name; each member’s display name, role, member token, this browser’s random id and microphone, camera and raised-hand state; the last ${f.chatMessages} chat messages; each chat file’s name, size, type and which member sent it; the poll on now and each person’s answer (on an anonymous poll only the room knows, so people can change their answer; nobody can see it), the countdown and the agenda; who is recording and who agreed; marks on shared screens and the whiteboard (strokes, text and who drew them); names in the waiting room; removed browsers’ ids. If the room has a password, a salted hash of it, and for wrong guesses the browser’s random id and a digest of the network.`,
+                `For the length of the meeting: the room’s name; each member’s display name, role, member token, this browser’s random id and microphone, camera and raised-hand state; the last ${f.chatMessages} chat messages (private messages included, with who sent them to whom); each chat file’s name, size, type and which member sent it; the poll on now and each person’s answer (on an anonymous poll only the room knows, so people can change their answer; nobody can see it), the countdown and the agenda; who is recording and who agreed; marks on shared screens and the whiteboard (strokes, text and who drew them); names in the waiting room; removed browsers’ ids. If the room has a password, a salted hash of it, and for wrong guesses the browser’s random id and a digest of the network.`,
               ],
             },
             {
@@ -157,7 +157,7 @@ export const policy = (f: Facts): PolicyDocument => ({
         {
           kind: 'p',
           text: [
-            'Everyone in a meeting sees the other members’ names and states and the chat, and can download chat files. Names in the waiting room reach every member’s browser, although only hosts and co-hosts are shown them.',
+            'Everyone in a meeting sees the other members’ names and states and the chat, and can download chat files; a private message is seen only by who sent it and who it is for, not by hosts either. Names in the waiting room reach every member’s browser, although only hosts and co-hosts are shown them.',
           ],
         },
       ],

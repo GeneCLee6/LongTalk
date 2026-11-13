@@ -23,12 +23,26 @@ import { ChatUploads } from './ChatUploads.tsx'
 import { AttachIcon, SendIcon } from './icons.tsx'
 import { useMediaQuery } from './layoutContext.ts'
 
+/** Someone a private message may go to (O4, e5-t09) */
+export type ChatRecipient = { id: string; name: string }
+
 export interface ChatPanelProps {
   messages: readonly ChatMessage[]
   /** Our member id: our messages sit on the right, headed 「你」 */
   you: string | null
-  /** Sends the text; anything but `sent` keeps it in the box and says why */
-  onSend: (text: string) => ChatSendResult
+  /**
+   * Sends the text, to everyone or (`to`) privately to that member; anything but `sent` keeps it in
+   * the box and says why
+   */
+  onSend: (text: string, to: string | null) => ChatSendResult
+  /**
+   * Private messages (O4, e5-t09): who we may write to now (shared/roles.ts mayMessagePrivately,
+   * the room decides again), who the box sends to (null: everyone) and choosing that. Without
+   * `onTo` the panel only writes to everyone
+   */
+  recipients?: readonly ChatRecipient[]
+  to?: ChatRecipient | null
+  onTo?: (to: ChatRecipient | null) => void
   /** Put the cursor in the box when the panel opens (desktop; on phones the keyboard would cover the list) */
   autoFocus?: boolean
   /** Sharing and opening files (I5, e5-t05); without it the panel is text only */
@@ -57,7 +71,16 @@ const STICK_PX = 48
  * button sends (field test 2026-11-03: 注音 on a phone sent half a sentence). The list follows new messages while it
  * is scrolled to the bottom, and always after our own.
  */
-export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: ChatPanelProps) {
+export function ChatPanel({
+  messages,
+  you,
+  onSend,
+  autoFocus = false,
+  files,
+  recipients = [],
+  to = null,
+  onTo,
+}: ChatPanelProps) {
   const picker = useRef<HTMLInputElement>(null)
   const [viewing, setViewing] = useState<{ start: ChatFile; images: ChatFile[] } | null>(null)
   const openImage = (start: ChatFile) => {
@@ -74,6 +97,10 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: C
   const atBottom = useRef(true)
   const hintId = useId()
   const problemId = useId()
+  const toId = useId()
+  // The chosen recipient may have left, or the host switched private messages off (O4)
+  const toGone = to !== null && !recipients.some((recipient) => recipient.id === to.id)
+  const choosesTo = onTo !== undefined && (recipients.length > 0 || to !== null)
   const touch = useMediaQuery(media.touchPrimary)
   const composing = useRef(false)
   const compositionEndedAt = useRef<number | null>(null)
@@ -100,7 +127,11 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: C
 
   const length = [...draft.trim()].length
   const send = () => {
-    const result = onSend(draft)
+    if (to !== null && toGone) {
+      setProblem(strings.chat.private.goneProblem(to.name))
+      return
+    }
+    const result = onSend(draft, to?.id ?? null)
     switch (result) {
       case 'sent':
         setDraft('')
@@ -175,15 +206,33 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: C
               const grouped =
                 previous !== undefined &&
                 previous.from === message.from &&
+                previous.to === message.to &&
                 message.at - previous.at < GROUP_MS
               const name = own ? strings.chat.you : message.name
               const time = chatTime(message.at)
+              // A private message (O4): who it was for, said in words, not only by its border
+              const privateTo =
+                message.to === undefined
+                  ? null
+                  : message.to === you
+                    ? strings.chat.you
+                    : (message.toName ?? '')
+              const spoken =
+                privateTo === null
+                  ? strings.chat.spoken(name, time)
+                  : strings.chat.private.spoken(name, privateTo, time)
               return (
                 <Item key={message.id} $own={own} $grouped={grouped}>
-                  {!grouped && <Meta aria-hidden="true">{strings.chat.meta(name, time)}</Meta>}
+                  {!grouped && (
+                    <Meta aria-hidden="true">
+                      {privateTo === null
+                        ? strings.chat.meta(name, time)
+                        : strings.chat.private.meta(name, privateTo, time)}
+                    </Meta>
+                  )}
                   {message.poll ? (
-                    <Bubble as="div" $own={own}>
-                      <Hidden>{strings.chat.spoken(name, time)}</Hidden>
+                    <Bubble as="div" $own={own} $private={privateTo !== null}>
+                      <Hidden>{spoken}</Hidden>
                       <PollCard>
                         <b>{strings.poll.resultTitle(message.poll.question)}</b>
                         <PollResults
@@ -196,8 +245,8 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: C
                       </PollCard>
                     </Bubble>
                   ) : message.file && files ? (
-                    <Bubble as="div" $own={own}>
-                      <Hidden>{strings.chat.spoken(name, time)}</Hidden>
+                    <Bubble as="div" $own={own} $private={privateTo !== null}>
+                      <Hidden>{spoken}</Hidden>
                       <ChatFileCard
                         file={message.file}
                         load={files.load}
@@ -206,10 +255,22 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: C
                       />
                     </Bubble>
                   ) : (
-                    <Bubble $own={own}>
-                      <Hidden>{strings.chat.spoken(name, time)}</Hidden>
+                    <Bubble $own={own} $private={privateTo !== null}>
+                      <Hidden>{spoken}</Hidden>
                       <MessageText text={message.text} />
                     </Bubble>
+                  )}
+                  {privateTo !== null && !own && onTo && (
+                    <Reply
+                      type="button"
+                      aria-label={strings.chat.private.replyLabel(message.name)}
+                      onClick={() => {
+                        onTo({ id: message.from, name: message.name })
+                        input.current?.focus()
+                      }}
+                    >
+                      {strings.chat.private.reply}
+                    </Reply>
                   )}
                 </Item>
               )
@@ -226,8 +287,32 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: C
             onDismiss={files.dismiss}
           />
         )}
-        <Box>
-          {files && (
+        {choosesTo && (
+          <ToRow>
+            <label htmlFor={toId}>{strings.chat.private.recipient}</label>
+            <select
+              id={toId}
+              value={to?.id ?? ''}
+              onChange={(event) => {
+                const id = event.target.value
+                onTo(id === '' ? null : (recipients.find((r) => r.id === id) ?? null))
+                if (problem) setProblem(null)
+              }}
+            >
+              <option value="">{strings.chat.private.everyone}</option>
+              {to !== null && toGone && (
+                <option value={to.id}>{strings.chat.private.gone(to.name)}</option>
+              )}
+              {recipients.map((recipient) => (
+                <option key={recipient.id} value={recipient.id}>
+                  {recipient.name}
+                </option>
+              ))}
+            </select>
+          </ToRow>
+        )}
+        <Box $private={to !== null}>
+          {files && to === null && (
             <>
               <Attach
                 type="button"
@@ -258,7 +343,9 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: C
             value={draft}
             aria-label={strings.chat.inputLabel}
             aria-describedby={problem ? `${hintId} ${problemId}` : hintId}
-            placeholder={strings.chat.placeholder}
+            placeholder={
+              to === null ? strings.chat.placeholder : strings.chat.private.placeholder(to.name)
+            }
             // The on-screen keyboard's Enter says what it does: a new line on touch screens
             enterKeyHint={touch ? 'enter' : 'send'}
             onCompositionStart={() => {
@@ -284,7 +371,10 @@ export function ChatPanel({ messages, you, onSend, autoFocus = false, files }: C
           </Send>
         </Box>
         <Footer>
-          <span id={hintId}>{touch ? strings.chat.hintTouch : strings.chat.hint}</span>
+          <span id={hintId}>
+            {to !== null && <PrivateHint>{strings.chat.private.hint(to.name)}</PrivateHint>}
+            {touch ? strings.chat.hintTouch : strings.chat.hint}
+          </span>
           {length >= COUNT_FROM && (
             <Count $over={length > MAX_CHAT_CHARS} aria-live="polite">
               {strings.chat.remaining(MAX_CHAT_CHARS - length)}
@@ -389,11 +479,14 @@ const Meta = styled.span`
   font-size: ${fontSize.toolbarLabel};
 `
 
-const Bubble = styled.p<{ $own: boolean }>`
+const Bubble = styled.p<{ $own: boolean; $private?: boolean }>`
   position: relative;
   max-width: 85%;
   margin: 0;
   padding: ${space(2)} ${space(2.5)};
+  /* A private message (O4) has a dashed edge; its header says so in words too */
+  border: 1px ${({ $private }) => ($private ? 'dashed' : 'solid')}
+    ${({ $private }) => ($private ? color.warn : 'transparent')};
   border-radius: ${radius.button};
   background: ${({ $own }) => ($own ? color.primarySoft : color.surface2)};
   color: ${color.fg};
@@ -442,12 +535,13 @@ const Compose = styled.form`
   border-top: 1px solid ${color.line};
 `
 
-const Box = styled.div`
+const Box = styled.div<{ $private: boolean }>`
   display: flex;
   align-items: flex-end;
   gap: ${space(1)};
   padding: ${space(1)} ${space(1)} ${space(1)} ${space(2)};
-  border: 1px solid ${color.line};
+  border: 1px ${({ $private }) => ($private ? 'dashed' : 'solid')}
+    ${({ $private }) => ($private ? color.warn : color.line)};
   border-radius: ${radius.button};
   background: ${color.surface2};
 
@@ -534,6 +628,42 @@ const Footer = styled.div`
 const Count = styled.span<{ $over: boolean }>`
   color: ${({ $over }) => ($over ? color.danger : color.muted)};
   font-variant-numeric: tabular-nums;
+`
+
+/** Who the box sends to (O4): 「傳給 [所有人 ▾]」 */
+const ToRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: ${space(2)};
+  color: ${color.muted};
+  font-size: ${fontSize.toolbarLabel};
+
+  select {
+    flex: 1;
+    min-width: 0;
+    padding: ${space(1)} ${space(2)};
+    border: 1px solid ${color.line};
+    border-radius: ${radius.button};
+    background: ${color.surface2};
+    color: ${color.fg};
+    font: inherit;
+  }
+`
+
+const PrivateHint = styled.span`
+  display: block;
+  color: ${color.fg};
+`
+
+const Reply = styled.button`
+  margin-top: ${space(0.5)};
+  padding: 0 ${space(1)};
+  border: none;
+  background: transparent;
+  color: ${color.primary};
+  font-size: ${fontSize.toolbarLabel};
+  cursor: pointer;
+  text-decoration: underline;
 `
 
 const Problem = styled.p`

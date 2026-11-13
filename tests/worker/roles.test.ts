@@ -7,6 +7,7 @@ import {
   authorize,
   can,
   canActOn,
+  mayMessagePrivately,
   type Action,
   type Role,
 } from '../../worker/roles.ts'
@@ -27,6 +28,7 @@ const EXPECTED: Record<Action, string> = {
   votePoll: 'HCP',
   requestControl: 'HCP',
   pairComputer: 'HCP',
+  privateChat: 'HCP',
   renameRoom: 'HC',
   muteAll: 'HC',
   endMeeting: 'H',
@@ -43,6 +45,7 @@ const EXPECTED: Record<Action, string> = {
   breakout: 'HC',
   timer: 'HC',
   agenda: 'HC',
+  privateChatPolicy: 'HC',
   muteMember: 'HC',
   camOff: 'HC',
   stopShare: 'HC',
@@ -122,5 +125,28 @@ describe('roles (e1-t06)', () => {
     expect(authorize('a', 'host', 'muteMember', null)).toBe(false)
     expect(authorize('a', 'host', 'remove', { id: 'a', role: 'host' })).toBe(false)
     expect(authorize('a', 'participant', 'remove', { id: 'b', role: 'participant' })).toBe(false)
+  })
+})
+
+describe('mayMessagePrivately (O4, e5-t09)', () => {
+  it('lets anyone in the meeting write to anyone in it while the switch is on', () => {
+    for (const from of ['host', 'cohost', 'participant'] as const) {
+      for (const to of ['host', 'cohost', 'participant'] as const) {
+        expect(mayMessagePrivately(true, from, to), `${from} → ${to}`).toBe(true)
+      }
+    }
+  })
+
+  it('off: participants write only to a host or co-host, who still write to anyone', () => {
+    expect(mayMessagePrivately(false, 'participant', 'participant')).toBe(false)
+    expect(mayMessagePrivately(false, 'participant', 'host')).toBe(true)
+    expect(mayMessagePrivately(false, 'participant', 'cohost')).toBe(true)
+    expect(mayMessagePrivately(false, 'cohost', 'participant')).toBe(true)
+    expect(mayMessagePrivately(false, 'host', 'participant')).toBe(true)
+  })
+
+  it('never to or from the waiting room', () => {
+    expect(mayMessagePrivately(true, 'waiting', 'host')).toBe(false)
+    expect(mayMessagePrivately(true, 'host', 'waiting')).toBe(false)
   })
 })
