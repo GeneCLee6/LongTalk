@@ -420,6 +420,28 @@ export const enRoom: RoomStrings = {
     unlockedNow: 'Room unlocked',
     waitingOnNow: 'Waiting room on: new people wait until you let them in',
     waitingOffNow: 'Waiting room off',
+    // Large rooms (O1, e10-t06): the start-muted switch, search, filters, muting who is listed
+    startMuted: 'Start everyone muted',
+    startMutedHint:
+      'Participants who come in from now on start muted and unmute when they want to speak; who is here already is not affected',
+    startMutedOnNow: 'People who join will start muted',
+    startMutedOffNow: 'People who join will no longer start muted',
+    search: 'Search participants',
+    searchPlaceholder: 'Search by name',
+    filters: 'Filter participants',
+    filter: {
+      all: 'All',
+      hand: 'Hand raised',
+      muted: 'Muted',
+      noVideo: 'Camera off',
+    },
+    filterCount: (label: string, count: number) => `${label} ${count}`,
+    shownCount: (shown: number, total: number) => `Showing ${shown} of ${total}`,
+    noMatch: 'Nobody matches',
+    muteShown: (count: number) => `Mute the ${count} listed`,
+    muteShownHint:
+      'Mutes only the people listed whose microphone is on; anyone can unmute themselves',
+    mutedShown: (count: number) => (count === 1 ? 'Muted 1 person' : `Muted ${count} people`),
     waiting: (count: number) => `Waiting ${count}`,
     waitingList: 'Waiting room list',
     admit: 'Admit',

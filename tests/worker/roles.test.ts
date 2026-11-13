@@ -32,6 +32,7 @@ const EXPECTED: Record<Action, string> = {
   endMeeting: 'H',
   lockRoom: 'HC',
   waitingRoom: 'HC',
+  startMuted: 'HC',
   admit: 'HC',
   spotlight: 'HC',
   setPassword: 'H',
