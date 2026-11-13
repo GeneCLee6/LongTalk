@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-shared-screen"
+description = "Enables the shared_screen command without any pre-configured scope."
+commands.allow = ["shared_screen"]
+
+[[permission]]
+identifier = "deny-shared-screen"
+description = "Denies the shared_screen command without any pre-configured scope."
+commands.deny = ["shared_screen"]

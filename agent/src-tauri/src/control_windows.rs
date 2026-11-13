@@ -9,7 +9,8 @@
 // - `border-<monitor>-<side>`: four thin red strips around every monitor while control is on (no
 //   transparent window needed, so the same on Windows, macOS and Linux), which the mouse goes
 //   through.
-// None of them takes injected input in N4 (TODO there, with the main window: T-04, TH-30).
+// None of them takes an injected press (N4: inject/ does not send a press aimed at any window of
+// this process, on Windows; on macOS nothing is injected while the dialog is up: T-04, TH-30).
 
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 

@@ -52,6 +52,8 @@ export type ControlView =
       leftMs: number | null
       /** The hourly question is up: [ms left to answer, ms until its buttons work] */
       reconfirm: [number, number] | null
+      /** A combination the controller just pressed, by name (「Win+R」, N4), for a few seconds */
+      hint: string | null
     }
 
 /** What the tray asks the window to do (tray.rs TRAY_EVENT) */
@@ -72,6 +74,9 @@ export const native = {
   send: (text: string) => invoke<void>('socket_send', { text }),
   confirm: (accept: boolean) => invoke<void>('confirm_join', { accept }),
   setSharing: (on: boolean) => invoke<void>('set_sharing', { on }),
+  /** The captured share's size, so the controller's pointer lands on that screen (N4) */
+  sharedScreen: (width: number | null, height: number | null, monitor: boolean) =>
+    invoke<void>('shared_screen', { width, height, monitor }),
   leave: () => invoke<void>('leave_room'),
   apiFetch: (method: string, path: string, body: string | null) =>
     invoke<{ status: number; body: string }>('api_fetch', { method, path, body }),

@@ -79,6 +79,7 @@ const zhTW = {
     keepGoing: '繼續',
     stop: '中斷',
     controlling: (name: string) => `${name} 正在控制這台電腦`,
+    pressed: (name: string, combo: string) => `${name} 按了 ${combo}`,
     failed: '沒有送出，請再按一次',
   },
 }
@@ -160,10 +161,12 @@ const en: AgentStrings = {
     muteFor: 'How long to take no requests',
     minutes: (n: number) => `${n} minutes`,
     reconfirm: (name: string) => `Keep letting ${name} control this computer?`,
-    reconfirmNote: '“Allow until I stop it” asks again every hour. Without an answer, control ends.',
+    reconfirmNote:
+      '“Allow until I stop it” asks again every hour. Without an answer, control ends.',
     keepGoing: 'Keep going',
     stop: 'Stop',
     controlling: (name: string) => `${name} is controlling this computer`,
+    pressed: (name: string, combo: string) => `${name} pressed ${combo}`,
     failed: 'That did not go through; press it again',
   },
 }
