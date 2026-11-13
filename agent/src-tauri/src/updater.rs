@@ -39,6 +39,14 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
     let bytes = update.download(|_, _| {}, || {}).await?;
     if idle() {
         update.install(bytes)?;
+        // The agent log keeps every update installed (§5.10)
+        app.state::<AgentState>()
+            .log
+            .lock()
+            .unwrap()
+            .write(&crate::agent_log::Entry::Updated {
+                version: &update.version,
+            });
         app.restart();
     }
     Ok(())

@@ -267,6 +267,10 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+.agent-stop-hint {
+  font-weight: 700;
+}
+
 .agent-stop-button {
   flex: none;
   color: var(--lt-danger);

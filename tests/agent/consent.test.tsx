@@ -115,6 +115,7 @@ describe('the consent dialog (T-10)', () => {
       untilStopped: true,
       leftMs: null,
       reconfirm: [60_000, CONSENT_DIALOG_ARM_MS],
+      hint: null,
     }
     await open()
     expect(screen.getByRole('heading', { name: text.control.reconfirm('Bob') })).toBeTruthy()
@@ -136,6 +137,7 @@ describe('the floating 中斷 button', () => {
       untilStopped: false,
       leftMs: 9 * 60_000 + 41_000,
       reconfirm: null,
+      hint: null,
     }
     render(<StopWindow />)
     await act(async () => {
@@ -144,5 +146,23 @@ describe('the floating 中斷 button', () => {
     expect(screen.getByText(`${text.control.controlling('Bob')} · 9:41`)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: text.control.stop }))
     expect(calls).toEqual([{ cmd: 'stop', args: [] }])
+  })
+
+  // N4 (f-remote-control-security.md 5.6): a combination that opens something powerful is named
+  it('names a combination the controller just pressed', async () => {
+    current = {
+      phase: 'granted',
+      controllerName: 'Bob',
+      untilStopped: true,
+      leftMs: null,
+      reconfirm: null,
+      hint: 'Win+R',
+    }
+    render(<StopWindow />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('status').textContent).toBe(text.control.pressed('Bob', 'Win+R'))
+    expect(text.control.pressed('Bob', 'Win+R')).toBe('Bob 按了 Win+R')
   })
 })

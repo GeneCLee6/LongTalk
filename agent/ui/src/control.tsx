@@ -5,7 +5,8 @@
 //   拒絕), 「不再接受請求 N 分鐘」 next to 拒絕, the 60-second countdown; or, during an until-stopped
 //   grant, the hourly 「還要繼續讓 Bob 控制嗎？」. Nothing works for CONSENT_DIALOG_ARM_MS (Rust
 //   refuses it too), and only this window may answer (capabilities/consent.json);
-// - `#stop`: the floating 中斷 button and who controls, with the time left;
+// - `#stop`: the floating 中斷 button and who controls, with the time left; for a few seconds
+//   after the controller pressed a combination that opens something powerful, which one (N4);
 // - `#border`: one red strip of the border around every screen.
 // The state is Rust's (control.rs ControlView), read on open and followed through `agent://control`.
 import { useEffect, useRef, useState } from 'react'
@@ -178,10 +179,16 @@ export function StopWindow() {
   const left = view.leftMs === null ? null : view.leftMs - Math.max(0, now - at)
   return (
     <main className="agent-stop" data-tauri-drag-region="">
-      <span className="agent-stop-who" data-tauri-drag-region="">
-        {text.control.controlling(view.controllerName)}
-        {left !== null && ` · ${clock(left)}`}
-      </span>
+      {view.hint ? (
+        <span className="agent-stop-who agent-stop-hint" role="status" data-tauri-drag-region="">
+          {text.control.pressed(view.controllerName, view.hint)}
+        </span>
+      ) : (
+        <span className="agent-stop-who" data-tauri-drag-region="">
+          {text.control.controlling(view.controllerName)}
+          {left !== null && ` · ${clock(left)}`}
+        </span>
+      )}
       <button type="button" className="agent-stop-button" onClick={() => void native.controlStop()}>
         {text.control.stop}
       </button>

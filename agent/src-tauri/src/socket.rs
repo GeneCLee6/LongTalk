@@ -162,6 +162,8 @@ fn finish(app: &AppHandle, id: u32, code: u16, reason: &str, events: &Channel<So
     if current {
         // Control never outlives the socket it came on (the room ends it as agentLeft)
         let control = state.control.lock().unwrap().on_socket_closed();
+        // What was held is let go now (and the end logged); there is no room to tell
+        state.apply(&control);
         if control.changed {
             crate::notify_control(app);
         }

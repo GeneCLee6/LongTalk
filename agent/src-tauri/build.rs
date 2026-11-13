@@ -17,6 +17,7 @@ fn main() {
             "control_keep_going",
             "control_stop",
             "control_mute",
+            "shared_screen",
         ]),
     ))
     .expect("failed to run tauri-build");

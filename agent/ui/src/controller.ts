@@ -211,6 +211,15 @@ export class AgentController {
     const track = capture.track
     this.#screen = track
     track.addEventListener('ended', () => void this.stopShare())
+    // Which screen this is, for remote control's pointer (N4): only a whole screen is aimed at
+    const settings = track.getSettings()
+    await native
+      .sharedScreen(
+        settings.width ?? null,
+        settings.height ?? null,
+        settings.displaySurface === undefined || settings.displaySurface === 'monitor',
+      )
+      .catch(() => {})
     try {
       await native.setSharing(true)
       await native.send(JSON.stringify({ t: 'share' }))

@@ -48,9 +48,12 @@ depends_on: [E2, E3, E11]
 - [ ] AC-9.1 — 代理可安裝（Windows、macOS）、以連結或代碼＋配對碼加入房間、發布螢幕軌、托盤狀態。
 - [ ] AC-9.2 — 請求→系統層對話框→同意（限時／直到中斷）／拒絕；60 秒到期；全員提示；被控端紅框與「中斷」按鈕；Esc 連按中斷。
       _N3（2026-11-13）：除了 Esc 連按（N4 `e9-t07`）都做了，單元測試過；要實機（規則 7，`DEPLOY.md` §5 第 38 步）才勾。_
+      _N4（2026-11-13）：Esc 連按做了（Windows；單元測試計數規則），實機在 `DEPLOY.md` §5 第 39 步，過了就勾。macOS 用浮動鈕與托盤（f-doc Q12）。_
 - [ ] AC-9.3 — 滑鼠、鍵盤、滾輪、組合鍵、輸入法文字正確注入；端到端延遲 < 150 ms（同區域）。
+      _N4（2026-11-13）：Windows 的注入做了（單元測試：組合鍵、座標、鍵位表），macOS 寫了沒跑過；正確性與延遲要實機（`DEPLOY.md` §5 第 39 步，延遲用手機慢動作量），所以不勾。_
 - [ ] AC-9.4 — 威脅模型文件；事件綁定授權（伺服器判斷）與序號、速率上限、時限；代理日誌；無人值守不可能（測試驗證）。（2026-11-13 擁有者決定改字，原文「事件簽章與序號」，理由見 f-doc Q2）
       _N1（2026-11-13）：威脅模型文件、協定與它的 parser／序號／速率 helper 已完成；其餘要 N3、N4 實作並通過 `f-remote-control-security.md` §8 的測試才勾。「事件簽章」建議改字（改成「事件綁定授權與序號」），見該文件 Q2；AC 原文保留到擁有者決定。_
+      _N4（2026-11-13）：代理日誌（T-13）、注入的按下不送到代理自己的視窗（T-04 的 Windows 部分，`inject/windows.rs`）、Esc hook 只在授權期間（T-17）做了；T-04、T-14、T-16 的實機部分與 macOS 還沒，所以不勾。_
       _N3（2026-11-13）：事件綁定授權（伺服器判斷）、序號、速率、時限都做了並有測試（T-03、T-05、T-06、T-07、T-08、T-09、T-15、T-18、T-21 在 `tests/worker/room-n3.test.ts`；T-04、T-05、T-06、T-12 的代理端在 `control.rs` 的 `cargo test`）。還差代理日誌（N4 `e9-t07`）與注入的輸入被代理視窗拒絕（T-04 的實機部分），所以不勾。_
 - [ ] AC-9.5 — macOS 權限引導；Linux X11 可用；多螢幕切換。
 
@@ -61,8 +64,8 @@ depends_on: [E2, E3, E11]
 - [x] `e9-t03` 代理擷取螢幕並以 `MediaTransport` 發布（多螢幕）（N2，#55：代理的 WebView2 用 `getDisplayMedia` 選螢幕、沿用 `CloudflareRealtimeTransport`，網路都經 Rust） · AC-9.1 · M · ← e9-t02
 - [x] `e9-t04` 同意流程：RoomDO 請求與時限、系統對話框、全員提示、紅框與中斷 · AC-9.2 · M · ← e9-t03（N3，#58：`worker/room-control.ts`、代理的 `control.rs`／`control_windows.rs`、分享格的「請求控制」；房間設定「允許遠端控制」；Esc×3、鎖定即結束、代理的視窗拒絕注入的輸入留給 N4 `e9-t07`）
 - [x] `e9-t05` 控制事件通道：~~DataChannel／WebSocket、簽章~~、序號、速率（N1 決定：RoomDO WebSocket 轉送＋授權綁連線，見 f-doc §5.5、Q2） · AC-9.3, AC-9.4 · M · ← e9-t04（N3，#58：先解析再計數、`CONTROL_FRAME_RATE`、`acceptSeq`、超速只轉放開事件；控制端的 `ControlSender`；代理端驗證與按住的輸入，注入是 N4）
-- [ ] `e9-t06` 滑鼠鍵盤注入（Windows、macOS）、輸入法文字 · AC-9.3 · M · ← e9-t05
-- [ ] `e9-t07` 中斷機制（Esc 連按、托盤、超時）與代理日誌 · AC-9.2, AC-9.4 · S · ← e9-t06
+- [x] `e9-t06` 滑鼠鍵盤注入（Windows、macOS）、輸入法文字 · AC-9.3 · M · ← e9-t05（N4，#60：`agent/src-tauri/src/inject/`：`plan` 判斷組合鍵（封鎖、提示）、補按宣稱的修飾鍵、座標換到被分享的那個螢幕；Windows 用 `SendInput`（掃描碼、`KEYEVENTF_UNICODE` 送輸入法文字），macOS 用 `CGEvent`（寫了、在 Windows 上做過型別檢查，**沒在 Mac 上跑過**，N5）；按下對著代理自己的視窗時不送）
+- [x] `e9-t07` 中斷機制（Esc 連按、托盤、超時）與代理日誌 · AC-9.2, AC-9.4 · S · ← e9-t06（N4，#60：`escape.rs` 實體 Esc×3（Windows 低階鍵盤 hook，只在授權期間、只看 Esc）、鎖定或螢幕保護程式就結束、開始時系統通知、紅色托盤圖示、`agent_log.rs` 代理日誌與托盤「開啟日誌」；macOS 的 Esc×3 要「輸入監控」權限，留給 N5）
 - [ ] `e9-t08` 多平台：macOS 權限引導、Linux、安裝包與簽章 · AC-9.5 · M · ← e9-t06
 - [ ] `e9-t09` 剪貼簿同步與多螢幕切換（選用） · S · ← e9-t08
 

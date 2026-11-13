@@ -1,6 +1,6 @@
 # LongTalk 代理（桌面端）
 
-被控端電腦上的小程式（E9，Tauri v2）。N2（`e9-t02`、`e9-t03`）做到：用會議室連結（或代碼）＋一次性配對碼加入房間、發布前的本機確認、托盤、把這台電腦的螢幕分享到會議室（可以挑哪一個螢幕）。N3（`e9-t04`、`e9-t05`）做到：控制請求的同意對話框、紅框與浮動「中斷」鈕、托盤的「中斷控制」與「暫停接受控制請求」、檢查每一批控制事件（授權、序號、按住的輸入）。**還不會真的移動滑鼠或按鍵**：注入是 N4。
+被控端電腦上的小程式（E9，Tauri v2）。N2（`e9-t02`、`e9-t03`）做到：用會議室連結（或代碼）＋一次性配對碼加入房間、發布前的本機確認、托盤、把這台電腦的螢幕分享到會議室（可以挑哪一個螢幕）。N3（`e9-t04`、`e9-t05`）做到：控制請求的同意對話框、紅框與浮動「中斷」鈕、托盤的「中斷控制」與「暫停接受控制請求」、檢查每一批控制事件（授權、序號、按住的輸入）。N4（`e9-t06`、`e9-t07`）做到：真的移動滑鼠、按鍵與打字（Windows；macOS 寫了還沒在 Mac 上跑過），組合鍵的封鎖與提示、按下不送到代理自己的視窗、實體 Esc 連按三下中斷、鎖定即結束、開始時的系統通知與紅色托盤圖示、代理日誌（托盤「開啟日誌」）。
 
 威脅模型與每個設計決定在 [`docs/PRD/f-remote-control-security.md`](../docs/PRD/f-remote-control-security.md)（§5.1 配對、§5.8 本機攻擊面、§5.9 更新）；通訊協定在 [`shared/control.ts`](../shared/control.ts)。
 
@@ -15,6 +15,9 @@
 | `src-tauri/src/tray.rs` | 托盤：狀態、「中斷控制」（控制中）、「打開 LongTalk 代理」「分享我的螢幕」「暫停接受控制請求」「離開房間」「結束」 |
 | `src-tauri/src/control.rs` | 遠端控制的狀態機（N3，T-04、T-05、T-06、T-12 的單元測試在這裡）：只有同意對話框按下的答案能開始控制、1 秒後才有效、60 秒自動拒絕；`controlStart` 的時長要和自己的回答一致；`allow10` 用自己的時鐘結束、「直到我中斷」每小時再問；每批事件照 `shared/control.ts` 的規則檢查、記住按住的輸入並在 1 秒沒批次、結束、對話框前放開 |
 | `src-tauri/src/control_windows.rs` | 控制時的視窗：同意對話框（`#consent`，只有它能回答，`capabilities/consent.json`）、浮動「中斷」鈕（`#stop`）、每個螢幕四條紅框（`#border`，滑鼠點得穿）；都關不掉 |
+| `src-tauri/src/inject/` | 注入（N4）：`mod.rs` 的 `plan`（純函式：組合鍵封鎖與提示、補按修飾鍵、座標換到被分享的螢幕、`pick_screen`）、`keymap.rs`（`KeyboardEvent.code` → Windows 掃描碼、macOS 鍵碼）、`windows.rs`（`SendInput`、代理自己的視窗不收按下、安全桌面、鎖定）、`macos.rs`（`CGEvent`，還沒在 Mac 上跑過） |
+| `src-tauri/src/escape.rs` | 實體 Esc 1 秒內三下就中斷（Windows 低階鍵盤 hook，只在授權期間、只看 Esc；T-17） |
+| `src-tauri/src/agent_log.rs` | 代理日誌（§5.10、T-13）：一天一個檔、保留 30 天、不記任何打字內容 |
 | `src-tauri/src/updater.rs` | 自動更新（`updater` feature，預設關，見下面「擁有者要做的事」） |
 | `ui/` | 打包進代理的頁面（Vite ＋ React）：加入表單、連線中、本機確認、房間。擷取螢幕用 WebView 的 `getDisplayMedia`，發布用和網頁版同一個 `MediaTransport`（`src/media/CloudflareRealtimeTransport.ts`，CLAUDE.md 規則 2），它的 HTTP 經 Rust 的 `api_fetch` |
 | `ui/src/i18n.ts` | 代理的介面文字（繁中＋英文），`npm run lint` 的 `scripts/literals.ts` 也掃 `agent/ui/src` |
@@ -75,5 +78,5 @@ Windows 與 macOS 的安裝檔**沒有作業系統簽章**（§5.9：不買 Auth
 ## 接下來（N3–N5）
 
 - **N3**（`e9-t04`、`e9-t05`）：控制請求與同意對話框（系統層級、預設焦點在拒絕、1 秒內不收點擊）、全員提示、紅框與「中斷」鈕；`controlForward` 經 RoomDO 轉送、序號與速率。
-- **N4**（`e9-t06`、`e9-t07`）：Windows／macOS 注入滑鼠鍵盤與輸入法文字、Esc 連按三下與托盤中斷、代理日誌；代理視窗忽略注入的輸入（`lib.rs` 的 `guard_against_injected_input` 是預留的位置）。
-- **N5**（`e9-t08`）：macOS 權限引導、Linux、安裝包與更新的實測（T-20）。
+- **N4**（`e9-t06`、`e9-t07`）：做完（見上）。實機在 `DEPLOY.md` §5 第 39 步。
+- **N5**（`e9-t08`）：macOS 權限引導（螢幕錄製、輔助使用、輸入監控）與 macOS 注入的實機、Esc×3 與逐視窗檢查的 macOS 版、Linux（XTest）、UAC 時讓控制端看到「等對方處理系統對話框」、安裝包與更新的實測（T-20）。
