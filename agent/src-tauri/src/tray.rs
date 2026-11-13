@@ -4,13 +4,20 @@
 // person chooses which monitor), so turning it on brings the window up. Labels follow the system
 // language (zh-TW, otherwise English), like the window.
 //
+// While someone controls this computer (N3, §5.4) the first item is 「中斷控制」 and the status says
+// who controls it; 「暫停接受控制請求」 offers 「不再接受請求 N 分鐘」 (and back) at any time.
+//
 // TODO(N4, e9-t07): the tray menu, like every agent window, must ignore injected input
 // (f-remote-control-security.md §5.8, T-04): nothing is injected before N4, so nothing to filter yet.
+// TODO(N4): a red tray icon while controlled (needs its own icon files).
 
-use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use std::sync::Mutex;
+
+use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
+use crate::control::{ControlView, StopReason};
 use crate::session::Phase;
 use crate::AgentState;
 
@@ -28,6 +35,11 @@ struct Labels {
     in_room: &'static str,
     sharing: &'static str,
     tooltip: &'static str,
+    stop_control: &'static str,
+    controlled: fn(&str) -> String,
+    mute: &'static str,
+    mute_for: [&'static str; 3],
+    unmute: &'static str,
 }
 
 const ZH_TW: Labels = Labels {
@@ -41,6 +53,11 @@ const ZH_TW: Labels = Labels {
     in_room: "已加入會議室",
     sharing: "正在分享你的螢幕",
     tooltip: "LongTalk 代理",
+    stop_control: "中斷控制",
+    controlled: |name| format!("{name} 正在控制這台電腦"),
+    mute: "暫停接受控制請求",
+    mute_for: ["10 分鐘", "30 分鐘", "60 分鐘"],
+    unmute: "重新接受控制請求",
 };
 
 const EN: Labels = Labels {
@@ -54,6 +71,11 @@ const EN: Labels = Labels {
     in_room: "In a room",
     sharing: "Sharing your screen",
     tooltip: "LongTalk agent",
+    stop_control: "Stop control",
+    controlled: |name| format!("{name} is controlling this computer"),
+    mute: "Pause control requests",
+    mute_for: ["10 minutes", "30 minutes", "60 minutes"],
+    unmute: "Take control requests again",
 };
 
 fn labels() -> &'static Labels {
@@ -70,6 +92,10 @@ pub struct Tray {
     status: MenuItem<Wry>,
     share: CheckMenuItem<Wry>,
     leave: MenuItem<Wry>,
+    stop_control: MenuItem<Wry>,
+    mute: Submenu<Wry>,
+    /** Who controls this computer now: the status line says so over the session's (N3) */
+    controlled: Mutex<Option<String>>,
 }
 
 pub fn build(app: &AppHandle) -> tauri::Result<Tray> {
@@ -79,13 +105,29 @@ pub fn build(app: &AppHandle) -> tauri::Result<Tray> {
     let share = CheckMenuItem::with_id(app, "share", text.share, false, false, None::<&str>)?;
     let leave = MenuItem::with_id(app, "leave", text.leave, false, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", text.quit, true, None::<&str>)?;
+    let stop_control =
+        MenuItem::with_id(app, "stop-control", text.stop_control, false, None::<&str>)?;
+    let mute = Submenu::with_items(
+        app,
+        text.mute,
+        false,
+        &[
+            &MenuItem::with_id(app, "mute-600000", text.mute_for[0], true, None::<&str>)?,
+            &MenuItem::with_id(app, "mute-1800000", text.mute_for[1], true, None::<&str>)?,
+            &MenuItem::with_id(app, "mute-3600000", text.mute_for[2], true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "mute-0", text.unmute, true, None::<&str>)?,
+        ],
+    )?;
     let menu = Menu::with_items(
         app,
         &[
+            &stop_control,
             &status,
             &PredefinedMenuItem::separator(app)?,
             &open,
             &share,
+            &mute,
             &leave,
             &PredefinedMenuItem::separator(app)?,
             &quit,
@@ -115,7 +157,34 @@ pub fn build(app: &AppHandle) -> tauri::Result<Tray> {
         status,
         share,
         leave,
+        stop_control,
+        mute,
+        controlled: Mutex::new(None),
     })
+}
+
+/** The menu follows remote control (N3): 中斷控制 and who controls, while someone does */
+pub fn sync_control(tray: &Tray, view: &ControlView) {
+    let text = labels();
+    let controller = match view {
+        ControlView::Granted {
+            controller_name, ..
+        } => Some(controller_name.clone()),
+        _ => None,
+    };
+    let _ = tray.stop_control.set_enabled(controller.is_some());
+    if let Some(name) = &controller {
+        let _ = tray.status.set_text((text.controlled)(name));
+    }
+    let was = std::mem::replace(&mut *tray.controlled.lock().unwrap(), controller.clone());
+    let _ = tray._icon.set_tooltip(Some(match &controller {
+        Some(name) => (text.controlled)(name),
+        None => text.tooltip.to_owned(),
+    }));
+    // Back to the session's line once it ends
+    if was.is_some() && controller.is_none() {
+        let _ = tray.status.set_text(text.in_room);
+    }
 }
 
 /** The menu follows the session: the switch and 離開房間 only in a room, the switch's tick */
@@ -131,8 +200,13 @@ pub fn sync(tray: &Tray, phase: &Phase) {
             *sharing,
         ),
     };
-    let _ = tray.status.set_text(status);
+    if let Some(name) = tray.controlled.lock().unwrap().as_ref() {
+        let _ = tray.status.set_text((text.controlled)(name));
+    } else {
+        let _ = tray.status.set_text(status);
+    }
     let _ = tray.share.set_enabled(in_room);
+    let _ = tray.mute.set_enabled(in_room);
     let _ = tray.share.set_checked(sharing);
     let _ = tray
         .leave
@@ -158,6 +232,14 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
             let _ = app.emit(TRAY_EVENT, "leave");
         }
         "quit" => crate::quit(app),
-        _ => {}
+        "stop-control" => crate::stop_control_from(app, StopReason::Tray),
+        id => {
+            if let Some(ms) = id
+                .strip_prefix("mute-")
+                .and_then(|ms| ms.parse::<u64>().ok())
+            {
+                crate::mute_from_tray(app, ms);
+            }
+        }
     }
 }

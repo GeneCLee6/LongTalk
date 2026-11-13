@@ -54,6 +54,7 @@ const EXPECTED: Record<Action, string> = {
   setCohost: 'H',
   makeHost: 'H',
   allowRecord: 'H',
+  stopControl: 'HC',
 }
 
 const LETTER: Record<Role, string> = { host: 'H', cohost: 'C', participant: 'P', waiting: 'W' }
@@ -91,6 +92,7 @@ describe('roles (e1-t06)', () => {
         'remove',
         'setCohost',
         'stopShare',
+        'stopControl',
       ].toSorted(),
     )
     for (const action of memberActions) {

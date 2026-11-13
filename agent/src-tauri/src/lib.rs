@@ -13,7 +13,13 @@
 // getDisplayMedia and published by the same TypeScript MediaTransport the web app uses (CLAUDE.md
 // rule 2), whose HTTP calls come here (api_fetch) so that the agent token never reaches the page
 // and nothing is published before the person confirms (session.rs).
+//
+// Remote control (N3, control.rs, §5.2–§5.4): the room's control frames go to control.rs and never
+// to the page; the consent dialog, the red border and the floating 中斷 button are windows of their
+// own (control_windows.rs), and only the consent window may answer (capabilities/consent.json).
 
+mod control;
+mod control_windows;
 mod origin;
 mod session;
 mod socket;
@@ -30,14 +36,20 @@ use serde_json::json;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
+use control::{Control, ControlRefusal, ControlView, Decision, Effects, StopReason};
 use session::{Outgoing, Phase, Refusal, Session};
 use socket::{Out, SocketEvent, SocketHandle};
 
 /** The session's phase, sent to the window after every change */
 pub const SESSION_EVENT: &str = "agent://session";
+/** Remote control's state (control.rs ControlView), sent to every window after every change */
+pub const CONTROL_EVENT: &str = "agent://control";
+/** How often the control clock runs (dialog deadlines, time limits, releasing held input) */
+const CONTROL_TICK_MS: u64 = 200;
 
 pub struct AgentState {
     pub session: Mutex<Session>,
+    pub control: Mutex<Control>,
     pub socket: Mutex<Option<SocketHandle>>,
     pub tray: Mutex<Option<tray::Tray>>,
     next_socket: AtomicU32,
@@ -49,6 +61,7 @@ impl AgentState {
     fn new() -> Self {
         Self {
             session: Mutex::new(Session::new()),
+            control: Mutex::new(Control::new()),
             socket: Mutex::new(None),
             tray: Mutex::new(None),
             next_socket: AtomicU32::new(1),
@@ -74,6 +87,16 @@ impl AgentState {
         }
     }
 
+    /**
+     * What a control step asks for: its frames to the room. Its `release` is what N4 will inject
+     * (nothing is injected before N4); the windows follow `changed` (notify_control)
+     */
+    fn apply(&self, effects: &Effects) {
+        for frame in &effects.send {
+            self.send_raw(Out::Text(frame.clone()));
+        }
+    }
+
     /** `leave`, then close the socket: the room removes the member at once */
     fn leave_and_close(&self) {
         self.send_raw(Out::Text(json!({ "t": "leave" }).to_string()));
@@ -92,6 +115,101 @@ pub fn notify(app: &AppHandle) {
     let _ = app.emit(SESSION_EVENT, phase);
 }
 
+/** Tells every window and the tray where control is, and opens or closes its windows */
+pub fn notify_control(app: &AppHandle) {
+    let state = app.state::<AgentState>();
+    let (view, dialog, granted) = {
+        let control = state.control.lock().unwrap();
+        (
+            control.view(state.now()),
+            control.dialog(),
+            control.granted(),
+        )
+    };
+    if let Some(tray) = state.tray.lock().unwrap().as_ref() {
+        tray::sync_control(tray, &view);
+    }
+    control_windows::sync(app, dialog, granted);
+    let _ = app.emit(CONTROL_EVENT, view);
+}
+
+/** A control frame from the room (socket.rs): to control.rs, never to the page */
+pub fn on_control_frame(app: &AppHandle, kind: &str, value: &serde_json::Value, raw: &str) {
+    let state = app.state::<AgentState>();
+    let now = state.now();
+    let changed = {
+        let mut control = state.control.lock().unwrap();
+        match kind {
+            "controlAsk" => control.on_ask(value, now),
+            "controlAskEnd" => value
+                .get("request")
+                .and_then(|r| r.as_str())
+                .is_some_and(|request| control.on_ask_end(request)),
+            "controlStart" => control.on_start(value, now),
+            "controlEnd" => {
+                let grant = value.get("grant").and_then(|g| g.as_str()).unwrap_or("");
+                let effects = control.on_end(grant);
+                state.apply(&effects);
+                effects.changed
+            }
+            "controlForward" => {
+                // N4 injects `release` then `events`; until then a batch only moves the seq and the
+                // held set. What it carried is never logged or kept (D11)
+                let _ = control.on_forward(raw, now);
+                false
+            }
+            _ => false,
+        }
+    };
+    if changed {
+        notify_control(app);
+    }
+}
+
+/** The control clock: runs every CONTROL_TICK_MS for the life of the agent */
+fn start_control_clock(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(CONTROL_TICK_MS));
+        loop {
+            interval.tick().await;
+            let state = app.state::<AgentState>();
+            let effects = state.control.lock().unwrap().tick(state.now());
+            state.apply(&effects);
+            if effects.changed {
+                notify_control(&app);
+            }
+        }
+    });
+}
+
+/** 中斷控制 in the tray */
+pub fn stop_control_from(app: &AppHandle, reason: StopReason) {
+    stop_control(app, reason);
+}
+
+/** 「暫停接受控制請求」 in the tray: no requests for `ms` (0: take them again) */
+pub fn mute_from_tray(app: &AppHandle, ms: u64) {
+    let state = app.state::<AgentState>();
+    if !state.session.lock().unwrap().in_room() {
+        return;
+    }
+    let frame = state.control.lock().unwrap().mute(ms);
+    if let Ok(frame) = frame {
+        state.send_raw(Out::Text(frame));
+    }
+}
+
+/** Ends any control before the agent leaves the room or quits (the room is told first) */
+fn stop_control(app: &AppHandle, reason: StopReason) {
+    let state = app.state::<AgentState>();
+    let effects = state.control.lock().unwrap().stop(reason);
+    state.apply(&effects);
+    if effects.changed {
+        notify_control(app);
+    }
+}
+
 pub fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -102,6 +220,7 @@ pub fn show_main(app: &AppHandle) {
 
 /** 結束: leave the room (if in one), give the frame a moment to go out, quit */
 pub fn quit(app: &AppHandle) {
+    stop_control(app, StopReason::Quit);
     let state = app.state::<AgentState>();
     let had_room = state.session.lock().unwrap().leave();
     if had_room {
@@ -272,13 +391,20 @@ fn set_sharing(app: AppHandle, state: State<'_, AgentState>, on: bool) -> Result
         .unwrap()
         .set_sharing(on)
         .map_err(refusal)?;
+    // Nobody controls a screen nobody sees: turning the share off ends control (N3)
+    let effects = state.control.lock().unwrap().set_sharing(on);
+    state.apply(&effects);
     notify(&app);
+    if effects.changed {
+        notify_control(&app);
+    }
     Ok(())
 }
 
 /** 離開房間: `leave`, close, forget the token */
 #[tauri::command]
 fn leave_room(app: AppHandle, state: State<'_, AgentState>) {
+    stop_control(&app, StopReason::Quit);
     let had_room = state.session.lock().unwrap().leave();
     if had_room {
         state.leave_and_close();
@@ -333,6 +459,81 @@ async fn api_fetch(
     Ok(ApiResponse { status, body })
 }
 
+fn control_refusal(refusal: ControlRefusal) -> String {
+    serde_json::to_value(refusal)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "refused".into())
+}
+
+/** Where control is now (every control window reads it when it opens) */
+#[tauri::command]
+fn control_state(state: State<'_, AgentState>) -> ControlView {
+    state.control.lock().unwrap().view(state.now())
+}
+
+/**
+ * The consent dialog's answer: 允許 10 分鐘, 允許直到我中斷 or 拒絕 (with 「不再接受請求 N 分鐘」,
+ * `mute_ms`). Granted to the consent window only (capabilities/consent.json): the main window and
+ * the page cannot answer (T-04). control.rs refuses it for CONSENT_DIALOG_ARM_MS and after the
+ * dialog's deadline.
+ */
+#[tauri::command]
+fn control_answer(
+    app: AppHandle,
+    state: State<'_, AgentState>,
+    request: String,
+    decision: String,
+    mute_ms: Option<u64>,
+) -> Result<(), String> {
+    let decision = Decision::parse(&decision).ok_or("bad_decision")?;
+    let effects = state
+        .control
+        .lock()
+        .unwrap()
+        .answer(&request, decision, mute_ms, state.now())
+        .map_err(control_refusal);
+    notify_control(&app);
+    let effects = effects?;
+    state.apply(&effects);
+    Ok(())
+}
+
+/** 「繼續讓對方控制」 on the hourly question (consent window only) */
+#[tauri::command]
+fn control_keep_going(app: AppHandle, state: State<'_, AgentState>) -> Result<(), String> {
+    let result = state
+        .control
+        .lock()
+        .unwrap()
+        .keep_going(state.now())
+        .map_err(control_refusal);
+    notify_control(&app);
+    result.map(|_| ())
+}
+
+/** 中斷: the floating button, the main window, the hourly question's 停止 */
+#[tauri::command]
+fn control_stop(app: AppHandle) {
+    stop_control(&app, StopReason::Button);
+}
+
+/** 「不再接受請求 N 分鐘」 from the main window (0 takes requests again) */
+#[tauri::command]
+fn control_mute(state: State<'_, AgentState>, ms: u64) -> Result<(), String> {
+    let frame = state
+        .control
+        .lock()
+        .unwrap()
+        .mute(ms)
+        .map_err(control_refusal)?;
+    if !state.session.lock().unwrap().in_room() {
+        return Err("no_session".into());
+    }
+    state.send_raw(Out::Text(frame));
+    Ok(())
+}
+
 /**
  * TODO(N4, e9-t07): agent windows ignore injected input (§5.8, T-04): a low-level mouse and
  * keyboard hook that drops events flagged LLMHF_INJECTED / LLKHF_INJECTED while an agent window
@@ -356,22 +557,32 @@ pub fn run() {
             set_sharing,
             leave_room,
             api_fetch,
+            control_state,
+            control_answer,
+            control_keep_going,
+            control_stop,
+            control_mute,
         ])
         .setup(|app| {
             let handle = app.handle();
             let tray = tray::build(handle)?;
             *app.state::<AgentState>().tray.lock().unwrap() = Some(tray);
             notify(handle);
+            start_control_clock(handle);
             guard_against_injected_input(handle);
             #[cfg(feature = "updater")]
             updater::start(handle)?;
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the window keeps the agent in the tray (and in the room)
+            // Closing the window keeps the agent in the tray (and in the room); the control windows
+            // cannot be closed at all: the dialog is answered or runs out, the border and the 中斷
+            // button stay while someone controls this computer (§5.4)
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "main" {
+                    let _ = window.hide();
+                }
             }
         })
         .run(tauri::generate_context!())

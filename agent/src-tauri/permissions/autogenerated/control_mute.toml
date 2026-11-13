@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-control-mute"
+description = "Enables the control_mute command without any pre-configured scope."
+commands.allow = ["control_mute"]
+
+[[permission]]
+identifier = "deny-control-mute"
+description = "Denies the control_mute command without any pre-configured scope."
+commands.deny = ["control_mute"]

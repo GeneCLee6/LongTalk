@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-control-keep-going"
+description = "Enables the control_keep_going command without any pre-configured scope."
+commands.allow = ["control_keep_going"]
+
+[[permission]]
+identifier = "deny-control-keep-going"
+description = "Denies the control_keep_going command without any pre-configured scope."
+commands.deny = ["control_keep_going"]

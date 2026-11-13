@@ -1,6 +1,6 @@
 # LongTalk 代理（桌面端）
 
-被控端電腦上的小程式（E9，Tauri v2）。N2（`e9-t02`、`e9-t03`）做到：用會議室連結（或代碼）＋一次性配對碼加入房間、發布前的本機確認、托盤、把這台電腦的螢幕分享到會議室（可以挑哪一個螢幕）。**還不能被控制**：控制請求、同意對話框、注入滑鼠鍵盤是 N3–N5。
+被控端電腦上的小程式（E9，Tauri v2）。N2（`e9-t02`、`e9-t03`）做到：用會議室連結（或代碼）＋一次性配對碼加入房間、發布前的本機確認、托盤、把這台電腦的螢幕分享到會議室（可以挑哪一個螢幕）。N3（`e9-t04`、`e9-t05`）做到：控制請求的同意對話框、紅框與浮動「中斷」鈕、托盤的「中斷控制」與「暫停接受控制請求」、檢查每一批控制事件（授權、序號、按住的輸入）。**還不會真的移動滑鼠或按鍵**：注入是 N4。
 
 威脅模型與每個設計決定在 [`docs/PRD/f-remote-control-security.md`](../docs/PRD/f-remote-control-security.md)（§5.1 配對、§5.8 本機攻擊面、§5.9 更新）；通訊協定在 [`shared/control.ts`](../shared/control.ts)。
 
@@ -12,7 +12,9 @@
 | `src-tauri/src/socket.rs` | 房間的 WebSocket（`/api/rooms/<id>/agent`），由 Rust 持有：代理 token 只在 Rust 的記憶體裡，頁面拿到的 `agentWelcome` 沒有 token；頁面送的每一則都先問 `session.rs` |
 | `src-tauri/src/origin.rs` | 唯一的網域（寫死在建置裡）、房號與 API 路徑的白名單 |
 | `src-tauri/src/lib.rs` | 指令（IPC 白名單在 `build.rs`、授權在 `capabilities/main.json`）、`api_fetch`（SFU 代理與 TURN，由 Rust 加 token）、單一實例、關視窗縮到托盤 |
-| `src-tauri/src/tray.rs` | 托盤：狀態、「打開 LongTalk 代理」「分享我的螢幕」「離開房間」「結束」 |
+| `src-tauri/src/tray.rs` | 托盤：狀態、「中斷控制」（控制中）、「打開 LongTalk 代理」「分享我的螢幕」「暫停接受控制請求」「離開房間」「結束」 |
+| `src-tauri/src/control.rs` | 遠端控制的狀態機（N3，T-04、T-05、T-06、T-12 的單元測試在這裡）：只有同意對話框按下的答案能開始控制、1 秒後才有效、60 秒自動拒絕；`controlStart` 的時長要和自己的回答一致；`allow10` 用自己的時鐘結束、「直到我中斷」每小時再問；每批事件照 `shared/control.ts` 的規則檢查、記住按住的輸入並在 1 秒沒批次、結束、對話框前放開 |
+| `src-tauri/src/control_windows.rs` | 控制時的視窗：同意對話框（`#consent`，只有它能回答，`capabilities/consent.json`）、浮動「中斷」鈕（`#stop`）、每個螢幕四條紅框（`#border`，滑鼠點得穿）；都關不掉 |
 | `src-tauri/src/updater.rs` | 自動更新（`updater` feature，預設關，見下面「擁有者要做的事」） |
 | `ui/` | 打包進代理的頁面（Vite ＋ React）：加入表單、連線中、本機確認、房間。擷取螢幕用 WebView 的 `getDisplayMedia`，發布用和網頁版同一個 `MediaTransport`（`src/media/CloudflareRealtimeTransport.ts`，CLAUDE.md 規則 2），它的 HTTP 經 Rust 的 `api_fetch` |
 | `ui/src/i18n.ts` | 代理的介面文字（繁中＋英文），`npm run lint` 的 `scripts/literals.ts` 也掃 `agent/ui/src` |
@@ -27,7 +29,7 @@
 ```bash
 npm ci                 # 根目錄；agent/ui 是 npm workspace，@tauri-apps/api 一起裝
 npm run agent:dev      # Vite（localhost:5174）＋ Tauri 視窗，改 ui/ 會即時更新
-npm run agent:test     # cargo test（session.rs、origin.rs、socket.rs）
+npm run agent:test     # cargo test（session.rs、control.rs、origin.rs、socket.rs）
 npm run agent:ui:build # 只建頁面（agent/ui/dist，已 gitignore）
 npm run agent:build    # 安裝檔：agent/src-tauri/target/release/bundle/
 npx vitest run tests/agent

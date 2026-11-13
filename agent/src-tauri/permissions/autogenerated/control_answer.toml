@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-control-answer"
+description = "Enables the control_answer command without any pre-configured scope."
+commands.allow = ["control_answer"]
+
+[[permission]]
+identifier = "deny-control-answer"
+description = "Denies the control_answer command without any pre-configured scope."
+commands.deny = ["control_answer"]

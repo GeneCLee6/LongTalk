@@ -50,6 +50,7 @@ export function setup(migrations?: string[]) {
               startMuted: false,
               allowAnnotation: true,
               allowRecording: true,
+              allowControl: true,
             },
           })
           return true

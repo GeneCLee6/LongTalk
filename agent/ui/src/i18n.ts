@@ -62,6 +62,25 @@ const zhTW = {
     audioOnly: '本月額度快用完了，會議室暫時不能分享畫面',
     fromTray: '請在這個視窗打開「分享我的螢幕」，選擇要分享的螢幕',
   },
+  control: {
+    asks: (name: string) => `${name} 想控制這台電腦`,
+    inRoom: (room: string) => `在『${room}』裡`,
+    nameNote: '名字是對方自己取的。',
+    consequence: '允許後，對方可以用你的滑鼠和鍵盤做任何事；房間裡的人都看得到你的螢幕。',
+    closesIn: (time: string) => `${time} 後自動拒絕`,
+    allow10: '允許 10 分鐘',
+    allowUntilStop: '允許直到我中斷',
+    deny: '拒絕',
+    mute: '不再接受請求',
+    muteFor: '多久不接受請求',
+    minutes: (n: number) => `${n} 分鐘`,
+    reconfirm: (name: string) => `還要繼續讓 ${name} 控制嗎？`,
+    reconfirmNote: '「允許直到我中斷」每小時會再問一次。沒有回答就會結束控制。',
+    keepGoing: '繼續',
+    stop: '中斷',
+    controlling: (name: string) => `${name} 正在控制這台電腦`,
+    failed: '沒有送出，請再按一次',
+  },
 }
 
 export type AgentStrings = typeof zhTW
@@ -126,6 +145,26 @@ const en: AgentStrings = {
     full: 'The room already has as many shares as it allows',
     audioOnly: 'This month’s allowance is nearly used up: the room cannot share screens for now',
     fromTray: 'Turn on “Share my screen” in this window to pick the screen to share',
+  },
+  control: {
+    asks: (name: string) => `${name} wants to control this computer`,
+    inRoom: (room: string) => `In “${room}”`,
+    nameNote: 'They chose this name themselves.',
+    consequence:
+      'If you allow it, they can do anything with your mouse and keyboard; everyone in the room sees your screen.',
+    closesIn: (time: string) => `Declined automatically in ${time}`,
+    allow10: 'Allow 10 minutes',
+    allowUntilStop: 'Allow until I stop it',
+    deny: 'Decline',
+    mute: 'Take no requests for',
+    muteFor: 'How long to take no requests',
+    minutes: (n: number) => `${n} minutes`,
+    reconfirm: (name: string) => `Keep letting ${name} control this computer?`,
+    reconfirmNote: '“Allow until I stop it” asks again every hour. Without an answer, control ends.',
+    keepGoing: 'Keep going',
+    stop: 'Stop',
+    controlling: (name: string) => `${name} is controlling this computer`,
+    failed: 'That did not go through; press it again',
   },
 }
 

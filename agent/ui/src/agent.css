@@ -216,3 +216,92 @@ button:disabled {
     transition: none;
   }
 }
+
+/* Remote control's windows (N3, control.tsx). The consent dialog: three answers and the mute */
+.agent-consent h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.agent-consent-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+}
+
+.agent-check select {
+  font: inherit;
+  padding: 4px 8px;
+  color: var(--lt-fg);
+  background: var(--lt-bg);
+  border: 1px solid var(--lt-line);
+  border-radius: 8px;
+}
+
+/* The floating 中斷 button: draggable by its text, never closed while control is on */
+.agent-stop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 100vh;
+  padding: 8px 10px 8px 14px;
+  color: var(--lt-onDanger);
+  background: var(--lt-danger);
+  font-weight: 600;
+  font-size: 14px;
+  user-select: none;
+  cursor: move;
+}
+
+.agent-stop-who {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.agent-stop-button {
+  flex: none;
+  color: var(--lt-danger);
+  background: var(--lt-onDanger);
+  border-color: var(--lt-onDanger);
+  font-weight: 700;
+}
+
+.agent-stop-button:hover:not(:disabled) {
+  background: var(--lt-onDanger);
+}
+
+/* One strip of the red border around the screen */
+html[data-window='border'],
+html[data-window='border'] body,
+.agent-border {
+  height: 100vh;
+  margin: 0;
+  background: var(--lt-danger);
+  overflow: hidden;
+}
+
+.agent-control-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--lt-onDanger);
+  background: var(--lt-danger);
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.agent-control-line .agent-danger {
+  color: var(--lt-onDanger);
+  border-color: var(--lt-onDanger);
+}

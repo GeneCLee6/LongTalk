@@ -34,6 +34,7 @@ const ME: MeResponse = {
       startMuted: false,
       allowAnnotation: true,
       allowRecording: true,
+      allowControl: true,
     },
   ],
   meetings: [],
@@ -151,15 +152,18 @@ describe('/me (I2)', () => {
     expect(box(text.account.startMuted).checked).toBe(false)
     expect(box(text.account.allowAnnotation).checked).toBe(true)
     expect(box(text.account.allowRecording).checked).toBe(true)
+    expect(box(text.account.allowControl).checked).toBe(true)
     expect(screen.getByText(text.account.settingsHint).textContent).toContain('明確同意')
     fireEvent.click(box(text.account.startMuted))
     fireEvent.click(box(text.account.allowRecording))
+    fireEvent.click(box(text.account.allowControl))
     fireEvent.click(screen.getByRole('button', { name: text.account.saveRoom }))
     await waitFor(() =>
       expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({
         startMuted: true,
         allowAnnotation: true,
         allowRecording: false,
+        allowControl: false,
       }),
     )
   })

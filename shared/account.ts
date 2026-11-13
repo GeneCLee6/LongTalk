@@ -94,6 +94,8 @@ export type PersistentRoomInfo = {
   /** False: nobody annotates in this room, nobody records in it (L5, e1-t18) */
   allowAnnotation: boolean
   allowRecording: boolean
+  /** False: nobody may ask to control a computer in this room (N3, threat model Q4) */
+  allowControl: boolean
 }
 
 /** GET /api/account: everything /me shows */
@@ -115,6 +117,7 @@ export type RoomSettingsChange = {
   startMuted?: boolean
   allowAnnotation?: boolean
   allowRecording?: boolean
+  allowControl?: boolean
 }
 
 /** What GET /api/rooms/<id> adds for a signed-in browser: its name, and whether it owns the room */

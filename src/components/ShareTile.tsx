@@ -1,5 +1,6 @@
-import { Suspense, lazy, useRef, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react'
 import styled from 'styled-components'
+import type { ControlEventMessage } from '../../shared/control.ts'
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, videoTransform } from '../../shared/shareGeometry.ts'
 import { canFullscreen } from '../media/capabilities.ts'
 import type { AnnotationStore } from '../room/annotationStore.ts'
@@ -38,6 +39,21 @@ import { useShareGestures } from './useShareGestures.ts'
 const AnnotationLayer = lazy(() => import('../annotate/AnnotationLayer.tsx'))
 const ClearMarks = lazy(() => import('../annotate/ClearMarks.tsx'))
 const ExportMarks = lazy(() => import('../annotate/ExportMarks.tsx'))
+/** Remote control's capture (N3), only once we control a computer */
+const ControlLayer = lazy(() => import('./ControlLayer.tsx'))
+
+/**
+ * Remote control of the computer that shares this (N3, e9-t04, e9-t05): what everyone sees, the one
+ * button we have, and, once we control it, the capture. RoomDO decides all of it; this only shows.
+ */
+export interface ShareControl {
+  /** Who asks for or holds control now (everyone sees it, CLAUDE.md rule 4); null: nobody */
+  status: { text: string; granted: boolean; until: number | null } | null
+  /** Request, cancel our request, or stop our control; null for none */
+  action: { label: string; title: string; danger?: boolean; onClick: () => void } | null
+  /** We hold the grant: the tile sends our pointer and keys */
+  capture: { grant: string; send: (message: ControlEventMessage) => void; label: string } | null
+}
 
 /** The marks on this share (J2, e7-t04) */
 export interface ShareAnnotations {
@@ -84,6 +100,8 @@ export interface ShareTileProps {
    * computer, rather than 「… 的畫面」
    */
   computer?: boolean
+  /** The computer's remote control (N3); absent for a person's share */
+  control?: ShareControl | null
 }
 
 /**
@@ -109,9 +127,11 @@ export function ShareTile({
   recording = null,
   own = null,
   computer = false,
+  control = null,
 }: ShareTileProps) {
   const videoRef = useTrack<HTMLVideoElement>(video)
   const frameRef = useRef<HTMLElement>(null)
+  const capture = !onShowMain && video !== null ? (control?.capture ?? null) : null
   const interactive = !onShowMain && video !== null
   // Measured with a picture on any tile: marks line up on a strip share too, which has no gestures
   const viewport = useShareViewport(frameRef, videoRef, video !== null)
@@ -122,7 +142,8 @@ export function ShareTile({
   useVideoDemand(videoRef, video, zoom)
   const fullscreen = useFullscreen(frameRef)
   const fullscreenable = canFullscreen()
-  const annotator = annotations?.me ?? null
+  // No drawing while our pointer controls the computer (N3)
+  const annotator = capture === null ? (annotations?.me ?? null) : null
   const [toolsOut, setToolsOut] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   // The room may take the tools away while they are out (J3): the button goes, and so do they
@@ -133,7 +154,8 @@ export function ShareTile({
   const [hasMarks, setHasMarks] = useState(false)
   if (marked && !hasMarks) setHasMarks(true)
   const gestures = useShareGestures(frameRef, viewport, {
-    enabled: ready,
+    // Our pointer goes to the computer we control, not to zooming and panning the picture (N3)
+    enabled: ready && capture === null,
     drawing: annotating,
     onToggleFullscreen: fullscreenable ? fullscreen.toggle : undefined,
   })
@@ -183,6 +205,30 @@ export function ShareTile({
           {own ? text.ownLabel : computer ? name : text.label(name)}
         </Tag>
         {fullscreen.active && recording && <RecordingTag>{recording}</RecordingTag>}
+        {capture && geometry.rect !== null && (
+          <Suspense fallback={null}>
+            <ControlLayer key={capture.grant} {...capture} />
+          </Suspense>
+        )}
+        {!onShowMain && control && (control.status || control.action) && (
+          <ControlBar>
+            {control.status && (
+              <ControlStatus role="status" $granted={control.status.granted}>
+                {control.status.text}
+                {control.status.until !== null && <Countdown until={control.status.until} />}
+              </ControlStatus>
+            )}
+            {control.action && (
+              <Button
+                variant={control.action.danger ? 'danger' : 'secondary'}
+                title={control.action.title}
+                onClick={control.action.onClick}
+              >
+                {control.action.label}
+              </Button>
+            )}
+          </ControlBar>
+        )}
         {picker && <PickerSlot>{picker}</PickerSlot>}
         {own && (
           <OwnNote>
@@ -305,6 +351,41 @@ export function ShareTile({
     </ShareGeometryContext.Provider>
   )
 }
+
+/** 「剩 9:41」, ticking each second until `until` (the room's clock: seconds off at most) */
+function Countdown({ until }: { until: number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const seconds = Math.max(0, Math.ceil((until - now) / 1000))
+  const left = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+  return <> · {strings.control.remaining(left)}</>
+}
+
+/** Bottom left, away from the view controls: who controls, and our one button (N3) */
+const ControlBar = styled.div`
+  position: absolute;
+  left: ${space(2)};
+  bottom: ${space(2)};
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: ${space(1.5)};
+  max-width: calc(100% - ${space(4)} - 200px);
+`
+
+const ControlStatus = styled.p<{ $granted: boolean }>`
+  margin: 0;
+  padding: ${space(1)} ${space(2.5)};
+  border-radius: ${radius.pill};
+  background: ${({ $granted }) => ($granted ? color.danger : color.overlay)};
+  color: ${({ $granted }) => ($granted ? color.onDanger : color.fg)};
+  font-size: ${fontSize.nameplate};
+  font-weight: 700;
+  pointer-events: none;
+`
 
 const Video = styled.video<{ $hidden: boolean }>`
   position: absolute;

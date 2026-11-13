@@ -33,6 +33,27 @@ export interface AgentInfo {
   origin: string
 }
 
+/** control.rs ControlView (N3), as serde writes it; times are ms as of when it was sent */
+export type ControlView =
+  | { phase: 'idle' }
+  | {
+      phase: 'asking'
+      request: string
+      fromName: string
+      roomName: string | null
+      createdBy: string | null
+      leftMs: number
+      armMs: number
+    }
+  | {
+      phase: 'granted'
+      controllerName: string
+      untilStopped: boolean
+      leftMs: number | null
+      /** The hourly question is up: [ms left to answer, ms until its buttons work] */
+      reconfirm: [number, number] | null
+    }
+
 /** What the tray asks the window to do (tray.rs TRAY_EVENT) */
 export type TrayAction = 'share' | 'unshare' | 'leave'
 
@@ -54,6 +75,15 @@ export const native = {
   leave: () => invoke<void>('leave_room'),
   apiFetch: (method: string, path: string, body: string | null) =>
     invoke<{ status: number; body: string }>('api_fetch', { method, path, body }),
+  // Remote control (N3): each window may call only what its capability grants (the consent window
+  // alone answers, capabilities/consent.json)
+  controlState: () => invoke<ControlView>('control_state'),
+  controlAnswer: (request: string, decision: string, muteMs: number | null) =>
+    invoke<void>('control_answer', { request, decision, muteMs }),
+  controlKeepGoing: () => invoke<void>('control_keep_going'),
+  controlStop: () => invoke<void>('control_stop'),
+  onControl: (handler: (view: ControlView) => void): Promise<UnlistenFn> =>
+    listen<ControlView>('agent://control', (event) => handler(event.payload)),
   onSession: (handler: (phase: Phase) => void): Promise<UnlistenFn> =>
     listen<Phase>('agent://session', (event) => handler(event.payload)),
   onTray: (handler: (action: TrayAction) => void): Promise<UnlistenFn> =>

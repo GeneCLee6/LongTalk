@@ -3,6 +3,7 @@ import type { ChatMessage } from '../shared/chat.ts'
 import type { InteractState } from './room-interact.ts'
 import type { BreakoutState } from './room-breakout.ts'
 import type { PairingState } from './room-pairing.ts'
+import type { ControlState } from './room-control.ts'
 import { MAX_AGENT_MESSAGE_CHARS, type AgentServerMessage } from '../shared/control.ts'
 import {
   CloseCode,
@@ -77,6 +78,8 @@ const INTERACT_KEY = 'interact'
 const BREAKOUT_KEY = 'breakout'
 /** Open pairing codes and wrong codes still counting (N2) */
 const PAIRING_KEY = 'pairing'
+/** Remote control requests, grants and their limits (N3): never an event */
+const CONTROL_KEY = 'control'
 /** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
 const CHAT_PREFIX = 'chat:'
 const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
@@ -175,6 +178,10 @@ export class RoomDO extends DurableObject<Env> {
           void (state === null
             ? storage.delete(PAIRING_KEY)
             : storage.put<PairingState>(PAIRING_KEY, state)),
+        saveControl: (state) =>
+          void (state === null
+            ? storage.delete(CONTROL_KEY)
+            : storage.put<ControlState>(CONTROL_KEY, state)),
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -230,6 +237,7 @@ export class RoomDO extends DurableObject<Env> {
           INTERACT_KEY,
           BREAKOUT_KEY,
           PAIRING_KEY,
+          CONTROL_KEY,
         ]),
         storage.list<AnnotationSegment>({ prefix: ANNOTATION_PREFIX }),
       ])
@@ -258,6 +266,7 @@ export class RoomDO extends DurableObject<Env> {
           interact: (extras.get(INTERACT_KEY) as InteractState | undefined) ?? null,
           breakout: (extras.get(BREAKOUT_KEY) as BreakoutState | undefined) ?? null,
           pairing: (extras.get(PAIRING_KEY) as PairingState | undefined) ?? null,
+          control: (extras.get(CONTROL_KEY) as ControlState | undefined) ?? null,
         },
       )
       // A room stored before C2 has no schedule: restore made one

@@ -227,6 +227,22 @@
 //    in every history, after a move between breakout rooms too). Nobody else learns that it exists:
 //    no host, no recording. `host` `privateChat` with `on` sets `RoomInfo.privateChat` (a host or
 //    co-host, worker/roles.ts `privateChatPolicy`); absent means on. Messages already sent stay.
+// 33. Remote control (N3, e9-t04, e9-t05; shared/control.ts, docs/PRD/f-remote-control-security.md
+//    §5.2–§5.7): a member in the room (worker/roles.ts `requestControl`) sends `controlRequest`
+//    naming an agent that shares its screen in the same breakout room; refusals are the
+//    ControlErrorCode errors. The room answers `controlRequested` (the request id, for
+//    `controlCancel`), shows it to everyone in `RoomView.control` (`asking`) and asks the agent. Only
+//    the agent's own socket can answer; a deny, an unanswered CONTROL_REQUEST_TTL_MS or a cancel ends
+//    it with `controlRefused`. An allow makes a grant bound to the requester's socket:
+//    `controlGranted` (the grant id, until when), `RoomView.control` turns `granted`, and everyone
+//    gets `notice` `controlStarted` (`by`: the controller, `agent`). The controller sends
+//    `controlEvent` batches (the grant id, seq, events); the room forwards those that pass (the
+//    socket holding the grant, acceptSeq, CONTROL_EVENT_RATE) and drops the rest. Such a batch is
+//    out of the per-socket SOCKET_MESSAGE_RATE (CONTROL_FRAME_RATE instead); anything else labelled
+//    `controlEvent` still counts. `controlStop` ends one's own grant, `host` `stopControl` (a host or
+//    co-host, `memberId`: the agent) anyone's; every other ending (the socket closing, a breakout
+//    move, the time, the room setting `RoomInfo.allowControl`…) is the room's. The controller gets
+//    `controlEnd` with the reason and everyone `notice` `controlEnded` (`reason`).
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -281,6 +297,11 @@
 //   every host in a room has the same tools.
 // v25 → v26 (O4): `chat.to`, `ChatMessage.to` / `toName`, `RoomInfo.privateChat`, `host` action
 //   `privateChat`. A v25 browser would show a private message as if everyone had seen it.
+// v26 → v27 (N3): `controlRequest`, `controlCancel`, `controlEvent`, `controlStop`,
+//   `controlRequested`, `controlRefused`, `controlGranted`, `controlEnd`, `RoomView.control`,
+//   `RoomInfo.allowControl`, `host` action `stopControl`, notices `controlStarted`,
+//   `controlEnded` (`NoticeMessage.agent`, `reason`), the ControlErrorCode errors. A v26 browser
+//   would not show that someone controls a computer in the room.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -313,10 +334,18 @@ import { normalizePassword } from './password.ts'
 import { isReaction, type Reaction } from './reactions.ts'
 import { isAnnotationPolicy, type AnnotationPolicy, type Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
-import type { AgentPlatform } from './control.ts'
+import {
+  parseControlClientMessage,
+  type AgentPlatform,
+  type ControlClientMessage,
+  type ControlEndReason,
+  type ControlErrorCode,
+  type ControllerServerMessage,
+  type ControlView,
+} from './control.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 26
+export const PROTOCOL_VERSION = 27
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -463,6 +492,11 @@ export type RoomInfo = RoomInit & {
    * (`host` `privateChat`). Off, they may still write to a host or co-host. Absent means true
    */
   privateChat?: boolean
+  /**
+   * Whether anyone may ask to control a desktop agent here (N3, threat model Q4; absent means true).
+   * A persistent room's owner turns it off on /me; off refuses every request and ends what is on
+   */
+  allowControl?: boolean
 }
 
 /** The room's whiteboard while it is open: who opened it (its owner, as a sharer is of a share) */
@@ -643,6 +677,11 @@ export type RoomView = {
   agenda?: AgendaInfo | null
   /** The breakout rooms (L3, e10-t04); absent or null when they are not open */
   breakout?: BreakoutView | null
+  /**
+   * Remote control (N3, e9-t04): each agent's request or grant, by the agent's member id; absent or
+   * null when there is none. No ids in it: those go only to who needs them
+   */
+  control?: ControlView | null
 }
 
 // ── Server → browser ─────────────────────────────────────────────────────────────────────────
@@ -684,6 +723,7 @@ export type ErrorCode =
   | 'poll_active'
   | 'breakout_active'
   | 'pair_busy'
+  | ControlErrorCode
 
 /**
  * What a host (or co-host) did to this member (F1): `muted` (the microphone; `all` when it was
@@ -716,6 +756,10 @@ export type NoticeKind =
   // too many wrong codes voided this member's open code
   | 'agentPaired'
   | 'pairingVoided'
+  // N3 (e9-t04): to everyone in the room, `by` the controller and `agent` the controlled computer:
+  // control started, or ended (`reason`)
+  | 'controlStarted'
+  | 'controlEnded'
 
 export type NoticeMessage = {
   t: 'notice'
@@ -724,6 +768,10 @@ export type NoticeMessage = {
   all?: true
   policy?: AnnotationPolicy
   layer?: string
+  /** `controlStarted`, `controlEnded`: the agent's member id */
+  agent?: string
+  /** `controlEnded`: why */
+  reason?: ControlEndReason
 }
 
 export type ErrorMessage = { t: 'error'; code: ErrorCode }
@@ -809,6 +857,7 @@ export type ServerMessage =
   | LobbyMessage
   | ReactionMessage
   | PairCodeMessage
+  | ControllerServerMessage
 
 // ── Browser → server ─────────────────────────────────────────────────────────────────────────
 
@@ -892,7 +941,14 @@ export type ConsentMessage = { t: 'consent' }
  * says who
  */
 export type HostMemberAction =
-  'muteMember' | 'camOff' | 'stopShare' | 'remove' | 'lowerHand' | 'stopRecording'
+  | 'muteMember'
+  | 'camOff'
+  | 'stopShare'
+  | 'remove'
+  | 'lowerHand'
+  | 'stopRecording'
+  // N3: end the remote control of this agent (`memberId`: the agent)
+  | 'stopControl'
 
 /** The host controls that act on the whole room (F1; `admitAll` F2) */
 export type HostRoomAction = 'muteAll' | 'endMeeting' | 'admitAll'
@@ -939,6 +995,7 @@ const HOST_MEMBER_ACTIONS: readonly string[] = [
   'remove',
   'lowerHand',
   'stopRecording',
+  'stopControl',
 ]
 const HOST_ROOM_ACTIONS: readonly string[] = ['muteAll', 'endMeeting', 'admitAll']
 const HOST_WAITING_ACTIONS: readonly string[] = ['admit', 'deny']
@@ -1024,6 +1081,7 @@ export type PairCancelMessage = { t: 'pairCancel' }
 export type AgentRemoveMessage = { t: 'agentRemove'; memberId: string }
 
 export type ClientMessage =
+  | ControlClientMessage
   | PairStartMessage
   | PairCancelMessage
   | AgentRemoveMessage
@@ -1299,6 +1357,11 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       return isMemberId(value.memberId) ? { t: 'agentRemove', memberId: value.memberId } : null
     case 'breakoutClose':
       return typeof value.now === 'boolean' ? { t: 'breakoutClose', now: value.now } : null
+    case 'controlRequest':
+    case 'controlCancel':
+    case 'controlEvent':
+    case 'controlStop':
+      return parseControlClientMessage(value)
     case 'host': {
       const action = value.action
       if (typeof action !== 'string') return null
@@ -1450,6 +1513,24 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     case 'pollVoted':
       return typeof value.poll === 'number' && Array.isArray(value.choices)
         ? (value as PollVotedMessage)
+        : null
+    case 'controlRequested':
+      return typeof value.request === 'string' && typeof value.agent === 'string'
+        ? (value as ControllerServerMessage)
+        : null
+    case 'controlRefused':
+      return typeof value.request === 'string' && typeof value.reason === 'string'
+        ? (value as ControllerServerMessage)
+        : null
+    case 'controlGranted':
+      return typeof value.grant === 'string' &&
+        typeof value.agent === 'string' &&
+        (value.until === null || typeof value.until === 'number')
+        ? (value as ControllerServerMessage)
+        : null
+    case 'controlEnd':
+      return typeof value.grant === 'string' && typeof value.reason === 'string'
+        ? (value as ControllerServerMessage)
         : null
     default:
       return null
