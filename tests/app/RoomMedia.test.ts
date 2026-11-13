@@ -4,6 +4,7 @@ import { FakeSfu, type FakeTransport } from '../../src/media/FakeTransport.ts'
 import { MediaTransportError } from '../../src/media/MediaTransport.ts'
 import { Backoff } from '../../src/room/backoff.ts'
 import {
+  ICE_CONFIG_TIMEOUT_MS,
   LOW_QUALITY_VIDEO,
   RoomMedia,
   SCREEN_RETRY_DELAY_MS,
@@ -690,6 +691,20 @@ describe('RoomMedia: rebuilding the session (e2-t08) and TURN (e2-t07)', () => {
     await a.media.start({ mic: null, cam: null })
     expect(a.media.getState().status).toBe('connected')
     expect(a.current().connectOptions).toEqual({})
+  })
+
+  it('connects with the default servers when the ICE servers never come (O2 chaos drill)', async () => {
+    vi.useFakeTimers()
+    const sfu = new FakeSfu()
+    const a = rebuildable(sfu, { iceConfig: () => new Promise<IceConfig>(() => {}) })
+    const started = a.media.start({ mic: fakeTrack('audio'), cam: null })
+    await vi.advanceTimersByTimeAsync(ICE_CONFIG_TIMEOUT_MS - 1)
+    expect(a.media.getState().status).toBe('connecting')
+    await vi.advanceTimersByTimeAsync(1)
+    await started
+    expect(a.media.getState().status).toBe('connected')
+    expect(a.current().connectOptions).toEqual({})
+    expect(listed(a).map((t) => t.kind)).toEqual(['mic'])
   })
 
   it('reports whether its media goes through a relay', async () => {

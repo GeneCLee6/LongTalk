@@ -35,6 +35,8 @@ export interface SfuDeps {
   /** The month's usage state (UsageDO), only asked when a call adds video */
   usage(): Promise<UsageState>
   fetch?: typeof fetch
+  /** For tests: REALTIME_TIMEOUT_MS */
+  timeoutMs?: number
 }
 
 export const REALTIME_API_BASE = 'https://rtc.live.cloudflare.com/v1'
@@ -45,6 +47,12 @@ export const REALTIME_API_BASE = 'https://rtc.live.cloudflare.com/v1'
 const MAX_BODY_BYTES = 1024 * 1024
 /** Tracks one call may add (the client batches a page's subscriptions, L1: MAX_SUBSCRIBE_BATCH) */
 const MAX_TRACKS_PER_CALL = 16
+/**
+ * Longest wait for the Realtime API, answer and body (O2 chaos drill, e11-t12): an API that hangs
+ * answers 502 `upstream_error` instead of holding the browser's negotiation open, so RoomMedia
+ * rebuilds with its backoff. Realtime answers in well under a second (ADR-001)
+ */
+export const REALTIME_TIMEOUT_MS = 10_000
 
 const PATH = /^\/api\/sfu\/([^/]+)\/sessions(?:\/([^/]+)(\/.*)?)?$/
 
@@ -223,15 +231,18 @@ export async function handleSfu(request: Request, env: SfuEnv, deps: SfuDeps): P
         method: route.method,
         headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
         body: body === null ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(deps.timeoutMs ?? REALTIME_TIMEOUT_MS),
       },
     )
   } catch {
     return fail('upstream_error')
   }
 
-  const text = await upstream.text()
+  let text: string
   let json: unknown
   try {
+    // The body can hang too; the same signal ends it
+    text = await upstream.text()
     json = JSON.parse(text)
   } catch {
     return fail('upstream_error')

@@ -27,7 +27,15 @@ export interface TurnEnv {
 export interface TurnDeps {
   room(roomId: string): Pick<SfuRoom, 'sfuAccess'>
   fetch?: typeof fetch
+  /** For tests: TURN_API_TIMEOUT_MS */
+  timeoutMs?: number
 }
+
+/**
+ * Longest wait for Cloudflare's TURN credentials API (O2 chaos drill, e11-t12): when it hangs the
+ * member gets STUN only at once instead of waiting, since media waits for the ICE servers
+ */
+export const TURN_API_TIMEOUT_MS = 5_000
 
 const PATH = /^\/api\/turn\/([^/]+)$/
 
@@ -52,6 +60,7 @@ async function generate(env: TurnEnv, deps: TurnDeps): Promise<TurnResponse | nu
         method: 'POST',
         headers: { authorization: `Bearer ${apiToken}`, 'content-type': 'application/json' },
         body: JSON.stringify({ ttl: TURN_TTL_SECONDS }),
+        signal: AbortSignal.timeout(deps.timeoutMs ?? TURN_API_TIMEOUT_MS),
       },
     )
     if (!res.ok) {
