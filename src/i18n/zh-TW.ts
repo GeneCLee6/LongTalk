@@ -1481,6 +1481,51 @@ export const zhTWRoom = {
     revokedNow: (name: string) => `已取消 ${name} 的錄影權限`,
     stoppedTheirs: (name: string) => `已停止 ${name} 的錄影`,
   },
+  // N2 (e9-t02): pairing a desktop agent, and how one is named (docs/PRD/f-remote-control-security.md §5.1)
+  agent: {
+    // How a desktop agent is named everywhere a name shows
+    computerOf: (owner: string) => `${owner} 的電腦`,
+    computerNamed: (device: string) => `${device}（電腦）`,
+    platforms: { windows: 'Windows', macos: 'macOS', linux: 'Linux' },
+    device: (device: string, platform: string) => `${device} · ${platform}`,
+    // 更多 › 連接我的電腦, and its dialog
+    menu: '連接我的電腦',
+    title: '連接我的電腦',
+    intro:
+      '想讓別人之後遠端操作你的電腦，先在那台電腦上安裝 LongTalk 代理。打開代理，貼上這間會議室的連結和下面的配對碼，它就會以「你的電腦」加入會議室。',
+    introSafety: '配對碼只能用一次，5 分鐘內有效。只輸入在你自己的電腦上，別唸給任何人聽。',
+    download: '下載 LongTalk 代理',
+    generate: '產生配對碼',
+    generating: '產生中…',
+    codeLabel: '配對碼',
+    codeHidden: '配對碼已隱藏',
+    show: '顯示',
+    hide: '隱藏',
+    copy: '複製配對碼',
+    copied: '已複製配對碼',
+    copyFailed: '無法複製，請照著畫面輸入配對碼',
+    expiresIn: (time: string) => `${time} 後失效`,
+    regenerate: '重新產生',
+    cancelCode: '取消配對碼',
+    sharingWarning: '你正在分享畫面：別人看得到這個對話框，按「顯示」之前先停止分享或確認畫面。',
+    ended: '這組配對碼已經用過、取消或失效了。',
+    pairedTitle: (device: string) => `「${device}」已連成你的電腦`,
+    pairedBody: '房間裡的人會看到它是你的電腦。不是你連的？馬上中斷它。',
+    done: '完成',
+    busy: '你的電腦已經連在這間會議室裡。一個人一次只能連一台，要換一台，先中斷它。',
+    busyNamed: (device: string) =>
+      `你的電腦「${device}」已經連在這間會議室裡。一個人一次只能連一台，要換一台，先中斷它。`,
+    disconnectMine: '中斷我的電腦',
+    // The owner's toast when a computer joins with their code (TH-05)
+    paired: (device: string) => `「${device}」已連成你的電腦`,
+    pairedUnknown: '有一台電腦用你的配對碼連成了你的電腦',
+    notMe: '這不是我',
+    removed: (name: string) => `已中斷 ${name}`,
+    voided: '配對碼已失效，請重新產生',
+    // The participants list: the owner's own button on their computer's row
+    disconnect: '中斷',
+    disconnectLabel: (name: string) => `中斷 ${name}`,
+  },
   errors: {
     sfuNotConfigured: '媒體伺服器尚未設定（缺少 Realtime 的 App ID 或 App Secret）。',
     sfu: '媒體伺服器回應錯誤，聲音與畫面可能送不出去。',

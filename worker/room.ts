@@ -2,6 +2,8 @@ import { DurableObject } from 'cloudflare:workers'
 import type { ChatMessage } from '../shared/chat.ts'
 import type { InteractState } from './room-interact.ts'
 import type { BreakoutState } from './room-breakout.ts'
+import type { PairingState } from './room-pairing.ts'
+import { MAX_AGENT_MESSAGE_CHARS, type AgentServerMessage } from '../shared/control.ts'
 import {
   CloseCode,
   HEARTBEAT_PING,
@@ -73,6 +75,8 @@ const BOARD_KEY = 'board'
 const INTERACT_KEY = 'interact'
 /** The breakout rooms and who is in which (L3) */
 const BREAKOUT_KEY = 'breakout'
+/** Open pairing codes and wrong codes still counting (N2) */
+const PAIRING_KEY = 'pairing'
 /** Each chat message under its own key (D3): `chat:` and its id, zero-padded so keys sort by id */
 const CHAT_PREFIX = 'chat:'
 const chatKey = (id: number) => CHAT_PREFIX + String(id).padStart(12, '0')
@@ -123,6 +127,7 @@ export class RoomDO extends DurableObject<Env> {
     this.host = new RoomHost({
       sockets: {
         send: (connId, message) => this.send(connId, message),
+        post: (connId, message) => this.send(connId, message),
         close: (connId, code, reason) => {
           for (const ws of ctx.getWebSockets(connId)) {
             try {
@@ -166,6 +171,10 @@ export class RoomDO extends DurableObject<Env> {
           void (state === null
             ? storage.delete(BREAKOUT_KEY)
             : storage.put<BreakoutState>(BREAKOUT_KEY, state)),
+        savePairing: (state) =>
+          void (state === null
+            ? storage.delete(PAIRING_KEY)
+            : storage.put<PairingState>(PAIRING_KEY, state)),
         clear: () => void storage.deleteAll(),
       },
       now: Date.now,
@@ -220,6 +229,7 @@ export class RoomDO extends DurableObject<Env> {
           BOARD_KEY,
           INTERACT_KEY,
           BREAKOUT_KEY,
+          PAIRING_KEY,
         ]),
         storage.list<AnnotationSegment>({ prefix: ANNOTATION_PREFIX }),
       ])
@@ -247,6 +257,7 @@ export class RoomDO extends DurableObject<Env> {
           board: (extras.get(BOARD_KEY) as BoardState | undefined) ?? null,
           interact: (extras.get(INTERACT_KEY) as InteractState | undefined) ?? null,
           breakout: (extras.get(BREAKOUT_KEY) as BreakoutState | undefined) ?? null,
+          pairing: (extras.get(PAIRING_KEY) as PairingState | undefined) ?? null,
         },
       )
       // A room stored before C2 has no schedule: restore made one
@@ -363,7 +374,11 @@ export class RoomDO extends DurableObject<Env> {
     }
   }
 
-  /** Only the WebSocket upgrade, forwarded by the Worker from /api/rooms/<id>/ws */
+  /**
+   * Only the WebSocket upgrade, forwarded by the Worker from /api/rooms/<id>/ws (a browser) or
+   * /api/rooms/<id>/agent (a desktop agent, N2): the socket is tagged at the upgrade, in its
+   * attachment, so it keeps its kind through hibernation
+   */
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('Expected WebSocket', { status: 426 })
@@ -379,7 +394,9 @@ export class RoomDO extends DurableObject<Env> {
     // digest bound to this room
     const ip = await addressKey(request.headers.get('CF-Connecting-IP'), this.roomId(request))
     const clientKey = await requestClientKey(request, this.env)
-    const admission = this.host.admit(new URL(request.url).searchParams.get('v'), ip)
+    const url = new URL(request.url)
+    const agent = url.pathname.endsWith('/agent')
+    const admission = this.host.admit(url.searchParams.get('v'), ip, agent)
     if (!admission.ok) {
       if (admission.code === CloseCode.rateLimited && clientKey) {
         this.noteOffence(clientKey, 'connectLimit')
@@ -392,26 +409,30 @@ export class RoomDO extends DurableObject<Env> {
     }
     // The account the Worker found signed in on this upgrade (I2): only the Worker can reach this
     // object, and it always replaces the header with what it checked (worker/rooms.ts)
-    const account = request.headers.get(ACCOUNT_HEADER) || null
+    // An agent is nobody's account: it is its pairing code's
+    const account = agent ? null : request.headers.get(ACCOUNT_HEADER) || null
     const attachment: Attachment = {
       conn: crypto.randomUUID(),
       openedAt: Date.now(),
       ip,
       client: clientKey,
       account,
+      ...(agent ? { agent: true } : {}),
     }
     this.ctx.acceptWebSocket(server, [attachment.conn])
     server.serializeAttachment(attachment)
-    this.host.opened(attachment.conn, ip, account)
+    this.host.opened(attachment.conn, ip, account, agent)
     await this.syncAlarm()
     return new Response(null, { status: 101, webSocket: client })
   }
 
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer) {
-    const { conn } = ws.deserializeAttachment() as Attachment
+    const { conn, agent } = ws.deserializeAttachment() as Attachment
     // Binary frames are not part of the protocol: answered with an error. Oversized text closes
-    // the socket (1009, Message Too Big; I1): no client of ours sends one
-    if (typeof data === 'string' && data.length > MAX_CLIENT_MESSAGE_CHARS) {
+    // the socket (1009, Message Too Big; I1): no client of ours sends one. A desktop agent's socket
+    // has a smaller limit of its own (N2)
+    const limit = agent ? MAX_AGENT_MESSAGE_CHARS : MAX_CLIENT_MESSAGE_CHARS
+    if (typeof data === 'string' && data.length > limit) {
       const { client } = ws.deserializeAttachment() as Attachment
       if (client) this.noteOffence(client, 'flood')
       try {
@@ -502,12 +523,12 @@ export class RoomDO extends DurableObject<Env> {
     else await this.ctx.storage.setAlarm(next)
   }
 
-  /** The room's id, from the WebSocket path the Worker forwarded (/api/rooms/<id>/ws) */
+  /** The room's id, from the WebSocket path the Worker forwarded (/api/rooms/<id>/ws or /agent) */
   private roomId(request: Request): string {
     return new URL(request.url).pathname.split('/')[3] ?? ''
   }
 
-  private send(connId: string, message: ServerMessage) {
+  private send(connId: string, message: ServerMessage | AgentServerMessage) {
     const payload = JSON.stringify(message)
     for (const ws of this.ctx.getWebSockets(connId)) {
       if (ws === this.closing) continue

@@ -332,4 +332,18 @@ describe('protocol', () => {
     expect(parseServerMessage(JSON.stringify(notice))).toEqual(notice)
     expect(parseServerMessage('{"t":"notice","notice":"muted"}')).toBeNull()
   })
+
+  it('parses `pairCode` (N2): a code, or null once it is used, voided or ran out', () => {
+    const code = { t: 'pairCode', code: '7K3MQ9TD', expiresAt: 1_700_000_300_000 }
+    expect(parseServerMessage(JSON.stringify(code))).toEqual(code)
+    const ended = { t: 'pairCode', code: null, expiresAt: null }
+    expect(parseServerMessage(JSON.stringify(ended))).toEqual(ended)
+    const bad = [
+      { t: 'pairCode', code: 7, expiresAt: null },
+      { t: 'pairCode', code: '7K3MQ9TD', expiresAt: '1' },
+      { t: 'pairCode', code: '7K3MQ9TD' },
+      { t: 'pairCode', expiresAt: null },
+    ]
+    for (const message of bad) expect(parseServerMessage(JSON.stringify(message))).toBeNull()
+  })
 })

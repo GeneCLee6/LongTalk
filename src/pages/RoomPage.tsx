@@ -743,6 +743,11 @@ function Room({
   const annotationStore = useAnnotationStore(send, onAnnotation, isOpen)
   const toasts = useToasts()
   const { show } = toasts
+  // 連接我的電腦 (N2, e9-t02): the dialog, the room's `pair_busy` to our last ask, and the computer
+  // that joined with our code since the dialog opened (`agentPaired`, its member id)
+  const [pairOpen, setPairOpen] = useState(false)
+  const [pairBusy, setPairBusy] = useState(false)
+  const [pairedAgent, setPairedAgent] = useState<string | null>(null)
   const fileSharing = useFileSharing(roomId, state.token)
   const roomInfo = state.view?.room ?? null
   // In the waiting room (F2): no view, only the lobby (kept while the socket reconnects)
@@ -892,6 +897,8 @@ function Room({
         if (code === 'poll_active') show(strings.poll.busy, 'warn')
         // The spotlight, the whiteboard or a poll while breakout rooms are open (L3)
         if (code === 'breakout_active') show(strings.breakout.busy, 'warn')
+        // Our computer is already in the room (N2): the 連接我的電腦 dialog offers to disconnect it
+        if (code === 'pair_busy') setPairBusy(true)
         // A host control the room refused (our role changed meanwhile, F1)
         if (code === 'forbidden') show(strings.participants.forbidden, 'warn')
       }),
@@ -1157,6 +1164,20 @@ function Room({
     // 更多 › 分組討論室 (L3), for who may open them (RoomDO checks again)
     ...(mayBreakout
       ? [{ id: 'breakout', label: strings.breakout.menu, onSelect: () => setPanel('breakout') }]
+      : []),
+    // 更多 › 連接我的電腦 (N2, e9-t02), for who may pair one (RoomDO checks again)
+    ...(can(role, 'pairComputer')
+      ? [
+          {
+            id: 'pair-computer',
+            label: strings.agent.menu,
+            onSelect: () => {
+              setPairBusy(false)
+              setPairedAgent(null)
+              setPairOpen(true)
+            },
+          },
+        ]
       : []),
     // 更多 › 連線統計 (H2, e2-t14)
     { id: 'stats', label: strings.stats.menu, onSelect: () => setPanel('stats') },
@@ -1474,6 +1495,18 @@ function Room({
   if (suggestionDismissed && media.downlink !== 'audioOnly') setSuggestionDismissed(false)
   const suggestAudioOnly =
     inRoom && media.downlink === 'audioOnly' && !audioOnly && !suggestionDismissed
+  // Our own computer out of the room (N2): 這不是我, 中斷我的電腦, 中斷 in the list
+  const removeAgent = (memberId: string) => {
+    send({ t: 'agentRemove', memberId })
+    setPairBusy(false)
+    show(strings.agent.removed(anyMembers?.[memberId]?.name ?? ''))
+  }
+  // Our computer, when it is in the room: one per member (whichever breakout room it is in)
+  const myComputer = Object.values(anyMembers ?? {}).find(
+    (member) =>
+      member.agent !== undefined && member.agent.owner === state.you && state.you !== null,
+  )
+  const pairedMember = pairedAgent === null ? undefined : anyMembers?.[pairedAgent]
   // What a host did to us (F1, AC-1.4): the room already lists the track muted; our browser
   // turns the device off itself and says who did it. Only we can turn it back on.
   const onHostNotice = useEffectEvent((notice: NoticeMessage) => {
@@ -1541,6 +1574,19 @@ function Room({
       case 'startMuted':
         void devices?.setOn('mic', false)
         show(strings.hostNotice.startMuted)
+        return
+      // N2 (e9-t02): a computer joined with our pairing code (`by`: the computer). Said at once,
+      // with 這不是我 to remove it (TH-05); the computer may not be in the view yet
+      case 'agentPaired': {
+        const device = anyMembers?.[notice.by]?.agent?.device
+        setPairedAgent(notice.by)
+        show(device ? strings.agent.paired(device) : strings.agent.pairedUnknown, 'neutral', {
+          actions: [{ label: strings.agent.notMe, onClick: () => removeAgent(notice.by) }],
+        })
+        return
+      }
+      case 'pairingVoided':
+        show(strings.agent.voided, 'warn')
         return
       case 'annotationsCleared':
         // Maybe a sharer, not only a host: the name alone
@@ -1719,11 +1765,16 @@ function Room({
     const cam = member.tracks.find((t) => t.kind === 'cam')
     return !!cam && !cam.muted && !media.received[trackKey(cam)]
   }
+  // Desktop agents (N2) have no microphone or camera, only a screen to share, which has its own
+  // tile: they are in the participants list, not on the camera grid (a tile with a muted
+  // microphone and a letter would read as a person who does not speak)
   const shown = visibleTiles({
-    tiles: members.map((member) => ({
-      id: member.id,
-      video: videoOf(member) !== null || videoPaused(member) || videoWaiting(member),
-    })),
+    tiles: members
+      .filter((member) => !member.agent)
+      .map((member) => ({
+        id: member.id,
+        video: videoOf(member) !== null || videoPaused(member) || videoWaiting(member),
+      })),
     you: state.you,
     hideSelf: view.hideSelf,
     hideNoVideo,
@@ -1752,7 +1803,8 @@ function Room({
   // Who could take over from us: connected members in the meeting, the room's own pick first;
   // everyone in it, whichever breakout room they are in (L3)
   const successors = Object.values(fullView?.members ?? state.view?.members ?? {})
-    .filter((member) => member.id !== state.you && !member.reconnecting)
+    // A computer (N2) cannot host
+    .filter((member) => member.id !== state.you && !member.reconnecting && !member.agent)
     .sort((a, b) => successorOrder(a) - successorOrder(b) || a.joinedAt - b.joinedAt)
 
   // Keyboard shortcuts and push-to-talk (G4, e4-t13): only in the room itself. 離開 from the
@@ -2110,6 +2162,7 @@ function Room({
       onRole={onRole}
       recorderIds={recorders.map((entry) => entry.memberId)}
       onRecordAction={onRecordAction}
+      onAgentRemove={removeAgent}
       audio={{
         levelOf: (id) => {
           if (id === state.you) return micSending
@@ -2206,6 +2259,7 @@ function Room({
       <ShareTile
         key={`${mainSharer.id}-share`}
         name={mainSharer.name}
+        computer={mainSharer.agent !== undefined}
         video={receivedOf(mainSharer, 'screen')}
         annotations={{
           store: annotationStore,
@@ -2227,6 +2281,7 @@ function Room({
         <ShareTile
           key={`${sharer.id}-share`}
           name={sharer.name}
+          computer={sharer.agent !== undefined}
           video={receivedOf(sharer, 'screen')}
           annotations={{ store: annotationStore, share: sharer.id, me: null, nameOf: nameOnMarks }}
           onShowMain={() => chooseShare(sharer.id)}
@@ -2694,6 +2749,34 @@ function Room({
           />
         )}
         {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+        {pairOpen && (
+          <Suspense fallback={null}>
+            <PairComputerDialog
+              pairCode={state.pairCode}
+              myComputer={
+                myComputer?.agent ? { id: myComputer.id, device: myComputer.agent.device } : null
+              }
+              busy={pairBusy}
+              paired={
+                pairedMember?.agent
+                  ? { id: pairedMember.id, device: pairedMember.agent.device }
+                  : null
+              }
+              sharing={shareUnderWay}
+              onGenerate={() => {
+                setPairBusy(false)
+                setPairedAgent(null)
+                send({ t: 'pairStart' })
+              }}
+              onCancelCode={() => send({ t: 'pairCancel' })}
+              onRemove={removeAgent}
+              onCopied={(ok) =>
+                ok ? show(strings.agent.copied) : show(strings.agent.copyFailed, 'warn')
+              }
+              onClose={() => setPairOpen(false)}
+            />
+          </Suspense>
+        )}
         {recordDialog && (
           <Suspense fallback={null}>
             <RecordDialog
@@ -3188,6 +3271,9 @@ const SharePip = lazy(() => import('../annotate/SharePip.tsx'))
 
 /** 錄影設定 (I4, e8-t03): its own chunk, like the recorder */
 const RecordDialog = lazy(() => import('../components/RecordDialog.tsx'))
+
+/** 連接我的電腦 (N2, e9-t02): its own chunk, loaded when it first opens (rule 6) */
+const PairComputerDialog = lazy(() => import('../components/PairComputerDialog.tsx'))
 
 /** Below this much free storage a long recording may not fit: said when it starts (it still does) */
 const LOW_STORAGE_BYTES = 1024 ** 3

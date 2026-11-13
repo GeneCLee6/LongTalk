@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-api-fetch"
+description = "Enables the api_fetch command without any pre-configured scope."
+commands.allow = ["api_fetch"]
+
+[[permission]]
+identifier = "deny-api-fetch"
+description = "Denies the api_fetch command without any pre-configured scope."
+commands.deny = ["api_fetch"]

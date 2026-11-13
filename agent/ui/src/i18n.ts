@@ -1,0 +1,144 @@
+// The agent's interface text, zh-TW and English (CLAUDE.md rule 5: text only in a dictionary; this
+// is the agent's own, small enough to stay one file). zh-TW is the source and defines the type;
+// the language follows the system (navigator.language), like the tray (src-tauri/src/tray.rs).
+
+const zhTW = {
+  appName: 'LongTalk 代理',
+  join: {
+    title: '加入會議室',
+    intro: '讓會議室裡的人看到這台電腦的螢幕。在會議室裡按「連接我的電腦」取得配對碼。',
+    link: '會議室連結或代碼',
+    linkPlaceholder: 'https://…/r/…',
+    pairing: '配對碼',
+    pairingHint: '8 個英數字，5 分鐘內有效',
+    device: '這台電腦的名稱',
+    deviceHint: '會議室裡會顯示這台電腦是誰的，以及這個名稱',
+    submit: '加入',
+  },
+  problems: {
+    foreignLink: '這不是 LongTalk 的連結',
+    badRoom: '看不懂這個連結或代碼',
+    badPairing: '配對碼是 8 個英數字，例如 7K3M-Q9TD',
+    badDevice: '請填這台電腦的名稱（最多 40 個字）',
+    pairingFailed: '配對碼不對或已過期，請在會議室裡重新產生一組',
+    expired: '這次連線已失效，請在會議室裡重新產生配對碼',
+    replaced: '這台電腦已在別的地方重新連上會議室',
+    versionMismatch: '這個代理的版本太舊，請更新後再試',
+    roomNotFound: '找不到這個會議室，或會議已經結束',
+    roomFull: '會議室已經滿了',
+    rateLimited: '嘗試太多次，請過幾分鐘再試',
+    removed: '你已被移出會議室',
+    ended: '會議已經結束',
+    lost: '連線中斷太久，已離開會議室',
+    failed: '連不上 LongTalk，請檢查網路後再試',
+  },
+  connecting: '連線中…',
+  /** A room without a name, as the web app shows it (src/i18n room.defaultName) */
+  roomName: (roomName: string | null, createdBy: string | null) =>
+    roomName ?? (createdBy ? `${createdBy} 的房間` : '會議室'),
+  confirm: {
+    title: '確認加入',
+    question: (ownerName: string, roomName: string) =>
+      `${ownerName} 發的配對碼，要加入『${roomName}』嗎？房間裡的人都會看到你的螢幕。`,
+    warning: '如果是不認識的人在電話或訊息裡要你輸入這組碼，請按取消。',
+    join: '加入',
+    cancel: '取消',
+  },
+  room: {
+    joined: (roomName: string) => `已加入『${roomName}』`,
+    owner: (ownerName: string) => `在會議室裡顯示為「${ownerName} 的電腦」`,
+    reconnecting: '連線中斷，正在重新連線…',
+    share: '分享我的螢幕',
+    sharing: '正在分享你的螢幕，房間裡的人都看得到',
+    notSharing: '目前沒有分享螢幕',
+    pickHint: '打開後選擇要分享的螢幕（有多個螢幕時可以挑一個）',
+    leave: '離開房間',
+  },
+  shareProblems: {
+    denied: '系統不允許擷取螢幕，請到系統設定開放權限',
+    unsupported: '這台電腦無法分享螢幕',
+    failed: '分享螢幕失敗，請再試一次',
+    full: '會議室裡同時分享的人數已滿',
+    audioOnly: '本月額度快用完了，會議室暫時不能分享畫面',
+    fromTray: '請在這個視窗打開「分享我的螢幕」，選擇要分享的螢幕',
+  },
+}
+
+export type AgentStrings = typeof zhTW
+
+const en: AgentStrings = {
+  appName: 'LongTalk agent',
+  join: {
+    title: 'Join a room',
+    intro:
+      'Lets the people in a room see this computer’s screen. Get a pairing code in the room with “Connect my computer”.',
+    link: 'Room link or code',
+    linkPlaceholder: 'https://…/r/…',
+    pairing: 'Pairing code',
+    pairingHint: '8 letters and digits, valid for 5 minutes',
+    device: 'This computer’s name',
+    deviceHint: 'The room shows whose computer this is, and this name',
+    submit: 'Join',
+  },
+  problems: {
+    foreignLink: 'This is not a LongTalk link',
+    badRoom: 'That link or code does not look like a room',
+    badPairing: 'A pairing code is 8 letters and digits, like 7K3M-Q9TD',
+    badDevice: 'Enter this computer’s name (up to 40 characters)',
+    pairingFailed: 'The pairing code is wrong or has expired: make a new one in the room',
+    expired: 'This connection has expired: make a new pairing code in the room',
+    replaced: 'This computer connected to the room again from somewhere else',
+    versionMismatch: 'This agent is too old: update it and try again',
+    roomNotFound: 'No such room, or the meeting has ended',
+    roomFull: 'The room is full',
+    rateLimited: 'Too many tries: wait a few minutes',
+    removed: 'You were removed from the room',
+    ended: 'The meeting has ended',
+    lost: 'The connection was down too long: you left the room',
+    failed: 'Cannot reach LongTalk: check the network and try again',
+  },
+  connecting: 'Connecting…',
+  roomName: (roomName: string | null, createdBy: string | null) =>
+    roomName ?? (createdBy ? `${createdBy}’s room` : 'the room'),
+  confirm: {
+    title: 'Confirm',
+    question: (ownerName: string, roomName: string) =>
+      `The pairing code is from ${ownerName}. Join “${roomName}”? Everyone in the room will see your screen.`,
+    warning:
+      'If someone you do not know asked you for this code on the phone or in a message, cancel.',
+    join: 'Join',
+    cancel: 'Cancel',
+  },
+  room: {
+    joined: (roomName: string) => `In “${roomName}”`,
+    owner: (ownerName: string) => `Shown in the room as ${ownerName}’s computer`,
+    reconnecting: 'Connection lost, reconnecting…',
+    share: 'Share my screen',
+    sharing: 'Sharing your screen: everyone in the room can see it',
+    notSharing: 'Not sharing the screen',
+    pickHint: 'Turn it on to pick the screen to share (one of several monitors, too)',
+    leave: 'Leave the room',
+  },
+  shareProblems: {
+    denied: 'The system does not allow capturing the screen: allow it in the system settings',
+    unsupported: 'This computer cannot share its screen',
+    failed: 'Sharing the screen failed: try again',
+    full: 'The room already has as many shares as it allows',
+    audioOnly: 'This month’s allowance is nearly used up: the room cannot share screens for now',
+    fromTray: 'Turn on “Share my screen” in this window to pick the screen to share',
+  },
+}
+
+export const dictionaries = { 'zh-TW': zhTW, en } as const
+
+export type AgentLocale = keyof typeof dictionaries
+
+export function pickLocale(language: string): AgentLocale {
+  return language.toLowerCase().startsWith('zh') ? 'zh-TW' : 'en'
+}
+
+export const locale: AgentLocale = pickLocale(
+  typeof navigator === 'undefined' ? 'zh-TW' : navigator.language,
+)
+
+export const text: AgentStrings = dictionaries[locale]

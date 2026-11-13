@@ -201,6 +201,17 @@
 //    only; whoever changes rooms, or sees a share arrive with its sharer, gets the strokes again. While the
 //    rooms are open `spotlight`, opening the whiteboard and `pollStart` are refused with
 //    `breakout_active`; opening them clears the spotlight and closes the whiteboard.
+// 30. Pairing a computer (N2, e9-t02; shared/control.ts, docs/PRD/f-remote-control-security.md
+//    §5.1): any member in the room (worker/roles.ts `pairComputer`) sends `pairStart`; the room
+//    answers that member alone with `pairCode` (a one-time code, PAIRING_CODE_TTL_MS), replacing
+//    any code they had. `pairCancel` voids it. The desktop agent brings the code on its own socket
+//    (/api/rooms/<id>/agent, never this one) and becomes a member with `Member.agent` (who issued the
+//    code, the computer's name, its platform), shown as 「<owner> 的電腦」. The owner is told
+//    (`notice` `agentPaired`, `by`: the agent's member id) and may remove it at once with
+//    `agentRemove` (「這不是我」); a host may remove it like anyone (`host` `remove`). One computer
+//    per member: a new pairing replaces nothing, it is refused until the old one leaves. When too
+//    many wrong codes void every open code the issuers get `notice` `pairingVoided`. An agent shares
+//    its screen through the same `share` / `tracks` as a browser, on its own socket.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -247,6 +258,9 @@
 // v22 → v23 (L3): `breakoutOpen`, `breakoutMove`, `breakoutBroadcast`, `breakoutClose`,
 //   `RoomView.breakout`, `Member.group`, `ChatMessage.group`, error code `breakout_active`. A v22
 //   browser would subscribe to members outside its room (refused) and see every room's chat.
+// v23 → v24 (N2): `pairStart`, `pairCancel`, `pairCode`, `agentRemove`, `Member.agent`, notices
+//   `agentPaired`, `pairingVoided`, error code `pair_busy`. A v23 browser would show a desktop
+//   agent as a stranger with a strange name.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -279,9 +293,10 @@ import { normalizePassword } from './password.ts'
 import { isReaction, type Reaction } from './reactions.ts'
 import { isAnnotationPolicy, type AnnotationPolicy, type Role } from './roles.ts'
 import type { UsageState } from './usage.ts'
+import type { AgentPlatform } from './control.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 23
+export const PROTOCOL_VERSION = 24
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -562,7 +577,15 @@ export type Member = {
    * room
    */
   group?: string | null
+  /**
+   * A desktop agent, not a person (N2, e9-t02): shown as 「<owner's name> 的電腦」. `owner` is the
+   * member who issued its pairing code (null once they left), `device` the computer's own name
+   */
+  agent?: MemberAgent
 }
+
+/** What the room says about a desktop agent member (shared/control.ts AgentHelloMessage) */
+export type MemberAgent = { owner: string | null; device: string; platform: AgentPlatform }
 
 /** A nameplate's signal bars (e2-t13): 好／普通／差 */
 export type SignalLevel = 'good' | 'fair' | 'poor'
@@ -622,6 +645,7 @@ export type PatchMessage = { t: 'patch'; rev: number; ops: PatchOp[] }
  * - `rate_limited`: `chat` faster than CHAT_RATE (D3); the message was not kept
  * - `annotation_limit`: `annotate` faster than the limits (J2); a refused stroke comes back removed
  * - `poll_active`: `pollStart` while a poll is on (L5)
+ * - `pair_busy`: `pairStart` from a member whose computer is already in the room (N2)
  * - `breakout_active`: `breakoutOpen` while breakout rooms are open, or `spotlight`, opening the
  *   whiteboard, `pollStart` or `record` while they are (L3)
  */
@@ -634,6 +658,7 @@ export type ErrorCode =
   | 'annotation_limit'
   | 'poll_active'
   | 'breakout_active'
+  | 'pair_busy'
 
 /**
  * What a host (or co-host) did to this member (F1): `muted` (the microphone; `all` when it was
@@ -662,6 +687,10 @@ export type NoticeKind =
   | 'annotationsCleared'
   // L5 (e1-t18): this persistent room has participants come in muted; `by` is the member themselves
   | 'startMuted'
+  // N2 (e9-t02): a computer joined with this member's pairing code (`by`: the agent's member id);
+  // too many wrong codes voided this member's open code
+  | 'agentPaired'
+  | 'pairingVoided'
 
 export type NoticeMessage = {
   t: 'notice'
@@ -698,6 +727,12 @@ export type LobbyMessage = {
  * room sends after every `welcome`; replace every message you have with these (more frames of
  * the history may follow without it). Without `reset`: new messages, append them.
  */
+/**
+ * The pairing code `pairStart` asked for (N2), to this member alone: show it formatted
+ * (formatPairingCode), hidden until asked for. `code` null: the code was used, voided or ran out
+ */
+export type PairCodeMessage = { t: 'pairCode'; code: string | null; expiresAt: number | null }
+
 export type ChatServerMessage = {
   t: 'chat'
   messages: ChatMessage[]
@@ -748,6 +783,7 @@ export type ServerMessage =
   | NoticeMessage
   | LobbyMessage
   | ReactionMessage
+  | PairCodeMessage
 
 // ── Browser → server ─────────────────────────────────────────────────────────────────────────
 
@@ -946,7 +982,19 @@ export type BreakoutBroadcastMessage = { t: 'breakoutBroadcast'; text: string }
  */
 export type BreakoutCloseMessage = { t: 'breakoutClose'; now: boolean }
 
+/** Ask for a one-time code to pair this member's computer (N2, e9-t02) */
+export type PairStartMessage = { t: 'pairStart' }
+
+/** Void this member's open pairing code */
+export type PairCancelMessage = { t: 'pairCancel' }
+
+/** Remove this member's own computer from the room (「這不是我」 or 「中斷我的電腦」) */
+export type AgentRemoveMessage = { t: 'agentRemove'; memberId: string }
+
 export type ClientMessage =
+  | PairStartMessage
+  | PairCancelMessage
+  | AgentRemoveMessage
   | BreakoutOpenMessage
   | BreakoutMoveMessage
   | BreakoutBroadcastMessage
@@ -1049,7 +1097,8 @@ const isIndex = (value: unknown): value is number =>
 export function parsePollStart(value: Record<string, unknown>): PollStartMessage | null {
   const question = normalizeName(value.question, MAX_POLL_QUESTION_CHARS)
   if (question === null || !Array.isArray(value.options)) return null
-  if (value.options.length < MIN_POLL_OPTIONS || value.options.length > MAX_POLL_OPTIONS) return null
+  if (value.options.length < MIN_POLL_OPTIONS || value.options.length > MAX_POLL_OPTIONS)
+    return null
   const options: string[] = []
   for (const raw of value.options as unknown[]) {
     const option = normalizeName(raw, MAX_POLL_OPTION_CHARS)
@@ -1076,7 +1125,8 @@ export function parseAgendaItems(value: unknown): AgendaItem[] | null {
     if (typeof raw !== 'object' || raw === null) return null
     const { title, minutes } = raw as Record<string, unknown>
     const name = normalizeName(title, MAX_AGENDA_TITLE_CHARS)
-    if (name === null || !isIndex(minutes) || minutes < 1 || minutes > MAX_AGENDA_MINUTES) return null
+    if (name === null || !isIndex(minutes) || minutes < 1 || minutes > MAX_AGENDA_MINUTES)
+      return null
     items.push({ title: name, minutes })
   }
   return items
@@ -1207,6 +1257,12 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       const text = normalizeName(value.text, MAX_BROADCAST_CHARS)
       return text === null ? null : { t: 'breakoutBroadcast', text }
     }
+    case 'pairStart':
+      return { t: 'pairStart' }
+    case 'pairCancel':
+      return { t: 'pairCancel' }
+    case 'agentRemove':
+      return isMemberId(value.memberId) ? { t: 'agentRemove', memberId: value.memberId } : null
     case 'breakoutClose':
       return typeof value.now === 'boolean' ? { t: 'breakoutClose', now: value.now } : null
     case 'host': {
@@ -1335,6 +1391,11 @@ export function parseServerMessage(raw: string): ServerMessage | null {
         value.room !== null &&
         typeof value.hostPresent === 'boolean'
         ? (value as LobbyMessage)
+        : null
+    case 'pairCode':
+      return (value.code === null || typeof value.code === 'string') &&
+        (value.expiresAt === null || typeof value.expiresAt === 'number')
+        ? (value as PairCodeMessage)
         : null
     case 'reaction':
       return typeof value.from === 'string' && isReaction(value.emoji)

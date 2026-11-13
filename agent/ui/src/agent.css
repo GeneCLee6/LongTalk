@@ -1,0 +1,218 @@
+/* The agent window's layout. Colours are only the token variables (src/styles/tokens.ts, set on
+   <html> by theme.ts); no colour literals here (CLAUDE.md rule 5). */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--lt-bg);
+  color: var(--lt-fg);
+  font-family: var(--lt-font-ui);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.agent {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 20px 20px 28px;
+}
+
+.agent-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.agent-form,
+.agent-confirm,
+.agent-room {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: var(--lt-surface);
+  border: 1px solid var(--lt-line);
+  border-radius: 16px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-weight: 600;
+}
+
+label small {
+  font-weight: 400;
+}
+
+input {
+  font: inherit;
+  padding: 10px 12px;
+  color: var(--lt-fg);
+  background: var(--lt-bg);
+  border: 1px solid var(--lt-line);
+  border-radius: 10px;
+}
+
+.agent-code {
+  font-family: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+button {
+  font: inherit;
+  padding: 10px 16px;
+  color: var(--lt-fg);
+  background: var(--lt-surface2);
+  border: 1px solid var(--lt-line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--lt-hover);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--lt-focus);
+  outline-offset: 2px;
+}
+
+.agent-primary {
+  color: var(--lt-onPrimary);
+  background: var(--lt-primary);
+  border-color: var(--lt-primary);
+  font-weight: 600;
+}
+
+.agent-primary:hover:not(:disabled) {
+  background: var(--lt-primary);
+  filter: brightness(1.08);
+}
+
+.agent-danger {
+  color: var(--lt-danger);
+  background: transparent;
+  border-color: var(--lt-danger);
+}
+
+.agent-muted {
+  margin: 0;
+  color: var(--lt-muted);
+  font-size: 14px;
+}
+
+.agent-status {
+  margin: 0;
+  min-height: 1.5em;
+  color: var(--lt-muted);
+}
+
+.agent-problem {
+  margin: 0;
+  min-height: 1.5em;
+  color: var(--lt-danger);
+  font-weight: 600;
+}
+
+.agent-problem:empty {
+  min-height: 0;
+}
+
+.agent-question {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.agent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.agent-share {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--lt-line);
+  border-radius: 12px;
+}
+
+.agent-share-on {
+  border-color: var(--lt-primary);
+  background: var(--lt-primarySoft);
+}
+
+.agent-switch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+  background: transparent;
+  border: none;
+  font-weight: 600;
+  text-align: start;
+}
+
+.agent-switch:hover:not(:disabled) {
+  background: transparent;
+}
+
+.agent-switch-track {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 24px;
+  background: var(--lt-line);
+  border-radius: 999px;
+}
+
+.agent-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  background: var(--lt-surface);
+  border-radius: 999px;
+  transition: transform 0.15s;
+}
+
+.agent-switch[aria-checked='true'] .agent-switch-track {
+  background: var(--lt-primary);
+}
+
+.agent-switch[aria-checked='true'] .agent-switch-thumb {
+  transform: translateX(20px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-switch-thumb {
+    transition: none;
+  }
+}

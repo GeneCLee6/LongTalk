@@ -1,0 +1,124 @@
+name: Desktop agent release
+
+# Builds the LongTalk desktop agent (agent/, E9) and puts the installers on a DRAFT GitHub Release
+# with their SHA-256 sums (docs/PRD/f-remote-control-security.md §5.9): the owner reads the draft,
+# then publishes it by hand. Never runs on pushes or pull requests: only on an `agent-v*` tag
+# (`git tag agent-v0.1.0 && git push origin agent-v0.1.0`) or by hand with a tag name.
+#
+# Updates (§5.9): when the TAURI_SIGNING_PRIVATE_KEY secret exists, the agent is built with the
+# `updater` feature and the bundles are signed, and the release carries latest.json for the Tauri
+# updater. Without it the installers are built unsigned for updates and the agent never checks for
+# one (agent/README.md has the owner's steps). The OS builds are not code-signed (no Authenticode,
+# no notarization: §5.9), so the SHA-256 list is how a friend checks a download.
+on:
+  push:
+    tags: ['agent-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create or update (agent-vX.Y.Z)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+            rust-targets: ''
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    env:
+      HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent/src-tauri -> target
+
+      - name: Rust unit tests (the local confirmation, T-01a)
+        working-directory: agent/src-tauri
+        run: cargo test
+
+      - name: Updater on or off
+        id: updater
+        run: |
+          if [ "$HAS_UPDATER_KEY" = "true" ]; then
+            echo "args=--features updater --config {\"bundle\":{\"createUpdaterArtifacts\":true}}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No TAURI_SIGNING_PRIVATE_KEY secret: the agent is built without automatic updates (agent/README.md)"
+            echo "args=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: agent
+          tauriScript: npx tauri
+          tagName: ${{ env.TAG }}
+          releaseName: 'LongTalk 代理 ${{ env.TAG }}'
+          releaseBody: '安裝檔與 SHA-256 見下方；下載後請比對（agent/README.md）。'
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: ${{ env.HAS_UPDATER_KEY == 'true' }}
+          args: ${{ matrix.args }} ${{ steps.updater.outputs.args }}
+
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: SHA-256 of every file on the draft release
+        run: |
+          mkdir assets && cd assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*' --skip-existing
+          rm -f SHA256SUMS.txt
+          sha256sum -- * | tee ../SHA256SUMS.txt
+          cd ..
+          {
+            echo '安裝檔的 SHA-256（下載後比對：Windows `certutil -hashfile <檔案> SHA256`，macOS `shasum -a 256 <檔案>`）：'
+            echo
+            echo '```'
+            cat SHA256SUMS.txt
+            echo '```'
+          } > notes.md
+          gh release upload "$TAG" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"

@@ -26,6 +26,7 @@ const EXPECTED: Record<Action, string> = {
   openWhiteboard: 'HCP',
   votePoll: 'HCP',
   requestControl: 'HCP',
+  pairComputer: 'HCP',
   renameRoom: 'HC',
   muteAll: 'HC',
   endMeeting: 'H',
