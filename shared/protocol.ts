@@ -212,7 +212,13 @@
 //    per member: a new pairing replaces nothing, it is refused until the old one leaves. When too
 //    many wrong codes void every open code the issuers get `notice` `pairingVoided`. An agent shares
 //    its screen through the same `share` / `tracks` as a browser, on its own socket.
-// 31. Remote control (N3, e9-t04, e9-t05; shared/control.ts, docs/PRD/f-remote-control-security.md
+// 31. Large rooms (O1, e10-t06): `host` `muteMembers` mutes the members named (at most
+//    MAX_MEMBERS), each as `muteMember` would (worker/roles.ts `muteAll` for the batch, then
+//    `muteMember` per member: anyone the actor may not mute, or whose microphone is off already, is
+//    skipped silently). `host` `startMuted` with `on` switches `RoomInfo.startMuted` from inside the
+//    room (worker/roles.ts `startMuted`), the same switch the owner of a persistent room sets on /me:
+//    only who comes in after it is told `notice` `startMuted`.
+// 32. Remote control (N3, e9-t04, e9-t05; shared/control.ts, docs/PRD/f-remote-control-security.md
 //    §5.2–§5.7): a member in the room (worker/roles.ts `requestControl`) sends `controlRequest`
 //    naming an agent that shares its screen in the same breakout room; refusals are the
 //    ControlErrorCode errors. The room answers `controlRequested` (the request id, for
@@ -277,6 +283,9 @@
 // v23 → v24 (N2): `pairStart`, `pairCancel`, `pairCode`, `agentRemove`, `Member.agent`, notices
 //   `agentPaired`, `pairingVoided`, error code `pair_busy`. A v23 browser would show a desktop
 //   agent as a stranger with a strange name.
+// v24 → v25 (O1): `host` actions `muteMembers` (with `memberIds`) and `startMuted` (with `on`). A
+//   v24 browser would not send them, but its panel would offer nothing it could do; refused so
+//   every host in a room has the same tools.
 // v26 → v27 (N3): `controlRequest`, `controlCancel`, `controlEvent`, `controlStop`,
 //   `controlRequested`, `controlRefused`, `controlGranted`, `controlEnd`, `RoomView.control`,
 //   `RoomInfo.allowControl`, `host` action `stopControl`, notices `controlStarted`,
@@ -928,8 +937,11 @@ export type HostRoomAction = 'muteAll' | 'endMeeting' | 'admitAll'
 /** Admit or turn away one person in the waiting room (F2); `memberId` says who */
 export type HostWaitingAction = 'admit' | 'deny'
 
-/** The room's switches (F2): `on` says which way */
-export type HostSwitchAction = 'lock' | 'waitingRoom'
+/** The room's switches (F2; `startMuted` O1): `on` says which way */
+export type HostSwitchAction = 'lock' | 'waitingRoom' | 'startMuted'
+
+/** Mute several members at once (O1, e10-t06): who the panel's search or filter left */
+export type HostMuteMembersAction = 'muteMembers'
 
 /** The room's password (F3): a new one, or null to clear it */
 export type HostPasswordAction = 'setPassword'
@@ -956,6 +968,7 @@ export type HostAction =
   | HostHandoverAction
   | HostAllowRecordAction
   | HostAnnotationPolicyAction
+  | HostMuteMembersAction
 
 const HOST_MEMBER_ACTIONS: readonly string[] = [
   'muteMember',
@@ -968,7 +981,7 @@ const HOST_MEMBER_ACTIONS: readonly string[] = [
 ]
 const HOST_ROOM_ACTIONS: readonly string[] = ['muteAll', 'endMeeting', 'admitAll']
 const HOST_WAITING_ACTIONS: readonly string[] = ['admit', 'deny']
-const HOST_SWITCH_ACTIONS: readonly string[] = ['lock', 'waitingRoom']
+const HOST_SWITCH_ACTIONS: readonly string[] = ['lock', 'waitingRoom', 'startMuted']
 
 /** A host control (F1, e1-t07; F2); the room checks the member may (worker/roles.ts) */
 export type HostMessage =
@@ -981,6 +994,7 @@ export type HostMessage =
   | { t: 'host'; action: HostAllowRecordAction; memberId: string; on: boolean }
   | { t: 'host'; action: HostHandoverAction; memberId: string }
   | { t: 'host'; action: HostAnnotationPolicyAction; policy: AnnotationPolicy }
+  | { t: 'host'; action: HostMuteMembersAction; memberIds: string[] }
 
 /** What the member did to a layer since its last frame (J2, e7-t03, e7-t04; J3: the whiteboard's) */
 export type AnnotateMessage = { t: 'annotate'; share: string; ops: AnnotationOp[] }
@@ -1360,6 +1374,12 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       }
       if (action === 'annotationPolicy' && isAnnotationPolicy(value.policy)) {
         return { t: 'host', action, policy: value.policy }
+      }
+      if (action === 'muteMembers') {
+        const ids = value.memberIds
+        if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_MEMBERS) return null
+        if (!ids.every(isMemberId)) return null
+        return { t: 'host', action, memberIds: [...new Set(ids)] }
       }
       return null
     }

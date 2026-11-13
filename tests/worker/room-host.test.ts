@@ -1514,6 +1514,72 @@ describe('RoomHost host controls (F1, e1-t07)', () => {
     expect(notices(a.client)).toEqual([])
   })
 
+  // O1 (e10-t06): who the panel's search or filter left, each checked as muteMember
+  it('mutes several members at once, skipping whoever is muted already or out of reach', () => {
+    const { a, b, c } = three()
+    const d = joinAs('小芳', 'browser-xiaofang-000')
+    publish(d, 'sd', ['mic'])
+    host(a.conn, 'muteMember', c.id)
+    const batch = (conn: string, memberIds: unknown) =>
+      t.host.message(conn, JSON.stringify({ t: 'host', action: 'muteMembers', memberIds }))
+    batch(a.conn, [b.id, c.id, a.id, 'nobody'])
+    expect(muted(d.client.view, b.id, 'mic')).toBe(true)
+    expect(muted(d.client.view, b.id, 'cam')).toBe(false)
+    // Not named: untouched; the host itself is not muted by its own batch
+    expect(muted(d.client.view, d.id, 'mic')).toBe(false)
+    expect(muted(d.client.view, a.id, 'mic')).toBe(false)
+    expect(notices(b.client)).toEqual([{ t: 'notice', notice: 'muted', by: a.id }])
+    // 阿明 was muted already: only the first notice
+    expect(notices(c.client)).toHaveLength(1)
+    expect(notices(d.client)).toEqual([])
+    // A participant may not; a malformed list is not a control at all
+    batch(c.conn, [d.id])
+    expect(c.client.received.at(-1)).toEqual(forbidden)
+    expect(muted(a.client.view, d.id, 'mic')).toBe(false)
+    batch(a.conn, [])
+    expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+    batch(
+      a.conn,
+      Array.from({ length: MAX_MEMBERS + 1 }, () => d.id),
+    )
+    expect(a.client.received.at(-1)).toEqual({ t: 'error', code: 'bad_message' })
+  })
+
+  it('a co-host batch skips the host', () => {
+    const { a, b, c } = three()
+    t.host.message(
+      a.conn,
+      JSON.stringify({ t: 'host', action: 'setCohost', memberId: b.id, on: true }),
+    )
+    t.host.message(
+      b.conn,
+      JSON.stringify({ t: 'host', action: 'muteMembers', memberIds: [a.id, c.id] }),
+    )
+    expect(muted(c.client.view, a.id, 'mic')).toBe(false)
+    expect(muted(a.client.view, c.id, 'mic')).toBe(true)
+  })
+
+  it('switches start-muted from inside the room: only who comes in after is told', () => {
+    const { a, b, c } = three()
+    const toggle = (conn: string, on: boolean) =>
+      t.host.message(conn, JSON.stringify({ t: 'host', action: 'startMuted', on }))
+    toggle(c.conn, true)
+    expect(c.client.received.at(-1)).toEqual(forbidden)
+    expect(a.client.view!.room.startMuted).toBe(false)
+    toggle(a.conn, true)
+    expect(b.client.view!.room.startMuted).toBe(true)
+    expect((t.saved.room as RoomInfo).startMuted).toBe(true)
+    // Who is here keeps the microphone as it is
+    expect(muted(a.client.view, b.id, 'mic')).toBe(false)
+    expect(notices(b.client)).toEqual([])
+    const d = joinAs('小芳', 'browser-xiaofang-000')
+    expect(notices(d.client)).toEqual([{ t: 'notice', notice: 'startMuted', by: d.id }])
+    toggle(a.conn, false)
+    const e = joinAs('大偉', 'browser-dawei-000000')
+    expect(notices(e.client)).toEqual([])
+    expect(a.client.view!.room.startMuted).toBe(false)
+  })
+
   it('stops a share (RoomHost.stopShare on the wire) and tells the sharer', () => {
     const { a, b, c } = three()
     t.host.message(b.conn, JSON.stringify({ t: 'share' }))

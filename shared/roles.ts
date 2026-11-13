@@ -84,13 +84,21 @@ export const PERMISSIONS = {
   // ── What is done to the whole room ──
   /** The room's name (C2, e1-t05) */
   renameRoom: { who: STAFF, on: 'room', since: 'C2' },
-  /** Mute everyone ranked below the actor (F1) */
+  /**
+   * Mute everyone ranked below the actor (F1); also several at once (O1, `muteMembers`), each still
+   * checked as `muteMember`
+   */
   muteAll: { who: STAFF, on: 'room', since: 'F1' },
   /** End the meeting for everyone: the room closes at once (F1) */
   endMeeting: { who: ['host'], on: 'room', since: 'F1' },
   /** Lock the room; turn the waiting room on or off; admit or turn away who waits (F2) */
   lockRoom: { who: STAFF, on: 'room', since: 'F2' },
   waitingRoom: { who: STAFF, on: 'room', since: 'F2' },
+  /**
+   * Whether participants who come in from now on start muted (O1, e10-t06): the switch in the room,
+   * the same one the owner of a persistent room sets on /me (L5, e1-t18)
+   */
+  startMuted: { who: STAFF, on: 'room', since: 'O1' },
   admit: { who: STAFF, on: 'room', since: 'F2' },
   /**
    * Put one member in everyone's main area, or end it (G2, e4-t11). A room action, not a member
