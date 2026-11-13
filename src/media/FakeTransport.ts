@@ -55,6 +55,8 @@ export class FakeTransport implements MediaTransport {
   readonly preferredLayers = new Map<string, Layer>()
   /** Every setPreferredLayer call that changed a layer, in order */
   readonly layerRequests: { key: string; layer: Layer }[] = []
+  /** Every requestKeyFrame call for a subscribed track, by trackKey, in order */
+  readonly keyFrameRequests: string[] = []
   /** What publish() was asked for, by trackName (simulcast or not) */
   readonly publishOptions = new Map<string, PublishOptions>()
   readonly subscriptions = new Map<string, RemoteTrack>()
@@ -194,6 +196,14 @@ export class FakeTransport implements MediaTransport {
     changes: readonly { ref: TrackRef; layer: Layer }[],
   ): Promise<PromiseSettledResult<void>[]> {
     return Promise.allSettled(changes.map(({ ref, layer }) => this.setPreferredLayer(ref, layer)))
+  }
+
+  async requestKeyFrame(ref: TrackRef): Promise<void> {
+    if (this.sessionId === null || this.state === 'closed') return
+    const key = trackKey(ref)
+    if (this.subscriptions.has(key) && this.preferredLayers.has(key)) {
+      this.keyFrameRequests.push(key)
+    }
   }
 
   async setTopLayer(trackName: string, top: Layer): Promise<void> {

@@ -106,15 +106,22 @@ export function cameraWanted({ seen, kept, needed, hidden }: CameraInput): boole
   return needed || seen || (kept && !hidden)
 }
 
-/** Tracks in batches of at most `size`, the ones with something to send first */
-export function subscribeBatches<T extends { muted?: boolean }>(
+/**
+ * Tracks in batches of at most `size`, the ones with something to send first. Screens go first,
+ * in a batch of their own: the proxy refuses a whole call when one track is refused, and the
+ * share everyone is waiting for must not wait out a camera's retry (nor its SDP exchange).
+ */
+export function subscribeBatches<T extends { muted?: boolean; kind?: string }>(
   tracks: readonly T[],
   size = MAX_SUBSCRIBE_BATCH,
 ): T[][] {
+  const batches: T[][] = []
+  const screens = tracks.filter((t) => t.kind === 'screen')
+  for (let i = 0; i < screens.length; i += size) batches.push(screens.slice(i, i + size))
+  const rest = tracks.filter((t) => t.kind !== 'screen')
   // A track that has never sent can hold up a whole call for seconds (empty_track_error): a muted
   // one is the likeliest, and nobody is waiting to see it
-  const ordered = [...tracks.filter((t) => !t.muted), ...tracks.filter((t) => t.muted)]
-  const batches: T[][] = []
+  const ordered = [...rest.filter((t) => !t.muted), ...rest.filter((t) => t.muted)]
   for (let i = 0; i < ordered.length; i += size) batches.push(ordered.slice(i, i + size))
   return batches
 }

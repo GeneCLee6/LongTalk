@@ -179,6 +179,11 @@ export interface UplinkInput {
    * (`bandwidth`), the encoder by the CPU (`cpu`); null: nothing (quality.ts)
    */
   pressure: 'bandwidth' | 'cpu' | null
+  /**
+   * The `bandwidth` pressure is only the encoder's qualityLimitationReason (no heavy loss): not
+   * counted during SHARE_WARMUP_TICKS after a new share
+   */
+  encoderOnly?: boolean
   /** Nothing holds the encoder back and loss is low */
   clear: boolean
   /** Which videos we send now (simulcast) */
@@ -199,6 +204,16 @@ const UPLINK_STEPS: readonly { kind: 'cam' | 'screen'; to: Layer }[] = [
 
 export const FULL_UPLINK: UplinkState = { cam: 'high', screen: 'high' }
 
+/**
+ * Stats intervals (STATS_POLL_MS, 2 s: 16 s) after a new share during which the encoder's own
+ * `bandwidth` limit is not pressure. A new screen asks for up to 2.5 Mbps more on top of what was
+ * sent, and Chrome reports it limited by bandwidth while its estimate climbs to that (seconds,
+ * the same climb uplink.ts gives HD 15 s for: UPLINK_WARMUP_MS); counted, it would turn the
+ * camera's and then the screen's top layer off just as the share starts. Heavy loss reported by
+ * the SFU still counts.
+ */
+export const SHARE_WARMUP_TICKS = 8
+
 export class UplinkAdaptation {
   #state: UplinkState = FULL_UPLINK
   /** How many of UPLINK_STEPS are applied */
@@ -209,6 +224,8 @@ export class UplinkAdaptation {
   #clear = 0
   #restoreTicks = RESTORE_TICKS
   #sinceRestore: number | null = null
+  /** Intervals left in a new share's warm-up (SHARE_WARMUP_TICKS) */
+  #warmup = 0
 
   get state(): UplinkState {
     return this.#state
@@ -216,6 +233,13 @@ export class UplinkAdaptation {
 
   step(input: UplinkInput): UplinkState {
     if (this.#sinceRestore !== null) this.#sinceRestore += 1
+    if (this.#warmup > 0) {
+      this.#warmup -= 1
+      // The new share's estimate is still climbing: not pressure, not clear either
+      if (input.pressure === 'bandwidth' && input.encoderOnly) {
+        input = { ...input, pressure: null, clear: false }
+      }
+    }
     if (input.pressure) {
       this.#clear = 0
       this.#pressure += 1
@@ -256,12 +280,28 @@ export class UplinkAdaptation {
     return this.#state
   }
 
+  /**
+   * A new screen is published: it starts with its top layer. A step taken for the screen before
+   * this share (or skipped past while no screen was sent: the step loop moves on) would turn its
+   * `f` off right after the publish, and a viewer would wait for it for 30 s or more. The steps
+   * go back to the camera's own (its top layer stays off; a camera at `low` comes back to
+   * `medium`); pressure that remains takes them again after LIMIT_TICKS.
+   */
+  shareStarted(): UplinkState {
+    this.#warmup = SHARE_WARMUP_TICKS
+    this.#pressure = 0
+    this.#bandwidth = false
+    if (this.#steps > 1) this.#steps = 1
+    return this.#apply()
+  }
+
   reset(): void {
     this.#state = FULL_UPLINK
     this.#steps = this.#pressure = this.#clear = 0
     this.#bandwidth = false
     this.#restoreTicks = RESTORE_TICKS
     this.#sinceRestore = null
+    this.#warmup = 0
   }
 
   #target(steps: number): UplinkState {

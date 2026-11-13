@@ -248,6 +248,13 @@ export interface MediaTransport {
   setPreferredLayers(
     changes: readonly { ref: TrackRef; layer: Layer }[],
   ): Promise<PromiseSettledResult<void>[]>
+  /**
+   * Asks the SFU again for the layer a subscribed video already has (unlike setPreferredLayer,
+   * sent even when it is unchanged): a nudge for a picture that has not started, since a layer
+   * selection makes the SFU ask the publisher for a keyframe. Does nothing for a track not
+   * subscribed or with no layer asked for; never rejects.
+   */
+  requestKeyFrame(ref: TrackRef): Promise<void>
 
   /**
    * The highest simulcast layer a published video sends (e6-t04, HD): `high` sends every layer,

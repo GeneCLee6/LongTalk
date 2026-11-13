@@ -381,7 +381,13 @@ describe('RoomMedia: 省電模式 (e6-t05)', () => {
     const camView = {}
     const screenView = {}
     demand.report(bob.getState().received[camKey].track, camView, tile)
-    demand.report(bob.getState().received[screenKey].track, screenView, { ...big, width: 1920, height: 1080 })
+    // (its picture drawn: a new screen keeps its first layer until then)
+    demand.report(bob.getState().received[screenKey].track, screenView, {
+      ...big,
+      width: 1920,
+      height: 1080,
+      sourceShortSide: 540,
+    })
     await settle(DEBOUNCE * 3)
     expect(bobTransport.preferredLayers.get(camKey)).toBe('medium')
     expect(bobTransport.preferredLayers.get(screenKey)).toBe('high')

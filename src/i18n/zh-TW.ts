@@ -744,6 +744,18 @@ export const zhTWRoom = {
     ownHidden: '分享整個螢幕時先不顯示畫面，以免畫面一直重複；這裡只有標註。',
     ownShowPicture: '顯示畫面',
     ownHidePicture: '隱藏畫面',
+    // Someone else draws on our share: the toast, its buttons, the system notification's title
+    marking: (name: string) => `${name} 正在你的分享畫面上畫`,
+    markingMany: (name: string, others: number) => `${name} 和另外 ${others} 人正在你的分享畫面上畫`,
+    markingAnon: '有人正在你的分享畫面上畫',
+    markingLook: '看標註',
+    markingNotifyTitle: 'LongTalk',
+    // The floating window (Document Picture-in-Picture): our share and its marks above other apps
+    pipOpen: '浮動視窗',
+    pipOpenHint: '開一個浮在其他視窗上面的小視窗，一邊操作一邊看別人畫的標註',
+    pipClose: '關閉浮動視窗',
+    pipTitle: 'LongTalk：你的畫面與標註',
+    pipEmpty: '別人在你的畫面上畫的標註會出現在這裡',
     // 文字／動態 (e3-t06): the sharing bar's switch and the hint for moving content
     mode: '分享模式',
     modeText: '文字',

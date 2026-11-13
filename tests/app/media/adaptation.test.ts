@@ -3,6 +3,7 @@ import {
   CALM_TICKS,
   DownlinkAdaptation,
   LIMIT_TICKS,
+  SHARE_WARMUP_TICKS,
   MAX_RECOVER_TICKS,
   POOR_TICKS,
   RECOVER_TICKS,
@@ -354,6 +355,41 @@ describe('UplinkAdaptation (e2-t15)', () => {
       machine.step(up({ pressure: 'bandwidth', clear: false, screen: true }))
     }
     expect(machine.state).toEqual({ cam: 'medium', screen: 'medium' })
+  })
+
+  it('starts a new share with its top layer, keeping only the camera’s own step', () => {
+    const machine = new UplinkAdaptation()
+    // Pressure before any share: the steps move past the screen's (nothing to lower)
+    for (let i = 0; i < LIMIT_TICKS * 2; i++) {
+      machine.step(up({ pressure: 'bandwidth', clear: false }))
+    }
+    expect(machine.state).toEqual({ cam: 'low', screen: 'medium' })
+    expect(machine.shareStarted()).toEqual({ cam: 'medium', screen: 'high' })
+    // Pressure that goes on takes the screen's step again after LIMIT_TICKS
+    const pressed = up({ pressure: 'bandwidth', clear: false, screen: true })
+    for (let i = 0; i < LIMIT_TICKS - 1; i++) machine.step(pressed)
+    expect(machine.state).toEqual({ cam: 'medium', screen: 'high' })
+    machine.step(pressed)
+    expect(machine.state).toEqual({ cam: 'medium', screen: 'medium' })
+    // Nothing taken: nothing changes
+    expect(new UplinkAdaptation().shareStarted()).toEqual({ cam: 'high', screen: 'high' })
+  })
+
+  it('does not count the encoder’s bandwidth limit right after a share starts, only loss', () => {
+    const machine = new UplinkAdaptation()
+    machine.shareStarted()
+    const ramping = up({ pressure: 'bandwidth', clear: false, screen: true, encoderOnly: true })
+    for (let i = 0; i < SHARE_WARMUP_TICKS; i++) machine.step(ramping)
+    expect(machine.state).toEqual({ cam: 'high', screen: 'high' })
+    // After the warm-up the same limit counts again
+    for (let i = 0; i < LIMIT_TICKS; i++) machine.step(ramping)
+    expect(machine.state).toEqual({ cam: 'medium', screen: 'high' })
+    // Heavy loss counts during the warm-up too
+    const lossy = new UplinkAdaptation()
+    lossy.shareStarted()
+    const loss = up({ pressure: 'bandwidth', clear: false, screen: true, encoderOnly: false })
+    for (let i = 0; i < LIMIT_TICKS; i++) lossy.step(loss)
+    expect(lossy.state).toEqual({ cam: 'medium', screen: 'high' })
   })
 
   it('lowers the screen before the camera’s middle layer while sharing', () => {

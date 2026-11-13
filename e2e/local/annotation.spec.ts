@@ -685,3 +685,75 @@ test.describe("the sharer's own view", () => {
     await expect(ownTile(page).getByText(strings.screenShare.ownHidden)).toHaveCount(0)
   })
 })
+
+// The sharer's floating window (Document Picture-in-Picture): the sharing bar's real button opens
+// a real window in Chromium, which Playwright sees as a page of its own. Someone else's stroke
+// reaches it and lands where it belongs on the picture; with a whole screen shared it starts with
+// the marks only (the window is in the share too).
+test.describe("the sharer's floating window", () => {
+  const openPip = async (page: Page) => {
+    const bar = page.getByRole('region', { name: strings.screenShare.youAreSharing })
+    const [pip] = await Promise.all([
+      page.context().waitForEvent('page'),
+      bar.getByRole('button', { name: strings.screenShare.pipOpen }).click(),
+    ])
+    return { bar, pip }
+  }
+  const view = (pip: Page) => pip.getByRole('figure', { name: strings.screenShare.ownRegion })
+  /** Whether the middle row of the window's marks has the annotation red in it */
+  const redAcrossMiddle = (pip: Page) =>
+    view(pip)
+      .getByRole('img', { name: strings.screenShare.annotationCanvas })
+      .evaluate((element: HTMLCanvasElement, red) => {
+        const { width, height } = element
+        const data = element.getContext('2d')!.getImageData(0, Math.round(height / 2) - 2, width, 5).data
+        let hits = 0
+        for (let i = 0; i < data.length; i += 4) {
+          const near = Math.abs(data[i] - red.r) < 40 && Math.abs(data[i + 1] - red.g) < 40
+          if (data[i + 3] > 200 && near) hits++
+        }
+        return hits
+      }, ANNOTATION_RED)
+
+  test("a window: the picture, and Bob's stroke as it arrives", async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'Document Picture-in-Picture is Chrome and Edge only')
+    await page.goto(`${origin}/?pip=window`)
+    const { bar, pip } = await openPip(page)
+    await expect(view(pip)).toBeVisible()
+    await expect(view(pip).getByText(strings.screenShare.pipEmpty)).toBeVisible()
+    await expect
+      .poll(() => view(pip).locator('video').evaluate((v: HTMLVideoElement) => v.videoWidth))
+      .toBeGreaterThan(0)
+    await expect(view(pip).locator('video')).toBeVisible()
+    await expect(bar.getByRole('button', { name: strings.screenShare.pipClose })).toBeVisible()
+
+    await page.evaluate(() =>
+      (window as unknown as { drawOnShare: (id: string) => void }).drawOnShare('b1'),
+    )
+    await expect(view(pip).getByText(strings.screenShare.pipEmpty)).toHaveCount(0)
+    await expect.poll(() => redAcrossMiddle(pip)).toBeGreaterThan(50)
+
+    // Closed from the bar, the window goes
+    const closed = pip.waitForEvent('close')
+    await bar.getByRole('button', { name: strings.screenShare.pipClose }).click()
+    await closed
+    await expect(bar.getByRole('button', { name: strings.screenShare.pipOpen })).toBeVisible()
+  })
+
+  test('a whole screen: the marks only, until the picture is asked for', async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'Document Picture-in-Picture is Chrome and Edge only')
+    await page.goto(`${origin}/?pip=screen`)
+    await page.evaluate(() =>
+      (window as unknown as { drawOnShare: (id: string) => void }).drawOnShare('b1'),
+    )
+    const { pip } = await openPip(page)
+    await expect(view(pip).getByText(strings.screenShare.ownHidden)).toBeVisible()
+    await expect
+      .poll(() => view(pip).locator('video').evaluate((v: HTMLVideoElement) => v.videoWidth))
+      .toBeGreaterThan(0)
+    await expect(view(pip).locator('video')).toBeHidden()
+    await expect.poll(() => redAcrossMiddle(pip)).toBeGreaterThan(50)
+    await view(pip).getByRole('button', { name: strings.screenShare.ownShowPicture }).click()
+    await expect(view(pip).locator('video')).toBeVisible()
+  })
+})

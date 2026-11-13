@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import styled from 'styled-components'
 import type { SelfCapture } from '../media/share.ts'
 import type { AnnotationStore } from '../room/annotationStore.ts'
@@ -35,6 +35,11 @@ export interface SharingBarProps {
    * layer whose marks make the switch say there is something to look at
    */
   ownView?: { open: boolean; onToggle: () => void; store: AnnotationStore; layer: string } | null
+  /**
+   * The floating window (Document Picture-in-Picture, src/room/useSharePip.ts): whether it is open,
+   * and its switch. Only where the browser has it (capabilities.ts `documentPip`); null: no button
+   */
+  pip?: { open: boolean; onToggle: () => void } | null
 }
 
 const MODES: { mode: ShareMode; label: () => string; hint: () => string }[] = [
@@ -54,7 +59,8 @@ const MODES: { mode: ShareMode; label: () => string; hint: () => string }[] = [
  * 「你正在分享」 (e3-t03, AC-3.3): the bar the sharer sees above the stage while sharing, with one
  * of the three ways to stop (the others: the toolbar, and the browser's own stop button), the
  * switch for the share's sound (e3-t04, AC-3.2) when there is any, the 文字／動態 switch (e3-t06,
- * AC-3.4) and a small preview of what is shared (the presenter view, e3-t08, AC-3.6). Under it,
+ * AC-3.4), a small preview of what is shared (the presenter view, e3-t08, AC-3.6), the sharer's own
+ * view with its marks (J3) and, in Chrome and Edge, the floating window (`pip`). Under it,
  * when they apply, the hint to switch to 動態 and the warning that the meeting itself is shared
  * (e3-t09).
  */
@@ -67,6 +73,7 @@ export function SharingBar({
   selfCapture = null,
   note = null,
   ownView = null,
+  pip = null,
 }: SharingBarProps) {
   const hint = !audio
     ? strings.screenShare.youAreSharingHint
@@ -79,7 +86,7 @@ export function SharingBar({
     <Bar role="region" aria-label={strings.screenShare.youAreSharing} $stacked={notices}>
       <Row>
         {showThumb ? (
-          <Thumbnail sample={preview.sample} />
+          <Thumbnail sample={preview.sample} marks={ownView} />
         ) : (
           <Live aria-hidden="true">
             <ScreenShareIcon />
@@ -107,6 +114,16 @@ export function SharingBar({
           </Modes>
         )}
         {ownView && <OwnViewButton {...ownView} />}
+        {pip && (
+          <Button
+            variant="secondary"
+            aria-pressed={pip.open}
+            title={pip.open ? undefined : strings.screenShare.pipOpenHint}
+            onClick={pip.onToggle}
+          >
+            {pip.open ? strings.screenShare.pipClose : strings.screenShare.pipOpen}
+          </Button>
+        )}
         {audio && (
           <Button variant="secondary" onClick={audio.onToggle}>
             <Glyph aria-hidden="true">{audio.on ? <SoundIcon /> : <SoundOffIcon />}</Glyph>
@@ -170,9 +187,41 @@ function OwnViewButton({
   )
 }
 
-/** The presenter view's picture: the sampler's latest frame, drawn again on every new one */
-function Thumbnail({ sample }: { sample: SharePreview }) {
+type Draw = typeof import('../annotate/draw.ts')
+
+/**
+ * The presenter view's picture: the sampler's latest frame, drawn again on every new one, with the
+ * marks on our share over it as they change. The drawing code is the annotation chunk's, loaded
+ * only once there is a mark (CLAUDE.md rule 6)
+ */
+function Thumbnail({
+  sample,
+  marks = null,
+}: {
+  sample: SharePreview
+  marks?: { store: AnnotationStore; layer: string } | null
+}) {
   const ref = useRef<HTMLCanvasElement>(null)
+  const store = marks?.store
+  const layer = marks?.layer
+  const marked = useMarked(store, layer)
+  const [draw, setDraw] = useState<Draw | null>(null)
+  const [version, setVersion] = useState(0)
+  useEffect(() => {
+    if (!marked || draw) return
+    let live = true
+    import('../annotate/draw.ts').then(
+      (module) => live && setDraw(module),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [marked, draw])
+  useEffect(() => {
+    if (!store || !layer) return
+    return store.subscribe(layer, () => setVersion((now) => now + 1))
+  }, [store, layer])
   useEffect(() => {
     const target = ref.current
     const source = sample.canvas
@@ -181,8 +230,13 @@ function Thumbnail({ sample }: { sample: SharePreview }) {
       target.width = source.width
       target.height = source.height
     }
-    target.getContext('2d')?.drawImage(source, 0, 0)
-  }, [sample])
+    const ctx = target.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(source, 0, 0)
+    if (!draw || !store || !layer) return
+    const rect = { x: 0, y: 0, width: target.width, height: target.height }
+    for (const stroke of store.strokes(layer)) draw.drawStroke(ctx, stroke, rect, 1)
+  }, [sample, draw, store, layer, version])
   return (
     <Thumb ref={ref} role="img" aria-label={strings.screenShare.preview} data-share-preview="" />
   )
@@ -209,11 +263,11 @@ const Bar = styled.div<{ $stacked: boolean }>`
 
 const Row = styled.div`
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: ${space(3)};
 
   @media ${media.phone} {
-    flex-wrap: wrap;
     row-gap: ${space(2)};
   }
 `

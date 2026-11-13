@@ -21,6 +21,18 @@ export function ToastViewport({ toasts, onDismiss }: ToastViewportProps) {
               {toast.tone === 'neutral' ? <InfoIcon /> : <AlertIcon />}
             </ToneIcon>
             <span>{toast.text}</span>
+            {toast.actions?.map((action) => (
+              <Action
+                key={action.label}
+                type="button"
+                onClick={() => {
+                  onDismiss(toast.id)
+                  action.onClick()
+                }}
+              >
+                {action.label}
+              </Action>
+            ))}
             <Close
               type="button"
               aria-label={strings.common.close}
@@ -94,6 +106,24 @@ const ToneIcon = styled.span<{ $tone: ToastTone }>`
   svg {
     width: 100%;
     height: 100%;
+  }
+`
+
+/** A toast's own button (ToastAction): a text button in the brand colour, before the close */
+const Action = styled.button`
+  flex: none;
+  min-height: 32px;
+  padding: ${space(1)} ${space(2)};
+  border: 1px solid ${color.primary};
+  border-radius: ${radius.button};
+  background: transparent;
+  color: ${color.primary};
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover {
+    background: ${color.hover};
   }
 `
 

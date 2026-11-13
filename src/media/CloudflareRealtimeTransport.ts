@@ -72,7 +72,14 @@ const ICE_GATHERING_TIMEOUT_MS = 1500
  * answer, a second or two through TURN) before taking the connection for broken
  */
 export const FIRST_PACKETS_TIMEOUT_MS = 10_000
-const FIRST_PACKETS_POLL_MS = 100
+/** Every poll is a getStats(); 40 ms reports a new track to the room sooner (was 100) */
+export const FIRST_PACKETS_POLL_MS = 40
+/**
+ * A published screen sends a fresh keyframe this long after its first packets (where the browser
+ * has RTCRtpSender.generateKeyFrame): the first one went out before anyone subscribed, and the
+ * first viewers' pulls land about now. A still screen otherwise sends one only when asked (PLI).
+ */
+export const SCREEN_KEYFRAME_AFTER_MS = 1_000
 /** How long a pulled track's transceiver may take to show up when the SFU sent no offer */
 const TRANSCEIVER_TIMEOUT_MS = 3_000
 
@@ -216,6 +223,13 @@ export class CloudflareRealtimeTransport implements MediaTransport {
     })
     // Outside the queue: other calls go on while the first packets are on their way
     await this.#firstPackets(transceiver)
+    if (options.kind === 'screen') {
+      setTimeout(() => {
+        if (this.#published.get(published.trackName) === transceiver && this.state !== 'closed') {
+          generateKeyFrame(transceiver.sender)
+        }
+      }, SCREEN_KEYFRAME_AFTER_MS)
+    }
     return published
   }
 
@@ -348,6 +362,39 @@ export class CloudflareRealtimeTransport implements MediaTransport {
   async setPreferredLayer(ref: TrackRef, layer: Layer): Promise<void> {
     const [result] = await this.setPreferredLayers([{ ref, layer }])
     if (result.status === 'rejected') throw result.reason
+  }
+
+  requestKeyFrame(ref: TrackRef): Promise<void> {
+    return this.#serial(async () => {
+      const subscription = this.#subscriptions.get(trackKey(ref))
+      if (!subscription?.layer) return
+      try {
+        const { pc, sessionId } = this.#require()
+        // The same tracks/update as a layer change, with the layer it already has
+        const { res, json } = await this.#request<TracksResponse>(
+          'PUT',
+          `/sessions/${sessionId}/tracks/update`,
+          {
+            tracks: [
+              {
+                location: 'remote',
+                mid: subscription.mid,
+                sessionId: subscription.sessionId,
+                trackName: subscription.trackName,
+                simulcast: simulcastPreference(subscription.layer),
+              },
+            ],
+          },
+        )
+        const offer = json.sessionDescription
+        if (json.requiresImmediateRenegotiation && offer?.type === 'offer') {
+          await this.#exchange(() => this.#answer(pc, sessionId, offer))
+        }
+        this.#check(res, json)
+      } catch {
+        // Only a nudge: the picture may still come by itself
+      }
+    })
   }
 
   setPreferredLayers(
@@ -731,6 +778,21 @@ async function hasSent(sender: RTCRtpSender): Promise<boolean> {
     return sent
   } catch {
     return false
+  }
+}
+
+/**
+ * Asks the sender's encoder for a keyframe where the browser has it (RTCRtpSender.generateKeyFrame
+ * is not everywhere: feature-checked); anything else, or a refusal, does nothing
+ */
+function generateKeyFrame(sender: RTCRtpSender): void {
+  const generate = (sender as { generateKeyFrame?: (rids?: string[]) => Promise<void> })
+    .generateKeyFrame
+  if (typeof generate !== 'function') return
+  try {
+    void Promise.resolve(generate.call(sender)).catch(() => undefined)
+  } catch {
+    // Not for this sender (no encoder yet, or a browser that throws): the PLIs still work
   }
 }
 
