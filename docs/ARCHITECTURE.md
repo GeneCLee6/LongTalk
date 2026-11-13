@@ -45,7 +45,7 @@
 - **R2**：聊天檔案（`uploads/`，24 小時）、固定會議室的白板（`boards/`，J4，到清除或刪除房間為止，都算進 2 GB）、之後的雲端錄影（有效期）。白板匯出在瀏覽器裡產生，不經過 R2。
 - **錄影（M2）**：ADR 待寫（`e8-t04`）：Realtime 的錄製能力 vs 自架 headless 瀏覽器合成。M1 的本機錄影完全在瀏覽器（Canvas＋Web Audio＋MediaRecorder）。
 - **本機錄影（I4，`e8-t01`–`e8-t03`，協定 v17）**：誰在錄是 RoomDO 的狀態（`RoomInfo.recordings`：誰、何時開始），只有主持人（`roles.ts` 的 `record`）或主持人允許的成員（`Member.mayRecord`，`allowRecord`）能開始；瀏覽器先送 `record`，**等 RoomDO 把自己列進去才開始錄**，所以每個人（含預先加入頁的 `GET /api/rooms/<id>`）在第一個畫格前就看到紅燈。主持人 `stopRecording` 任何人的錄影（錄的人收到 `notice` 後自己停並下載）；錄的人離開、或斷線超過 60 秒寬限就結束；v16 的瀏覽器看不到紅燈，連線時就被 `versionMismatch` 擋下。錄影本身全在錄的人的瀏覽器、lazy 載入（`src/record/`）：`scene.ts` 用 `shared/layout.ts` 的 `gridLayout`／`speakerLayout`／`shareLayout` 排版，`composer.ts` 每格畫在同一張 canvas（30 fps，省電 15 fps，時鐘在 Worker 裡、背景分頁也不慢下來；每條軌一個不進 DOM 的 `<video>`），`mixer.ts` 用 Web Audio 把所有遠端麥克風、分享音訊與自己的麥克風混成一條，`recorder.ts` 用 `MediaRecorder`（`format.ts` 依 `isTypeSupported` 挑 WebM VP9／VP8＋Opus 或 Safari 的 MP4）每 4 秒交一段，`store.ts` 立刻寫進 IndexedDB、不留在記憶體；停止時從 IndexedDB 組成檔案下載（WebM 補上長度，`webmDuration.ts`）。分頁當掉或重新整理留下的錄影，下次在首頁或會議室提供「下載上次未完成的錄影」（Web Locks 判斷哪些還在錄）。
-- **遠端控制（M3）**：Tauri 桌面端代理作為「另一種客戶端」連進同一個 RoomDO，發布螢幕軌、接收控制事件（DataChannel 或 WebSocket，簽章）。
+- **遠端控制（M3）**：Tauri 桌面端代理作為「另一種客戶端」連進同一個 RoomDO，發布螢幕軌、接收控制事件。N1（`e9-t01`）定案：控制事件先經 RoomDO 的 WebSocket 轉送，RoomDO 逐批檢查授權、序號與速率；威脅模型與協定在 `docs/PRD/f-remote-control-security.md`、`shared/control.ts`（N3 才接上、進協定版本）。
 
 ## 3. 為什麼是 Cloudflare Realtime SFU（而不是 P2P mesh 或自架）
 
