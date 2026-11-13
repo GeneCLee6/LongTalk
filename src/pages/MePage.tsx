@@ -403,6 +403,7 @@ function RoomItem({ room, run, ask }: { room: PersistentRoomInfo; run: Run; ask:
     room.startMuted && strings.account.startMuted,
     !room.allowAnnotation && strings.account.noAnnotation,
     !room.allowRecording && strings.account.noRecording,
+    !room.allowControl && strings.account.noControl,
     room.memberCount > 0 && strings.account.roomPeople(room.memberCount),
   ].filter(Boolean)
   return (
@@ -465,6 +466,7 @@ function RoomSettingsForm({
   const [startMuted, setStartMuted] = useState(room.startMuted)
   const [allowAnnotation, setAllowAnnotation] = useState(room.allowAnnotation)
   const [allowRecording, setAllowRecording] = useState(room.allowRecording)
+  const [allowControl, setAllowControl] = useState(room.allowControl)
   const [password, setPassword] = useState('')
   const passwordValue = password.trim() === '' ? null : normalizePassword(password)
   const passwordBad = password.trim() !== '' && passwordValue === null
@@ -479,6 +481,7 @@ function RoomSettingsForm({
           startMuted,
           allowAnnotation,
           allowRecording,
+          allowControl,
           ...(clearPassword ? { password: null } : passwordValue ? { password: passwordValue } : {}),
         }),
       strings.account.saved,
@@ -528,6 +531,14 @@ function RoomSettingsForm({
           onChange={(e) => setAllowRecording(e.target.checked)}
         />
         {strings.account.allowRecording}
+      </Check>
+      <Check>
+        <input
+          type="checkbox"
+          checked={allowControl}
+          onChange={(e) => setAllowControl(e.target.checked)}
+        />
+        {strings.account.allowControl}
       </Check>
       <Small>{strings.account.settingsHint}</Small>
       <TextField

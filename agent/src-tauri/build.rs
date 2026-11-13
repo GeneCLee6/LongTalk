@@ -12,6 +12,11 @@ fn main() {
             "set_sharing",
             "leave_room",
             "api_fetch",
+            "control_state",
+            "control_answer",
+            "control_keep_going",
+            "control_stop",
+            "control_mute",
         ]),
     ))
     .expect("failed to run tauri-build");

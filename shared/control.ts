@@ -3,8 +3,8 @@
 // helpers all three share. The threat model and every decision behind these shapes is
 // docs/PRD/f-remote-control-security.md; read it before changing anything here.
 //
-// N2 wires the agent socket (pairing, `agentHello`, the agent's screen); the control messages
-// themselves are not part of PROTOCOL_VERSION until N3. Where it plugs in:
+// N2 wired the agent socket (pairing, `agentHello`, the agent's screen); N3 wired the control
+// messages into PROTOCOL_VERSION 27 and the room (worker/room-control.ts). Where it plugs in:
 // - N2 (e9-t02): the agent connects on its own socket, GET /api/rooms/<roomId>/agent?v=
 //   AGENT_PROTOCOL_VERSION, never the browsers' /ws: the room tags each socket as `browser` or
 //   `agent` at the upgrade and accepts agent messages (parseAgentMessage) only on agent sockets and
@@ -12,7 +12,7 @@
 //   one-time pairing code a member in the room asked for; the room answers `agentWelcome`. The agent
 //   is a member of its own (`Member.agent`, shown as 「<owner> 的電腦」 from strings.ts) that
 //   publishes its screen through the same SFU proxy with its own session token.
-// - N3 (e9-t04, e9-t05): protocol.ts bumps 23 → 24: ClientMessage gains ControlClientMessage
+// - N3 (e9-t04, e9-t05): protocol.ts (v27): ClientMessage gains ControlClientMessage
 //   (parseClientMessage's switch calls parseControlClientMessage for the four `control*` kinds),
 //   ServerMessage gains ControllerServerMessage, RoomView gains `control?: ControlView | null`,
 //   ErrorCode gains ControlErrorCode, and shared/roles.ts gains `stopControl` (STAFF on 'member')
@@ -20,13 +20,14 @@
 //   of what control sends) exempts a frame only when exemptFromSocketRate says so: a parsed
 //   `controlEvent` whose grant id is the live grant this very socket holds. Everything else, junk
 //   and `controlEvent`s from sockets without a grant included, still counts (4420). RoomHost counts
-//   frames before parsing them today, so N3 has to parse first and count after. The grant's socket
+//   frames after parsing them (N3: parse first, count after). The grant's socket
 //   is held to CONTROL_FRAME_RATE instead, its events to takeControlEvents. The room keeps requests
 //   and grants (worker/room-control.ts) and ends a grant on every rule in the threat model's
 //   revocation list.
-// - N4 (e9-t06, e9-t07): the agent (Rust) mirrors parseControlForward, acceptSeq, nextHeld,
-//   releaseHeld, classifyKeyCombo, clampAskTtl and validateControlStart;
-//   tests/shared/control.test.ts is the spec both sides follow.
+// - N3 also gave the agent (Rust, agent/src-tauri/src/control.rs) its mirror of parseControlForward,
+//   acceptSeq, nextHeld, releaseHeld, clampAskTtl, agentGrantMs and validateControlStart, the
+//   consent dialog, the red border and the 中斷 button; N4 (e9-t06, e9-t07) adds classifyKeyCombo
+//   and the injection itself. tests/shared/control.test.ts is the spec both sides follow.
 //
 // The flow:
 // 1. A member asks: `controlRequest` naming an agent in the same room (and the same breakout room).
@@ -887,7 +888,9 @@ export type ControlAskMessage = {
   t: 'controlAsk'
   request: string
   from: { id: string; name: string }
-  roomName: string
+  /** The room's name; null when it has none (shown from `createdBy`, as in `agentWelcome`) */
+  roomName: string | null
+  createdBy: string | null
   ttlMs: number
 }
 /** The request ended before the agent answered: close the dialog */

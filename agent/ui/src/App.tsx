@@ -2,6 +2,7 @@
 // with the 「分享我的螢幕」 switch. What phase it is in is Rust's (session.rs); text is i18n.ts's.
 import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
 import { CONSENT_DIALOG_ARM_MS } from '../../../shared/control.ts'
+import { ControlLine } from './control.tsx'
 import type { AgentController, AgentView } from './controller.ts'
 import { defaultDevice } from './deviceName.ts'
 import { text } from './i18n.ts'
@@ -179,6 +180,7 @@ function InRoom({
       <p className="agent-status" role="status">
         {view.reconnecting ? text.room.reconnecting : ''}
       </p>
+      <ControlLine />
       <div className={sharing ? 'agent-share agent-share-on' : 'agent-share'}>
         <button
           type="button"

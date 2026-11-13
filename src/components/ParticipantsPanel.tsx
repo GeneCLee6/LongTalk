@@ -37,6 +37,8 @@ export interface ParticipantsPanelProps {
   you: string | null
   /** Who shares the screen now (several at once from H5) */
   sharerIds: readonly string[]
+  /** The desktop agents someone controls now (N3): a host or co-host may stop it */
+  controlledIds?: readonly string[]
   /** A host control on one member (the room decides whether it is allowed, worker/roles.ts) */
   onAction: (action: HostMemberAction, memberId: string) => void
   onMuteAll: () => void
@@ -116,6 +118,7 @@ const memberActions = (): readonly {
   { action: 'muteMember', label: strings.participants.mute },
   { action: 'camOff', label: strings.participants.camOffAction },
   { action: 'stopShare', label: strings.participants.stopShare },
+  { action: 'stopControl', label: strings.control.stopTheirs },
   { action: 'remove', label: strings.participants.remove, danger: true },
 ]
 
@@ -141,6 +144,7 @@ export function ParticipantsPanel({
   members,
   you,
   sharerIds,
+  controlledIds = [],
   onAction,
   onMuteAll,
   onEndMeeting,
@@ -205,6 +209,7 @@ export function ParticipantsPanel({
       muteMember: !!mic && !mic.muted,
       camOff: !!cam && !cam.muted,
       stopShare: sharerIds.includes(member.id),
+      stopControl: controlledIds.includes(member.id),
       remove: true,
       lowerHand: member.hand != null,
     }

@@ -26,7 +26,7 @@ import {
   type ReactionMessage,
   type RoomView,
 } from '../../shared/protocol.ts'
-import { PAIRING_CODE_TTL_MS } from '../../shared/control.ts'
+import { PAIRING_CODE_TTL_MS, type ControllerServerMessage } from '../../shared/control.ts'
 import { REACTION_RATE, type Reaction } from '../../shared/reactions.ts'
 import { PASSWORD_WAIT_MS } from '../../shared/password.ts'
 import { Backoff } from './backoff.ts'
@@ -85,6 +85,19 @@ export interface PairCodeState {
   seq: number
 }
 
+/**
+ * Our own remote control (N3, e9-t04): the request we made (`controlRequested`, its id for
+ * `controlCancel`) or the grant we hold (`controlGranted`, its id on every batch). Bound to this
+ * socket: a new welcome clears it, as the room has ended it (`controllerLeft`).
+ */
+export interface MyControl {
+  agent: string
+  request: string | null
+  grant: string | null
+  /** The grant's end on the room's clock; null: until stopped (or still asking) */
+  until: number | null
+}
+
 /** Where we are in the waiting room (F2): the latest `lobby` */
 export type LobbyState = Pick<LobbyMessage, 'position' | 'count' | 'room' | 'hostPresent'> & {
   /** The meeting is being recorded (I4): the waiting screen says so */
@@ -124,6 +137,8 @@ export interface RoomConnectionState {
   pollVote: { poll: number; choices: number[] } | null
   /** The latest pairing code the room gave us (N2), on this socket; null before any */
   pairCode: PairCodeState | null
+  /** Our remote control request or grant (N3), on this socket; null for none */
+  control: MyControl | null
 }
 
 /** The bits of WebSocket the connection uses, so tests can pass a fake */
@@ -272,6 +287,7 @@ export class RoomConnection {
     passwordWaitUntil: null,
     pollVote: null,
     pairCode: null,
+    control: null,
   }
   /** The room's CHAT_RATE, checked here too so a refused message stays in the box */
   private readonly chatRate = new ChatRateLimit()
@@ -280,6 +296,7 @@ export class RoomConnection {
   private readonly listeners = new Set<() => void>()
   private readonly errorListeners = new Set<(code: ErrorCode) => void>()
   private readonly noticeListeners = new Set<(notice: NoticeMessage) => void>()
+  private readonly controlListeners = new Set<(message: ControllerServerMessage) => void>()
   private readonly reactionListeners = new Set<(reaction: ReactionMessage) => void>()
   private readonly annotationListeners = new Set<
     (message: AnnotationMessage | AnnotationsMessage) => void
@@ -319,6 +336,15 @@ export class RoomConnection {
   onNotice = (listener: (notice: NoticeMessage) => void): (() => void) => {
     this.noticeListeners.add(listener)
     return () => this.noticeListeners.delete(listener)
+  }
+
+  /**
+   * What the room says about our own remote control (N3): requested, refused (why), granted, ended
+   * (why). The state (`control`) follows on its own; this is for saying what happened
+   */
+  onControl = (listener: (message: ControllerServerMessage) => void): (() => void) => {
+    this.controlListeners.add(listener)
+    return () => this.controlListeners.delete(listener)
   }
 
   /**
@@ -364,6 +390,7 @@ export class RoomConnection {
       passwordWaitUntil: null,
       pollVote: null,
       pairCode: null,
+      control: null,
     })
     this.open()
   }
@@ -529,6 +556,8 @@ export class RoomConnection {
           pollVote: null,
           // A code from an earlier socket may be gone: ask again rather than show a stale one
           pairCode: null,
+          // The room ended any control bound to the earlier socket (N3, D4)
+          control: null,
         })
         this.firstReplayUntil = null
         return
@@ -580,6 +609,14 @@ export class RoomConnection {
         return
       case 'error':
         for (const listener of this.errorListeners) listener(message.code)
+        return
+      case 'controlRequested':
+      case 'controlRefused':
+      case 'controlGranted':
+      case 'controlEnd':
+        // Only after this socket's welcome, which clears what an earlier socket held (N3)
+        if (this.rev < 0) return
+        this.receiveControl(message)
         return
       case 'notice':
         if (this.rev < 0) return
@@ -633,6 +670,28 @@ export class RoomConnection {
         return
       }
     }
+  }
+
+  /** Our own control (N3): what we asked, or hold, now */
+  private receiveControl(message: ControllerServerMessage): void {
+    const current = this.state.control
+    let control = current
+    switch (message.t) {
+      case 'controlRequested':
+        control = { agent: message.agent, request: message.request, grant: null, until: null }
+        break
+      case 'controlRefused':
+        if (current?.request === message.request) control = null
+        break
+      case 'controlGranted':
+        control = { agent: message.agent, request: null, grant: message.grant, until: message.until }
+        break
+      case 'controlEnd':
+        if (current?.grant === message.grant) control = null
+        break
+    }
+    if (control !== current) this.update({ ...this.state, control })
+    for (const listener of this.controlListeners) listener(message)
   }
 
   /** `pairCode` (N2): kept in the state for the 連接我的電腦 dialog */

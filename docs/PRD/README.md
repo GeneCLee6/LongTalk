@@ -29,7 +29,7 @@ LongTalk 的產品需求都在這個資料夾。三層結構（為什麼是三�
 | [E6](e6-audio-video-quality.md) | 音訊視訊品質 | 8／8 | 0／6 | 0 | 5 | in progress |
 | [E7](e7-annotation-whiteboard.md) | 畫筆標註與白板 | 9／9 | 4／5 | 0 | 0 | in progress（M2） |
 | [E8](e8-recording-transcript-ai.md) | 錄影、逐字稿與 AI 摘要 | 3／9 | 0／6 | 0 | 3 | in progress |
-| [E9](e9-remote-control.md) | 遠端控制 | 3／9 | 0／5 | 0 | 0 | in progress（M3） |
+| [E9](e9-remote-control.md) | 遠端控制 | 5／9 | 0／5 | 0 | 0 | in progress（M3） |
 | [E10](e10-scale-breakout.md) | 規模：大房間與分組討論室 | 4／7 | 0／5 | 0 | 0 | in progress（M2–M3） |
 | [E11](e11-platform-security-cost-ops.md) | 平台、安全、成本與維運 | 9／13 | 6／11 | 5 | 4 | in progress |
 | | **合計** | **106／132** | **21／75** | **38** | **49** | |

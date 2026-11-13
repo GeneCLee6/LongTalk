@@ -73,8 +73,11 @@ export const PERMISSIONS = {
   openWhiteboard: { who: IN_ROOM, on: 'self', since: 'J3' },
   /** Answer the poll on now (L5, e5-t07) */
   votePoll: { who: IN_ROOM, on: 'self', since: 'L5' },
-  /** Ask the sharer for remote control (N, E9; the sharer still has to accept) */
-  requestControl: { who: IN_ROOM, on: 'self', since: 'N' },
+  /**
+   * Ask a desktop agent sharing its screen for remote control (N3, e9-t04); the person at that
+   * computer still has to allow it, every time
+   */
+  requestControl: { who: IN_ROOM, on: 'self', since: 'N3' },
   /** Pair one's own computer (N2, e9-t02): ask for a pairing code, remove one's own computer */
   pairComputer: { who: IN_ROOM, on: 'self', since: 'N2' },
 
@@ -135,6 +138,11 @@ export const PERMISSIONS = {
   makeHost: { who: ['host'], on: 'member', since: 'F3' },
   /** Let them record the meeting themselves, or take that back (I4, PRD E8 「主持人可允許特定成員」) */
   allowRecord: { who: ['host'], on: 'member', since: 'I4' },
+  /**
+   * End whoever's remote control of this desktop agent (N3, e9-t04; the threat model's `hostStopped`).
+   * Only ever stops: nothing a host does can start control (the agent's own consent does)
+   */
+  stopControl: { who: STAFF, on: 'member', since: 'N3' },
 } as const satisfies Record<string, Rule>
 
 export type Action = keyof typeof PERMISSIONS

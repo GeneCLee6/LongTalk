@@ -10,6 +10,7 @@ import type {
 } from '../../shared/protocol.ts'
 import { scopeView } from '../../shared/breakout.ts'
 import type { Reaction } from '../../shared/reactions.ts'
+import type { ControllerServerMessage } from '../../shared/control.ts'
 import { dictionary, useLocale } from '../strings.ts'
 import { nameAgents } from './agentNames.ts'
 import { watchNetwork } from './network.ts'
@@ -48,6 +49,8 @@ export interface RoomConnectionHandle {
   sendReaction: (emoji: Reaction) => 'sent' | 'rateLimited' | 'offline'
   /** Listens for what happens to the strokes on the shares (J2); returns how to stop listening */
   onAnnotation: (listener: (message: AnnotationMessage | AnnotationsMessage) => void) => () => void
+  /** Listens for what the room says about our own remote control (N3) */
+  onControl: (listener: (message: ControllerServerMessage) => void) => () => void
   /** Welcomed, right now */
   isOpen: () => boolean
 }
@@ -116,6 +119,7 @@ export function useRoomConnection(
     onReaction: connection.onReaction,
     sendReaction: connection.sendReaction,
     onAnnotation: connection.onAnnotation,
+    onControl: connection.onControl,
     isOpen: connection.isOpen,
   }
 }

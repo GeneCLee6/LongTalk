@@ -284,6 +284,7 @@ describe('a persistent room (e1-t13)', () => {
       startMuted: false,
       allowAnnotation: true,
       allowRecording: true,
+      allowControl: true,
     })
     expect(bob.client.view?.room).toMatchObject({ name: 'Renamed', locked: true, waitingRoom: true })
     expect((await t.host.updateSettings({ password: null }))?.password).toBe(false)

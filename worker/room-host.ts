@@ -105,11 +105,14 @@ import { Scheduler, type Schedule } from './scheduler.ts'
 import type { PersistentRoomInfo } from '../shared/account.ts'
 import {
   AGENT_PROTOCOL_VERSION,
+  CONTROL_FRAME_RATE,
+  exemptFromSocketRate,
   parseAgentMessage,
   type AgentHelloMessage,
   type AgentServerMessage,
 } from '../shared/control.ts'
 import { RoomPairing, type PairingState } from './room-pairing.ts'
+import { RoomControl, type ControlRoom, type ControlState } from './room-control.ts'
 
 /**
  * The server estimate counts at most this long between two flushes: the sweep flushes every
@@ -209,6 +212,8 @@ const HOST_RULE: Readonly<Record<HostMessage['action'], Action>> = {
   allowRecord: 'allowRecord',
   // J3 (e7-t05)
   annotationPolicy: 'annotationPolicy',
+  // N3 (e9-t04)
+  stopControl: 'stopControl',
 }
 
 const NO_CONNS: ReadonlySet<string> = new Set()
@@ -254,6 +259,8 @@ export type SettingsChange = {
   startMuted?: boolean
   allowAnnotation?: boolean
   allowRecording?: boolean
+  /** N3 (threat model Q4) */
+  allowControl?: boolean
 }
 
 /** A persistent room's settings as /me lists them (shared/account.ts, without the slug's row) */
@@ -281,6 +288,8 @@ export type RestoreExtras = {
   breakout?: BreakoutState | null
   /** Open pairing codes and wrong codes still counting (N2) */
   pairing?: PairingState | null
+  /** Remote control requests, grants and their limits (N3) */
+  control?: ControlState | null
 }
 
 /** A persistent room's meeting that has read its saved whiteboard (J4, e7-t08) */
@@ -339,6 +348,11 @@ export interface RoomStorage {
   saveBreakout?(state: BreakoutState | null): void
   /** Open pairing codes and wrong codes still counting (N2), saved whenever they change; null: none */
   savePairing?(state: PairingState | null): void
+  /**
+   * Remote control requests, grants (ids, who, when, the last seq: never an event) and their limits
+   * (N3), saved whenever they change; null: none
+   */
+  saveControl?(state: ControlState | null): void
   /** The room closed: everything stored goes (the adapter also drops the alarm) */
   clear(): void
 }
@@ -546,6 +560,30 @@ export class RoomHost {
   private breakout = new RoomBreakout()
   /** Open pairing codes and the wrong-code limits (N2, e9-t02) */
   private pairing = new RoomPairing()
+  /** What remote control borrows from the room (N3, worker/room-control.ts) */
+  private readonly controlRoom: ControlRoom = {
+    now: () => this.deps.now(),
+    member: (id) => (this.inRoomMember(id) ? this.members.get(id) : undefined),
+    connOf: (id) => this.sessions.get(id)?.conn ?? null,
+    groupOf: (id) => this.groupOf(id),
+    sharing: (id) => this.info?.shares[id] !== undefined,
+    controlAllowed: () => this.info?.allowControl !== false,
+    roomLabel: () => ({
+      roomName: this.info?.name ?? null,
+      createdBy: this.info?.createdBy ?? null,
+    }),
+    send: (conn, message) => this.deps.sockets.send(conn, message),
+    post: (conn, message) => this.post(conn, message),
+    tellEveryone: (notice) => {
+      for (const id of this.roomConns()) this.deps.sockets.send(id, notice)
+    },
+    save: (state) => this.deps.storage.saveControl?.(state),
+    later: (ms, work) => this.deps.later?.(ms, work),
+  }
+  /** Remote control (N3, e9-t04, e9-t05) */
+  private remote = new RoomControl(this.controlRoom)
+  /** `controlEvent` frames per socket holding a grant (CONTROL_FRAME_RATE), in memory */
+  private readonly controlFrames = new ChatRateLimit(CONTROL_FRAME_RATE)
 
   constructor(deps: RoomHostDeps) {
     this.deps = deps
@@ -605,6 +643,10 @@ export class RoomHost {
     this.interact = new RoomInteract(info ? extras.interact : null)
     this.breakout = new RoomBreakout(info ? extras.breakout : null)
     this.pairing = new RoomPairing(info ? extras.pairing : null)
+    // Grants keep their sockets across an eviction (the sockets outlive it); reconcile in the
+    // publish below ends whatever lost its socket meanwhile
+    this.remote = new RoomControl(this.controlRoom, info ? extras.control : null)
+    this.controlFrames.clear()
     this.pollRate.clear()
     this.interactRate.clear()
     this.reported = 0
@@ -802,6 +844,7 @@ export class RoomHost {
       startMuted: this.info.startMuted === true,
       allowAnnotation: this.info.allowAnnotation !== false,
       allowRecording: this.info.allowRecording !== false,
+      allowControl: this.info.allowControl !== false,
     }
   }
 
@@ -827,6 +870,10 @@ export class RoomHost {
     if (change.startMuted !== undefined && change.startMuted !== this.info.startMuted) {
       // Only for who comes in from now on: who is here keeps the microphone as it is
       this.setRoom({ startMuted: change.startMuted })
+    }
+    if (change.allowControl !== undefined && change.allowControl !== (this.info.allowControl !== false)) {
+      // At once: a request is refused and control under way ends (`controlOff`, on publish)
+      this.setRoom({ allowControl: change.allowControl })
     }
     if (change.allowRecording !== undefined && change.allowRecording !== this.info.allowRecording) {
       // Only new recordings are refused: one under way is on everyone's screen, and stops as usual
@@ -956,6 +1003,8 @@ export class RoomHost {
         this.tickBreakout()
       } else if (job === 'pairing') {
         this.expirePairing()
+      } else if (job === 'control') {
+        if (this.remote.tick()) this.publish()
       } else if (job === 'ended' && !this.info) {
         // The ended meeting's tombstone ran out (F3): from now on its id is simply not found
         this.endedUntil = null
@@ -1045,6 +1094,7 @@ export class RoomHost {
     if (!conn) return
     this.conns.delete(connId)
     this.socketRate.forget(connId)
+    this.controlFrames.forget(connId)
     // The last socket gone: nothing keeps the object awake, so the strokes are stored now (J2)
     if (this.conns.size === 0) {
       this.flushAnnotations()
@@ -1065,11 +1115,23 @@ export class RoomHost {
   message(connId: string, raw: string): void | Promise<void> {
     const conn = this.conns.get(connId)
     if (!conn) return
-    // Every frame counts (I1): a flood closes the socket, its member reconnects only by reloading
-    if (!this.socketRate.take(connId, this.deps.now())) {
+    // Parsed before it is counted (N3): a `controlEvent` naming the grant this very socket holds is
+    // out of SOCKET_MESSAGE_RATE and held to CONTROL_FRAME_RATE instead; every other frame counts
+    // (I1), junk labelled `controlEvent` included. A flood closes the socket (which ends a grant),
+    // its member reconnects only by reloading
+    const parsed = conn.agent || raw === HEARTBEAT_PING ? null : parseClientMessage(raw)
+    const exempt =
+      parsed?.t === 'controlEvent' &&
+      exemptFromSocketRate(parsed, this.remote.liveGrantOf(connId))
+    const now = this.deps.now()
+    const within = exempt
+      ? this.controlFrames.take(connId, now)
+      : this.socketRate.take(connId, now)
+    if (!within) {
       this.deps.offence?.(connId, conn.ip, 'flood')
       this.conns.delete(connId)
       this.socketRate.forget(connId)
+      this.controlFrames.forget(connId)
       if (conn.member !== null) {
         this.markAway(conn.member)
         this.publish()
@@ -1084,7 +1146,7 @@ export class RoomHost {
       this.agentMessage(connId, conn, raw)
       return
     }
-    const message = parseClientMessage(raw)
+    const message = parsed
     // Before `join` nothing else is accepted, and `join` only once (also while one is checked)
     if (!message || (conn.member === null) !== (message.t === 'join') || conn.joining) {
       this.deps.sockets.send(connId, { t: 'error', code: 'bad_message' })
@@ -1230,7 +1292,40 @@ export class RoomHost {
       case 'agentRemove':
         this.agentRemove(connId, conn.member!, message.memberId)
         return
+      case 'controlRequest':
+        this.requestControl(connId, conn.member!, message.agent)
+        return
+      case 'controlCancel':
+        if (this.remote.cancel(conn.member!, message.request)) this.publish()
+        return
+      case 'controlEvent':
+        // Dropped quietly when it is not this socket's grant: the controller learns from
+        // `controlEnd`, and an error per batch would only add traffic
+        if (this.remote.event(connId, conn.member!, message)) this.publish()
+        return
+      case 'controlStop':
+        if (this.remote.stop(connId, conn.member!, message.grant)) this.publish()
+        return
     }
+  }
+
+  // ── Remote control (N3, e9-t04, e9-t05; docs/PRD/f-remote-control-security.md §5.2–§5.7) ─────
+
+  /**
+   * `controlRequest`: worker/roles.ts `requestControl`, then the control rules (worker/room-
+   * control.ts), each refusal its own error code
+   */
+  private requestControl(connId: string, memberId: string, agent: string): void {
+    if (!this.allowed(memberId, 'requestControl')) {
+      this.deps.sockets.send(connId, { t: 'error', code: 'forbidden' })
+      return
+    }
+    const refused = this.remote.request(connId, memberId, agent)
+    if (refused !== null) {
+      this.deps.sockets.send(connId, { t: 'error', code: refused })
+      return
+    }
+    this.publish()
   }
 
   // ── Desktop agents (N2, e9-t02; docs/PRD/f-remote-control-security.md §5.1) ──────────────────
@@ -1328,9 +1423,17 @@ export class RoomHost {
         this.deps.sockets.close(connId, 1000, 'left')
         this.publish()
         return
-      default:
-        // `controlAnswer`, `controlStop`, `controlMute`: remote control comes in N3
-        this.deps.sockets.send(connId, { t: 'error', code: 'bad_message' })
+      // N3: only ever from the agent's own socket (a browser's parse does not know them, T-02)
+      case 'controlAnswer':
+        if (this.remote.answer(connId, conn.member!, message)) this.publish()
+        return
+      case 'controlStop':
+        if (this.remote.agentStop(connId, conn.member!, message.grant)) this.publish()
+        return
+      case 'controlMute':
+        if (this.remote.mute(connId, conn.member!, message.ms)) this.publish()
+        else this.reschedule()
+        return
     }
   }
 
@@ -2323,6 +2426,9 @@ export class RoomHost {
       case 'endMeeting':
         this.endMeeting()
         return
+      case 'stopControl':
+        if (this.remote.hostStop(message.memberId)) this.publish()
+        return
     }
   }
 
@@ -2340,6 +2446,7 @@ export class RoomHost {
         | 'startMuted'
         | 'allowAnnotation'
         | 'allowRecording'
+        | 'allowControl'
       >
     >,
   ): void {
@@ -2592,6 +2699,8 @@ export class RoomHost {
    * once, like an empty room after EMPTY_ROOM_TTL_MS (everything stored is gone, the id is 404).
    */
   private endMeeting(): void {
+    // Both sides of any control are told why before their sockets close (N3)
+    this.remote.endAll()
     for (const id of [...this.conns.keys()]) {
       this.deps.sockets.close(id, CloseCode.ended, 'ended')
     }
@@ -2977,6 +3086,7 @@ export class RoomHost {
       timer: this.interact.timer,
       agenda: this.interact.agenda,
       breakout: this.breakout.view,
+      control: this.remote.view,
     }
   }
 
@@ -3460,6 +3570,10 @@ export class RoomHost {
     const pairingDue = this.pairing.due()
     if (pairingDue === null) this.schedule.clear('pairing')
     else this.schedule.set('pairing', pairingDue)
+    // A request running out, a grant's time, or a control limit to forget (N3)
+    const controlDue = this.remote.due()
+    if (controlDue === null) this.schedule.clear('control')
+    else this.schedule.set('control', controlDue)
     const stored = JSON.stringify(this.schedule)
     if (stored !== this.storedSchedule) {
       this.storedSchedule = stored
@@ -3521,6 +3635,8 @@ export class RoomHost {
     // So are the breakout rooms (L3), and the pairing codes (N2)
     this.breakout.reset()
     this.pairing.reset()
+    this.remote.reset()
+    this.controlFrames.clear()
     this.pollRate.clear()
     this.interactRate.clear()
     this.bans.clear()
@@ -3566,6 +3682,8 @@ export class RoomHost {
    */
   private publish(except: ReadonlySet<string> = NO_CONNS): void {
     this.dropOrphanAgents()
+    // Remote control that lost a socket, a breakout room or the room's permission ends (N3)
+    this.remote.reconcile()
     this.assignHost()
     this.reschedule()
     const next = this.view()

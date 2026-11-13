@@ -107,6 +107,7 @@ import { TopBar } from '../components/TopBar.tsx'
 import { TurnedAwayScreen, type TurnedAwayReason } from '../components/TurnedAwayScreen.tsx'
 import { WaitingScreen } from '../components/WaitingScreen.tsx'
 import { useToasts } from '../components/useToasts.ts'
+import { useRemoteControl } from '../room/useRemoteControl.ts'
 import { VideoDemandContext } from '../components/useVideoDemand.ts'
 import {
   audioProcessingSupport,
@@ -738,6 +739,7 @@ function Room({
     onReaction,
     sendReaction,
     onAnnotation,
+    onControl,
     isOpen,
   } = useRoomConnection(roomId, choices.name, choices.password)
   const annotationStore = useAnnotationStore(send, onAnnotation, isOpen)
@@ -820,6 +822,17 @@ function Room({
   }, [passwordRefused])
   const self = state.you ? state.view?.members[state.you] : undefined
   const role: Role = self?.role ?? 'participant'
+  // Remote control of a desktop agent's screen (N3): the tile's request, status and capture
+  const remote = useRemoteControl({
+    view: state.view,
+    you: state.you,
+    role,
+    mine: state.control,
+    send,
+    onControl,
+    onError,
+    show,
+  })
   // Our raised hand (e5-t04): RoomDO keeps it (worker/roles.ts `raiseHand`)
   const handUp = self?.hand != null
   const onToggleHand = () => {
@@ -1588,6 +1601,25 @@ function Room({
       case 'pairingVoided':
         show(strings.agent.voided, 'warn')
         return
+      // N3 (e9-t04): to everyone, so nobody is controlled without the room knowing (rule 4)
+      case 'controlStarted': {
+        const computer = anyMembers?.[notice.agent ?? '']?.name ?? ''
+        show(
+          notice.by === state.you
+            ? strings.control.youStarted(computer)
+            : strings.control.started(anyMembers?.[notice.by]?.name ?? '', computer),
+          'warn',
+        )
+        return
+      }
+      case 'controlEnded':
+        show(
+          strings.control.ended(
+            anyMembers?.[notice.agent ?? '']?.name ?? '',
+            notice.reason ? strings.control.reasons[notice.reason] : '',
+          ),
+        )
+        return
       case 'annotationsCleared':
         // Maybe a sharer, not only a host: the name alone
         show(
@@ -2163,6 +2195,7 @@ function Room({
       recorderIds={recorders.map((entry) => entry.memberId)}
       onRecordAction={onRecordAction}
       onAgentRemove={removeAgent}
+      controlledIds={remote.controlledIds}
       audio={{
         levelOf: (id) => {
           if (id === state.you) return micSending
@@ -2260,6 +2293,7 @@ function Room({
         key={`${mainSharer.id}-share`}
         name={mainSharer.name}
         computer={mainSharer.agent !== undefined}
+        control={remote.shareControl(mainSharer)}
         video={receivedOf(mainSharer, 'screen')}
         annotations={{
           store: annotationStore,

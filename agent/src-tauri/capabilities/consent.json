@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "consent",
+  "description": "The remote-control consent dialog (N3, f-remote-control-security.md §5.2): the only window that may answer a control request (T-04), and nothing else",
+  "windows": ["consent"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-control-state",
+    "allow-control-answer",
+    "allow-control-keep-going",
+    "allow-control-stop"
+  ]
+}

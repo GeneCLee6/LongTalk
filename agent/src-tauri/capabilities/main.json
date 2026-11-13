@@ -13,6 +13,9 @@
     "allow-confirm-join",
     "allow-set-sharing",
     "allow-leave-room",
-    "allow-api-fetch"
+    "allow-api-fetch",
+    "allow-control-state",
+    "allow-control-stop",
+    "allow-control-mute"
   ]
 }

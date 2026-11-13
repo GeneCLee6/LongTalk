@@ -420,6 +420,7 @@ async function me(c: Context): Promise<Reply> {
         startMuted: settings?.startMuted ?? false,
         allowAnnotation: settings?.allowAnnotation ?? true,
         allowRecording: settings?.allowRecording ?? true,
+        allowControl: settings?.allowControl ?? true,
       }
     }),
   )
@@ -569,6 +570,7 @@ async function createRoom(c: Context): Promise<Reply> {
     startMuted: false,
     allowAnnotation: true,
     allowRecording: true,
+    allowControl: true,
   }
   return new Reply(201, { room })
 }
@@ -591,6 +593,7 @@ function settingsChange(input: Record<string, unknown> | null): RoomSettingsChan
     'startMuted',
     'allowAnnotation',
     'allowRecording',
+    'allowControl',
   ] as const) {
     if (!(key in input)) continue
     if (typeof input[key] !== 'boolean') return null

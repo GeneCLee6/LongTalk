@@ -132,6 +132,7 @@ const ROOM = {
   startMuted: false,
   allowAnnotation: true,
   allowRecording: true,
+  allowControl: true,
 }
 
 function me(meetings: MeetingInfo[]): MeResponse {

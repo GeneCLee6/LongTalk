@@ -105,8 +105,9 @@ pub async fn run(
             },
             message = read.next() => match message {
                 Some(Ok(Message::Text(text))) => {
-                    let data = incoming(&app, text.as_str());
-                    let _ = events.send(SocketEvent::Message { data });
+                    if let Some(data) = incoming(&app, text.as_str()) {
+                        let _ = events.send(SocketEvent::Message { data });
+                    }
                 }
                 Some(Ok(Message::Close(frame))) => {
                     let (code, reason) = frame
@@ -122,10 +123,21 @@ pub async fn run(
     }
 }
 
-/** A frame from the room: the welcome goes to the session first; returns what the page gets */
-fn incoming(app: &AppHandle, text: &str) -> String {
+/**
+ * A frame from the room: the welcome goes to the session first, the control frames (N3) to
+ * control.rs only; returns what the page gets (None: nothing)
+ */
+fn incoming(app: &AppHandle, text: &str) -> Option<String> {
+    if text.starts_with('{') && text.contains("\"control") {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+            if let Some(kind) = crate::control::control_kind(&value) {
+                crate::on_control_frame(app, kind, &value, text);
+                return None;
+            }
+        }
+    }
     let Some((welcome, forwarded)) = read_welcome(text) else {
-        return text.to_owned();
+        return Some(text.to_owned());
     };
     let state = app.state::<AgentState>();
     let now = state.now();
@@ -133,7 +145,7 @@ fn incoming(app: &AppHandle, text: &str) -> String {
     if changed {
         crate::notify(app);
     }
-    forwarded
+    Some(forwarded)
 }
 
 fn finish(app: &AppHandle, id: u32, code: u16, reason: &str, events: &Channel<SocketEvent>) {
@@ -148,6 +160,11 @@ fn finish(app: &AppHandle, id: u32, code: u16, reason: &str, events: &Channel<So
         }
     };
     if current {
+        // Control never outlives the socket it came on (the room ends it as agentLeft)
+        let control = state.control.lock().unwrap().on_socket_closed();
+        if control.changed {
+            crate::notify_control(app);
+        }
         let ended = state
             .session
             .lock()
