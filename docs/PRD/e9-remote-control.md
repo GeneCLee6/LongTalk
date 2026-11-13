@@ -54,7 +54,7 @@ depends_on: [E2, E3, E11]
 
 ## Task 拆分（M3；動工前再細拆）
 
-- [x] `e9-t01` 威脅模型與功能 PRD [`f-remote-control-security.md`](f-remote-control-security.md)；協定 `shared/control.ts` 定稿 · AC-9.4 · S（#PR）
+- [x] `e9-t01` 威脅模型與功能 PRD [`f-remote-control-security.md`](f-remote-control-security.md)；協定 `shared/control.ts` 定稿 · AC-9.4 · S（#54）
 - [ ] `e9-t02` Tauri 代理骨架：加入房間、配對碼、托盤、更新機制 · AC-9.1 · M · ← e9-t01
 - [ ] `e9-t03` 代理擷取螢幕並以 `MediaTransport` 發布（多螢幕） · AC-9.1 · M · ← e9-t02
 - [ ] `e9-t04` 同意流程：RoomDO 請求與時限、系統對話框、全員提示、紅框與中斷 · AC-9.2 · M · ← e9-t03
