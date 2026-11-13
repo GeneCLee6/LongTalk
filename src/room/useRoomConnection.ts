@@ -42,7 +42,8 @@ export interface RoomConnectionHandle {
   /** Listens for what a host did to this member (F1); returns a function that stops listening */
   onNotice: (listener: (notice: NoticeMessage) => void) => () => void
   /** Sends a chat message (D3); anything but `sent` means the text should stay in the box */
-  sendChat: (text: string) => ChatSendResult
+  /** `to` (O4, e5-t09): privately, to that member */
+  sendChat: (text: string, to?: string | null) => ChatSendResult
   /** Listens for everyone's reactions (G3); returns a function that stops listening */
   onReaction: (listener: (reaction: ReactionMessage) => void) => () => void
   /** Sends a reaction (G3); `rateLimited` when it would be too many too fast */

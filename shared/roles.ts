@@ -80,6 +80,11 @@ export const PERMISSIONS = {
   requestControl: { who: IN_ROOM, on: 'self', since: 'N3' },
   /** Pair one's own computer (N2, e9-t02): ask for a pairing code, remove one's own computer */
   pairComputer: { who: IN_ROOM, on: 'self', since: 'N2' },
+  /**
+   * Send one other member a private message (O4, e5-t09), subject to the room's switch
+   * (`RoomInfo.privateChat`: mayMessagePrivately)
+   */
+  privateChat: { who: IN_ROOM, on: 'self', since: 'O4' },
 
   // ── What is done to the whole room ──
   /** The room's name (C2, e1-t05) */
@@ -125,6 +130,8 @@ export const PERMISSIONS = {
    * the actor may move anyone, themselves included (that is how a host enters a room)
    */
   breakout: { who: STAFF, on: 'room', since: 'L3' },
+  /** Whether participants may message each other privately (O4, e5-t09; `host` `privateChat`) */
+  privateChatPolicy: { who: STAFF, on: 'room', since: 'O4' },
   /** Start and end polls (L5, e5-t07); the countdown and the agenda bar (L5, e5-t08) */
   poll: { who: STAFF, on: 'room', since: 'L5' },
   timer: { who: STAFF, on: 'room', since: 'L5' },
@@ -214,3 +221,19 @@ export function mayOpenBoard(policy: AnnotationPolicy, role: Role): boolean {
 
 /** Whether `role` may take the whiteboard off the stage: a host, a co-host, whoever opened it */
 export const mayCloseBoard = (role: Role, owner: boolean): boolean => mayClearLayer(role, owner)
+
+// ---------------------------------------------------------------------------------------------
+// Private messages (O4, e5-t09): who may write to whom depends on the room's switch as well as the
+// roles, so the decision is this function (RoomDO decides with it; the browser only leaves out the
+// recipients the room would refuse).
+
+/**
+ * Whether a member of role `from` may send a private message to one of role `to`. With the room's
+ * switch on (`allowed`, the default) anyone in the meeting may write to anyone in it; off, a
+ * participant may still write to a host or co-host (to ask for help), and they to anyone. Nobody
+ * writes to or from the waiting room.
+ */
+export function mayMessagePrivately(allowed: boolean, from: Role, to: Role): boolean {
+  if (!can(from, 'privateChat') || !can(to, 'privateChat')) return false
+  return allowed || can(from, 'privateChatPolicy') || can(to, 'privateChatPolicy')
+}

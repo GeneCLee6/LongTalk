@@ -218,7 +218,16 @@
 //    skipped silently). `host` `startMuted` with `on` switches `RoomInfo.startMuted` from inside the
 //    room (worker/roles.ts `startMuted`), the same switch the owner of a persistent room sets on /me:
 //    only who comes in after it is told `notice` `startMuted`.
-// 32. Remote control (N3, e9-t04, e9-t05; shared/control.ts, docs/PRD/f-remote-control-security.md
+// 32. Private messages (O4, e5-t09): `chat` with `to` (a member id) is for that member alone
+//    (worker/roles.ts `privateChat`, shared/roles.ts mayMessagePrivately). The room refuses it with
+//    `forbidden` when the recipient is not in the meeting (gone, waiting, a computer, oneself), is in
+//    another breakout room, or the room's switch is off and neither end is a host or co-host. The
+//    message is an ordinary chat message with `ChatMessage.to` / `toName`, under the same CHAT_RATE
+//    and in the same CHAT_HISTORY, but only the sender and the recipient are ever sent it (live and
+//    in every history, after a move between breakout rooms too). Nobody else learns that it exists:
+//    no host, no recording. `host` `privateChat` with `on` sets `RoomInfo.privateChat` (a host or
+//    co-host, worker/roles.ts `privateChatPolicy`); absent means on. Messages already sent stay.
+// 33. Remote control (N3, e9-t04, e9-t05; shared/control.ts, docs/PRD/f-remote-control-security.md
 //    §5.2–§5.7): a member in the room (worker/roles.ts `requestControl`) sends `controlRequest`
 //    naming an agent that shares its screen in the same breakout room; refusals are the
 //    ControlErrorCode errors. The room answers `controlRequested` (the request id, for
@@ -286,6 +295,8 @@
 // v24 → v25 (O1): `host` actions `muteMembers` (with `memberIds`) and `startMuted` (with `on`). A
 //   v24 browser would not send them, but its panel would offer nothing it could do; refused so
 //   every host in a room has the same tools.
+// v25 → v26 (O4): `chat.to`, `ChatMessage.to` / `toName`, `RoomInfo.privateChat`, `host` action
+//   `privateChat`. A v25 browser would show a private message as if everyone had seen it.
 // v26 → v27 (N3): `controlRequest`, `controlCancel`, `controlEvent`, `controlStop`,
 //   `controlRequested`, `controlRefused`, `controlGranted`, `controlEnd`, `RoomView.control`,
 //   `RoomInfo.allowControl`, `host` action `stopControl`, notices `controlStarted`,
@@ -476,6 +487,11 @@ export type RoomInfo = RoomInit & {
   startMuted?: boolean
   allowAnnotation?: boolean
   allowRecording?: boolean
+  /**
+   * Participants may message each other privately (O4, e5-t09); a host or co-host switches it
+   * (`host` `privateChat`). Off, they may still write to a host or co-host. Absent means true
+   */
+  privateChat?: boolean
   /**
    * Whether anyone may ask to control a desktop agent here (N3, threat model Q4; absent means true).
    * A persistent room's owner turns it off on /me; off refuses every request and ends what is on
@@ -899,8 +915,11 @@ export type UnshareMessage = { t: 'unshare' }
 /** Spotlight a member for everyone, or (null) end the spotlight (G2, e4-t11; host or co-host) */
 export type SpotlightMessage = { t: 'spotlight'; memberId: string | null }
 
-/** A chat message to everyone in the room (D3); `text` is normalizeChatText's */
-export type ChatClientMessage = { t: 'chat'; text: string }
+/**
+ * A chat message to everyone in the room (D3); `text` is normalizeChatText's. With `to` (O4,
+ * e5-t09): to that member alone
+ */
+export type ChatClientMessage = { t: 'chat'; text: string; to?: string }
 
 /** A reaction to everyone in the room (G3, e5-t03) */
 export type ReactClientMessage = { t: 'react'; emoji: Reaction }
@@ -937,12 +956,11 @@ export type HostRoomAction = 'muteAll' | 'endMeeting' | 'admitAll'
 /** Admit or turn away one person in the waiting room (F2); `memberId` says who */
 export type HostWaitingAction = 'admit' | 'deny'
 
-/** The room's switches (F2; `startMuted` O1): `on` says which way */
-export type HostSwitchAction = 'lock' | 'waitingRoom' | 'startMuted'
+/** The room's switches (F2; `startMuted` O1; `privateChat` O4): `on` says which way */
+export type HostSwitchAction = 'lock' | 'waitingRoom' | 'startMuted' | 'privateChat'
 
 /** Mute several members at once (O1, e10-t06): who the panel's search or filter left */
 export type HostMuteMembersAction = 'muteMembers'
-
 /** The room's password (F3): a new one, or null to clear it */
 export type HostPasswordAction = 'setPassword'
 
@@ -981,7 +999,7 @@ const HOST_MEMBER_ACTIONS: readonly string[] = [
 ]
 const HOST_ROOM_ACTIONS: readonly string[] = ['muteAll', 'endMeeting', 'admitAll']
 const HOST_WAITING_ACTIONS: readonly string[] = ['admit', 'deny']
-const HOST_SWITCH_ACTIONS: readonly string[] = ['lock', 'waitingRoom', 'startMuted']
+const HOST_SWITCH_ACTIONS: readonly string[] = ['lock', 'waitingRoom', 'startMuted', 'privateChat']
 
 /** A host control (F1, e1-t07; F2); the room checks the member may (worker/roles.ts) */
 export type HostMessage =
@@ -1275,7 +1293,9 @@ export function parseClientMessage(raw: string): ClientMessage | null {
         : null
     case 'chat': {
       const text = normalizeChatText(value.text)
-      return text === null ? null : { t: 'chat', text }
+      if (text === null) return null
+      if (value.to === undefined) return { t: 'chat', text }
+      return isMemberId(value.to) ? { t: 'chat', text, to: value.to } : null
     }
     case 'react':
       return isReaction(value.emoji) ? { t: 'react', emoji: value.emoji } : null

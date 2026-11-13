@@ -45,7 +45,7 @@ import type { UsageState } from '../../shared/usage.ts'
 import { BlockedError, getRoom } from '../api/rooms.ts'
 import { fetchIceConfig } from '../api/turn.ts'
 import { Button } from '../components/Button.tsx'
-import { ChatPanel } from '../components/ChatPanel.tsx'
+import { ChatPanel, type ChatRecipient } from '../components/ChatPanel.tsx'
 import { ChatPreview } from '../components/ChatPreview.tsx'
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx'
 import { LeaveDialog, PasswordDialog } from '../components/HostDialogs.tsx'
@@ -84,6 +84,7 @@ import {
   mayClearLayer,
   mayCloseBoard,
   mayDraw,
+  mayMessagePrivately,
   mayOpenBoard,
   type AnnotationPolicy,
 } from '../../shared/roles.ts'
@@ -1719,6 +1720,13 @@ function Room({
     send({ t: 'host', action: 'lock', on })
     show(on ? strings.participants.lockedNow : strings.participants.unlockedNow)
   }
+  // Private messages (O4, e5-t09): the host's switch, and who the chat box writes to (null: everyone)
+  const privateChatOn = roomInfo?.privateChat !== false
+  const onPrivateChat = (on: boolean) => {
+    send({ t: 'host', action: 'privateChat', on })
+    show(on ? strings.chat.private.switchedOn : strings.chat.private.switchedOff)
+  }
+  const [chatTo, setChatTo] = useState<ChatRecipient | null>(null)
   const onWaitingRoom = (on: boolean) => {
     send({ t: 'host', action: 'waitingRoom', on })
     show(on ? strings.participants.waitingOnNow : strings.participants.waitingOffNow)
@@ -1783,6 +1791,22 @@ function Room({
   }
 
   const members = Object.values(state.view?.members ?? {})
+  // Who we may message privately (O4): in our (breakout) room, not us, not a computer, as the room's
+  // switch and the roles allow (RoomDO decides again)
+  const chatRecipients: ChatRecipient[] = members
+    .filter(
+      (member) =>
+        member.id !== state.you &&
+        !member.agent &&
+        mayMessagePrivately(privateChatOn, role, member.role),
+    )
+    .map((member) => ({ id: member.id, name: member.name }))
+  const messagePrivately = (memberId: string) => {
+    const member = state.view?.members[memberId]
+    if (!member) return
+    setChatTo({ id: member.id, name: member.name })
+    setPanel('chat')
+  }
   // Everyone's place in the raised-hand queue (e5-t04), 1 first
   const handPlace = new Map(handQueue(members).map((member, index) => [member.id, index + 1]))
   // Each member's camera as their tile shows it: ours while it sends, theirs while it is on
@@ -2198,6 +2222,10 @@ function Room({
       recordingOff={roomInfo?.allowRecording === false}
       onLock={onLock}
       onWaitingRoom={onWaitingRoom}
+      privateChat={privateChatOn}
+      onPrivateChat={onPrivateChat}
+      messageable={chatRecipients.map((recipient) => recipient.id)}
+      onPrivateMessage={messagePrivately}
       onAdmit={onAdmit}
       onDeny={onDeny}
       onAdmitAll={onAdmitAll}
@@ -2696,6 +2724,9 @@ function Room({
                   you={state.you}
                   onSend={sendChat}
                   files={fileSharing}
+                  recipients={chatRecipients}
+                  to={chatTo}
+                  onTo={setChatTo}
                   autoFocus
                 />
               ) : panel === 'participants' ? (
@@ -2758,6 +2789,9 @@ function Room({
                 you={state.you}
                 onSend={sendChat}
                 files={fileSharing}
+                recipients={chatRecipients}
+                to={chatTo}
+                onTo={setChatTo}
               />
             ) : panel === 'participants' ? (
               participantsPanel

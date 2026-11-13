@@ -14,6 +14,7 @@ export {
   mayClearLayer,
   mayCloseBoard,
   mayDraw,
+  mayMessagePrivately,
   mayOpenBoard,
 } from '../shared/roles.ts'
 export type { Action, Role, Rule } from '../shared/roles.ts'

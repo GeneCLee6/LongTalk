@@ -154,6 +154,16 @@ test('the room, its panels, menus and dialogs have no axe violations', async ({
   await toolbar.getByRole('button', { name: /^聊天/ }).click()
   await expect(page.getByRole('textbox', { name: strings.chat.inputLabel })).toBeFocused()
   await expectNoViolations(page, 'chat panel')
+  // O4 (e5-t09): writing to Bob privately, and the private message in the log
+  const recipient = page.getByRole('combobox', { name: strings.chat.private.recipient })
+  await recipient.selectOption({ label: 'Bob' })
+  await page.getByRole('textbox', { name: strings.chat.inputLabel }).fill('悄悄話')
+  await page.getByRole('button', { name: strings.chat.send }).click()
+  await expect(page.getByRole('log', { name: strings.chat.messages })).toContainText('悄悄話')
+  await expectNoViolations(page, 'chat panel, writing privately')
+  // Bob gets it as a private message (the preview bubble names it so)
+  await expect(bob.page.getByRole('button', { name: /Ada（私訊）/ })).toBeVisible()
+  await recipient.selectOption({ label: strings.chat.private.everyone })
 
   await toolbar.getByRole('button', { name: /^參與者/ }).click()
   await expect(page.getByRole('list', { name: strings.participants.list })).toBeVisible()
