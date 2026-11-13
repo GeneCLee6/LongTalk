@@ -15,6 +15,14 @@ import {
 import { VOLUME_MAX, VOLUME_MIN, VOLUME_STEP } from '../media/memberVolume.ts'
 import { speakingMonitor } from '../media/speaking.ts'
 import { shareVolumeKey } from '../room/memberVolumes.ts'
+import {
+  PARTICIPANT_FILTERS,
+  SEARCH_FROM,
+  filterCounts,
+  filterMembers,
+  micOn as micIsOn,
+  type ParticipantFilter,
+} from '../room/participantFilter.ts'
 import { strings } from '../strings.ts'
 import { avatar, avatarColor, color, fontSize, motion, radius, space } from '../styles/tokens.ts'
 import { Button } from './Button.tsx'
@@ -40,6 +48,11 @@ export interface ParticipantsPanelProps {
   /** A host control on one member (the room decides whether it is allowed, worker/roles.ts) */
   onAction: (action: HostMemberAction, memberId: string) => void
   onMuteAll: () => void
+  /**
+   * Mute who the search or the filter left listed (O1, e10-t06): only their ids whose microphone is
+   * on and whom our role may mute; RoomDO checks each again
+   */
+  onMuteMembers?: (memberIds: string[]) => void
   onEndMeeting: () => void
   /** Who waits to be admitted (F2), in the queue's order */
   waiting?: WaitingEntry[]
@@ -47,6 +60,9 @@ export interface ParticipantsPanelProps {
   locked?: boolean
   waitingRoom?: boolean
   onLock?: (on: boolean) => void
+  /** Participants who come in start muted (O1, e10-t06; the owner's /me switch is the same one) */
+  startMuted?: boolean
+  onStartMuted?: (on: boolean) => void
   /** Turning it off admits everyone waiting (the panel asks first when anyone does) */
   onWaitingRoom?: (on: boolean) => void
   onAdmit?: (memberId: string) => void
@@ -144,6 +160,10 @@ const memberActions = (): readonly {
  *
  * Raised hands (G3, e5-t04): whoever has a hand up comes first, in the order they raised it,
  * with a numbered hand; a host or co-host can lower it from the person's menu (放下手, first).
+ *
+ * Large rooms (O1, e10-t06): from SEARCH_FROM people a search box and filters (raised hand, muted,
+ * camera off) narrow the list here only; while narrowed a host or co-host may mute who is listed
+ * (`onMuteMembers`), and the settings have 預設靜音進入.
  */
 export function ParticipantsPanel({
   members,
@@ -151,9 +171,12 @@ export function ParticipantsPanel({
   sharerIds,
   onAction,
   onMuteAll,
+  onMuteMembers = noop,
   onEndMeeting,
   waiting = [],
   locked = false,
+  startMuted = false,
+  onStartMuted = noop,
   waitingRoom = false,
   annotationPolicy = DEFAULT_ANNOTATION_POLICY,
   onAnnotationPolicy = noop,
@@ -185,6 +208,11 @@ export function ParticipantsPanel({
     | null
   >(null)
   const role: Role = members.find((member) => member.id === you)?.role ?? 'participant'
+  // Search and filters (O1, e10-t06): only once the list is long, or while one is in use
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<ParticipantFilter>('all')
+  const narrowed = query.trim() !== '' || filter !== 'all'
+  const showTools = members.length >= SEARCH_FROM || narrowed
   // Raised hands first, in the queue's order (G3); then ourselves, by role, by arrival
   const hands = handQueue(members)
   const handPlace = new Map(hands.map((member, index) => [member.id, index + 1]))
@@ -197,9 +225,17 @@ export function ParticipantsPanel({
         a.joinedAt - b.joinedAt,
     )
   const sorted = [...hands, ...rest]
+  const counts = filterCounts(members)
+  const shown = narrowed ? filterMembers(sorted, query, filter) : sorted
+  // Who 靜音列出的人 would mute: listed, microphone on, someone our role may mute
+  const muteTargets = shown.filter(
+    (member) =>
+      member.id !== you && micIsOn(member) && canActOn(role, 'muteMember', member.role, false),
+  )
   const canMuteAll = can(role, 'muteAll')
   const canEnd = can(role, 'endMeeting')
   const canLock = can(role, 'lockRoom')
+  const canStartMuted = can(role, 'startMuted')
   const canWaitingRoom = can(role, 'waitingRoom')
   const canAdmit = can(role, 'admit')
   const canSetPassword = can(role, 'setPassword')
@@ -436,7 +472,12 @@ export function ParticipantsPanel({
 
   return (
     <Root>
-      {(canLock || canWaitingRoom || canSetPassword || canSetPolicy || canSetPrivateChat) && (
+      {(canLock ||
+        canWaitingRoom ||
+        canStartMuted ||
+        canSetPassword ||
+        canSetPolicy ||
+        canSetPrivateChat) && (
         <Settings aria-label={strings.participants.settings}>
           {canLock && (
             <Switch
@@ -452,6 +493,14 @@ export function ParticipantsPanel({
               hint={strings.participants.waitingRoomHint}
               on={waitingRoom}
               onToggle={toggleWaitingRoom}
+            />
+          )}
+          {canStartMuted && (
+            <Switch
+              label={strings.participants.startMuted}
+              hint={strings.participants.startMutedHint}
+              on={startMuted}
+              onToggle={() => onStartMuted(!startMuted)}
             />
           )}
           {canSetPrivateChat && (
@@ -555,10 +604,64 @@ export function ParticipantsPanel({
       {audio && !audio.volumeSupported && members.length > 1 && (
         <VolumeNote>{strings.participants.volumeUnsupported}</VolumeNote>
       )}
+      {showTools && (
+        <Tools>
+          <Search
+            type="search"
+            value={query}
+            placeholder={strings.participants.searchPlaceholder}
+            aria-label={strings.participants.search}
+            enterKeyHint="search"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && query !== '') {
+                // Clears the box first; a second Escape closes the panel as usual
+                event.stopPropagation()
+                setQuery('')
+              }
+            }}
+          />
+          <Filters role="group" aria-label={strings.participants.filters}>
+            {PARTICIPANT_FILTERS.map((option) => (
+              <Chip
+                key={option}
+                type="button"
+                aria-pressed={filter === option}
+                $on={filter === option}
+                onClick={() => setFilter(option)}
+              >
+                {strings.participants.filterCount(
+                  strings.participants.filter[option],
+                  counts[option],
+                )}
+              </Chip>
+            ))}
+          </Filters>
+          {narrowed && (
+            <ShownCount role="status">
+              {shown.length === 0
+                ? strings.participants.noMatch
+                : strings.participants.shownCount(shown.length, members.length)}
+            </ShownCount>
+          )}
+          {narrowed && canMuteAll && muteTargets.length > 0 && (
+            <Button
+              variant="secondary"
+              block
+              title={strings.participants.muteShownHint}
+              onClick={() => onMuteMembers(muteTargets.map((member) => member.id))}
+            >
+              {strings.participants.muteShown(muteTargets.length)}
+            </Button>
+          )}
+        </Tools>
+      )}
       <List aria-label={strings.participants.list} tabIndex={0}>
         {breakout
           ? rooms.map((room) => {
-              const people = sorted.filter((member) => (member.group ?? null) === room.id)
+              const people = shown.filter((member) => (member.group ?? null) === room.id)
+              // While searching, a room with nobody listed is left out
+              if (narrowed && people.length === 0) return null
               const headingId = `participants-room-${room.id ?? 'main'}`
               return (
                 <RoomItem key={room.id ?? 'main'}>
@@ -570,7 +673,7 @@ export function ParticipantsPanel({
                 </RoomItem>
               )
             })
-          : sorted.map(rowOf)}
+          : shown.map(rowOf)}
       </List>
       {(canMuteAll || canEnd) && (
         <Footer>
@@ -719,6 +822,68 @@ function Switch({
     </SwitchRow>
   )
 }
+
+/** The search box and the filters (O1): above the list, not scrolling with it */
+const Tools = styled.div`
+  display: grid;
+  gap: ${space(2)};
+  padding: ${space(3)} ${space(4)};
+  border-bottom: 1px solid ${color.line};
+`
+
+const Search = styled.input`
+  width: 100%;
+  min-height: 40px;
+  padding: ${space(1)} ${space(3)};
+  border: 1px solid ${color.line};
+  border-radius: ${radius.button};
+  background: ${color.surface};
+  color: ${color.fg};
+  font: inherit;
+  font-size: ${fontSize.small};
+
+  &::placeholder {
+    color: ${color.muted};
+  }
+  &:focus-visible {
+    outline: 2px solid ${color.focus};
+    outline-offset: 1px;
+  }
+`
+
+const Filters = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: ${space(1.5)};
+`
+
+/** 32 px tall: four fit a phone's row; the pressed one filled */
+const Chip = styled.button<{ $on: boolean }>`
+  min-height: 32px;
+  padding: 0 ${space(2.5)};
+  border: 1px solid ${({ $on }) => ($on ? color.primary : color.line)};
+  border-radius: ${radius.pill};
+  background: ${({ $on }) => ($on ? color.primarySoft : 'transparent')};
+  color: ${({ $on }) => ($on ? color.primary : color.fg)};
+  font: inherit;
+  font-size: ${fontSize.toolbarLabel};
+  font-weight: ${({ $on }) => ($on ? 700 : 400)};
+  cursor: pointer;
+
+  &:hover {
+    background: ${({ $on }) => ($on ? color.primarySoft : color.hover)};
+  }
+  &:focus-visible {
+    outline: 2px solid ${color.focus};
+    outline-offset: 2px;
+  }
+`
+
+const ShownCount = styled.p`
+  margin: 0;
+  color: ${color.muted};
+  font-size: ${fontSize.toolbarLabel};
+`
 
 const Root = styled.div`
   display: flex;
