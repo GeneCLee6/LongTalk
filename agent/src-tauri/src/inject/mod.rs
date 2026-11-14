@@ -424,6 +424,8 @@ pub fn is_press(action: &Action) -> bool {
 }
 
 /** Why an injector did not perform part of a plan (for the log; never what it was) */
+// AgentWindow is Windows and macOS only, SecureDesktop Windows only
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Skipped {
     /** A press aimed at one of the agent's own windows (§5.8) */

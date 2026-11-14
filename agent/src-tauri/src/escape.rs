@@ -18,16 +18,20 @@
 // button and the tray, as the threat model allows (§5.4).
 
 /** shared/control.ts ESCAPE_STOP_PRESSES, ESCAPE_STOP_MS */
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 pub const ESCAPE_STOP_PRESSES: usize = 3;
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 pub const ESCAPE_STOP_MS: u64 = 1_000;
 
 /** Counts physical Escape presses; `press` says when the third within ESCAPE_STOP_MS came */
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 #[derive(Debug, Default)]
 pub struct EscapeCounter {
     presses: Vec<u64>,
     down: bool,
 }
 
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 impl EscapeCounter {
     /** Escape went down at `now` (a repeat while it is held is not a press) */
     pub fn down(&mut self, now: u64) -> bool {

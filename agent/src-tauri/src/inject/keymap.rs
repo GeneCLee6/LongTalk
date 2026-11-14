@@ -5,12 +5,14 @@
 // ui/events/keycodes/dom/dom_code_data.inc, the same source the browser's `code` comes from.
 
 /** A Windows scan code; `extended` sends KEYEVENTF_EXTENDEDKEY (the E0 prefix) */
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WinKey {
     pub scan: u16,
     pub extended: bool,
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const fn k(scan: u16) -> Option<WinKey> {
     Some(WinKey {
         scan,
@@ -18,6 +20,7 @@ const fn k(scan: u16) -> Option<WinKey> {
     })
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const fn e(scan: u16) -> Option<WinKey> {
     Some(WinKey {
         scan,
@@ -26,6 +29,7 @@ const fn e(scan: u16) -> Option<WinKey> {
 }
 
 /** The Windows scan code of a control key code; None for a code it does not know */
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn windows_key(code: &str) -> Option<WinKey> {
     if let Some(letter) = code.strip_prefix("Key") {
         const LETTERS: [u16; 26] = [
