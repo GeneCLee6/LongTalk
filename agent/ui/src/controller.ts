@@ -8,6 +8,10 @@
 //   `share`, publish through the same MediaTransport as the web app (CLAUDE.md rule 2), `tracks`;
 //   stopping is `tracks` without it and `unshare`. Rust refuses all of it unless the person
 //   confirmed and turned the switch on (T-01a), so a bug here cannot publish early.
+// - N5 (e9-t08, e9-t09): another screen while sharing (the picker again, the new track replacing
+//   the old under the same track name: the room sees the same share); which of several same-sized
+//   screens the controller's pointer aims at (Rust decides, and refuses a change while controlled);
+//   what the OS must allow (permissions.rs), read again whenever the window comes back to the front.
 import { normalizeLabel, normalizePairingCode } from '../../../shared/control.ts'
 import {
   HEARTBEAT_INTERVAL_MS,
@@ -22,7 +26,15 @@ import type { MediaTransport, PublishedTrack } from '../../../src/media/MediaTra
 import { captureScreen, type ShareProblem } from '../../../src/media/share.ts'
 import { Backoff } from '../../../src/room/backoff.ts'
 import { closeProblem, parseJoinTarget, type CloseProblem } from './link.ts'
-import { native, nativeFetch, type AgentInfo, type Phase, type SocketEvent } from './native.ts'
+import {
+  native,
+  nativeFetch,
+  type AgentInfo,
+  type Permissions,
+  type Phase,
+  type ScreenChoice,
+  type SocketEvent,
+} from './native.ts'
 
 export type JoinProblem =
   'foreignLink' | 'badRoom' | 'badPairing' | 'badDevice' | CloseProblem | 'lost'
@@ -39,6 +51,10 @@ export interface AgentView {
   notice: ShareNotice | null
   /** The picker is open or the share is being set up or taken down */
   shareBusy: boolean
+  /** N5: what the OS must allow (null until read) */
+  permissions: Permissions | null
+  /** N5: the screens that fit the share, when several do (else empty) */
+  screens: ScreenChoice[]
 }
 
 export class AgentController {
@@ -49,6 +65,8 @@ export class AgentController {
     problem: null,
     notice: null,
     shareBusy: false,
+    permissions: null,
+    screens: [],
   }
   #listeners = new Set<() => void>()
   #device = ''
@@ -87,6 +105,43 @@ export class AgentController {
     const [info, phase] = await Promise.all([native.info(), native.sessionState()])
     this.#set({ info })
     this.#onPhase(phase)
+    await this.refreshPermissions()
+  }
+
+  /** N5: reads what the OS allows now (on start, and when the window comes back to the front) */
+  async refreshPermissions(): Promise<void> {
+    const permissions = await native.permissions().catch(() => null)
+    if (permissions) this.#set({ permissions })
+  }
+
+  /** N5: the guide's 「打開設定」 (macOS asks, its settings page opens) */
+  async requestPermission(kind: 'screen' | 'accessibility' | 'inputMonitoring'): Promise<void> {
+    await native.requestPermission(kind).catch(() => false)
+  }
+
+  /** N5: 「你分享的是哪一個螢幕？」 (Rust refuses it while someone controls this computer) */
+  async chooseScreen(index: number | null): Promise<void> {
+    await native.chooseScreen(index).catch(() => {})
+    await this.#refreshScreens()
+  }
+
+  async #refreshScreens(): Promise<void> {
+    const screens = await native.screens().catch((): ScreenChoice[] => [])
+    this.#set({ screens })
+  }
+
+  /** Tells Rust which screen the track shows, for remote control's pointer (N4) */
+  async #aim(track: MediaStreamTrack | null): Promise<void> {
+    const settings = track?.getSettings()
+    await native
+      .sharedScreen(
+        settings?.width ?? null,
+        settings?.height ?? null,
+        settings !== undefined &&
+          (settings.displaySurface === undefined || settings.displaySurface === 'monitor'),
+      )
+      .catch(() => {})
+    await this.#refreshScreens()
   }
 
   #onPhase(phase: Phase): void {
@@ -210,16 +265,9 @@ export class AgentController {
     }
     const track = capture.track
     this.#screen = track
-    track.addEventListener('ended', () => void this.stopShare())
+    this.#watchEnd(track)
     // Which screen this is, for remote control's pointer (N4): only a whole screen is aimed at
-    const settings = track.getSettings()
-    await native
-      .sharedScreen(
-        settings.width ?? null,
-        settings.height ?? null,
-        settings.displaySurface === undefined || settings.displaySurface === 'monitor',
-      )
-      .catch(() => {})
+    await this.#aim(track)
     try {
       await native.setSharing(true)
       await native.send(JSON.stringify({ t: 'share' }))
@@ -230,6 +278,47 @@ export class AgentController {
     } catch {
       await this.stopShare('failed')
     }
+  }
+
+  /** The share stops when the system ends its track (not when we replaced it, N5) */
+  #watchEnd(track: MediaStreamTrack): void {
+    track.addEventListener('ended', () => {
+      if (this.#screen === track) void this.stopShare()
+    })
+  }
+
+  /**
+   * 「換一個螢幕」 (N5, e9-t09): the picker again while sharing; the new track takes the old one's
+   * place in the same published track (replaceTrack: the room and the viewers keep the same share),
+   * and the pointer aims at the new screen. Cancelling the picker keeps the old screen.
+   */
+  async switchScreen(): Promise<void> {
+    const published = this.#published
+    const transport = this.#transport
+    const old = this.#screen
+    if (!published || !transport || !old || this.#view.shareBusy) return
+    this.#set({ shareBusy: true, notice: null })
+    const capture = await captureScreen(undefined, false)
+    if (!capture.ok) {
+      this.#set({
+        shareBusy: false,
+        notice: capture.problem === 'cancelled' ? null : capture.problem,
+      })
+      return
+    }
+    const track = capture.track
+    try {
+      await transport.replaceTrack(published.trackName, track)
+    } catch {
+      track.stop()
+      this.#set({ shareBusy: false, notice: 'failed' })
+      return
+    }
+    this.#screen = track
+    this.#watchEnd(track)
+    old.stop()
+    await this.#aim(track)
+    this.#set({ shareBusy: false })
   }
 
   /** The track list with the screen, after `share` again when coming back from a drop */
@@ -264,6 +353,7 @@ export class AgentController {
     await native.send(JSON.stringify({ t: 'unshare' })).catch(() => {})
     await native.setSharing(false).catch(() => {})
     track?.stop()
+    await this.#aim(null)
     this.#set({ shareBusy: false, notice })
   }
 

@@ -283,6 +283,57 @@ button:disabled {
   background: var(--lt-onDanger);
 }
 
+/* N5: 「不允許貼上」 beside 中斷, only while pasting is allowed */
+.agent-stop-paste {
+  flex: none;
+  color: var(--lt-onDanger);
+  background: transparent;
+  border-color: var(--lt-onDanger);
+  font-weight: 600;
+}
+
+.agent-check-note {
+  margin: -6px 0 0 26px;
+  font-size: 13px;
+}
+
+/* N5: the permission guide and the screen picker in the main window */
+.agent-permissions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--lt-line);
+  border-radius: 12px;
+}
+
+.agent-permissions h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.agent-permission {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-screens {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-screens select {
+  font: inherit;
+  padding: 6px 8px;
+  color: var(--lt-fg);
+  background: var(--lt-bg);
+  border: 1px solid var(--lt-line);
+  border-radius: 8px;
+}
+
 /* One strip of the red border around the screen */
 html[data-window='border'],
 html[data-window='border'] body,

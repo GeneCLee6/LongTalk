@@ -1,6 +1,6 @@
 # LongTalk 代理（桌面端）
 
-被控端電腦上的小程式（E9，Tauri v2）。N2（`e9-t02`、`e9-t03`）做到：用會議室連結（或代碼）＋一次性配對碼加入房間、發布前的本機確認、托盤、把這台電腦的螢幕分享到會議室（可以挑哪一個螢幕）。N3（`e9-t04`、`e9-t05`）做到：控制請求的同意對話框、紅框與浮動「中斷」鈕、托盤的「中斷控制」與「暫停接受控制請求」、檢查每一批控制事件（授權、序號、按住的輸入）。N4（`e9-t06`、`e9-t07`）做到：真的移動滑鼠、按鍵與打字（Windows；macOS 寫了還沒在 Mac 上跑過），組合鍵的封鎖與提示、按下不送到代理自己的視窗、實體 Esc 連按三下中斷、鎖定即結束、開始時的系統通知與紅色托盤圖示、代理日誌（托盤「開啟日誌」）。
+被控端電腦上的小程式（E9，Tauri v2）。N2（`e9-t02`、`e9-t03`）做到：用會議室連結（或代碼）＋一次性配對碼加入房間、發布前的本機確認、托盤、把這台電腦的螢幕分享到會議室（可以挑哪一個螢幕）。N3（`e9-t04`、`e9-t05`）做到：控制請求的同意對話框、紅框與浮動「中斷」鈕、托盤的「中斷控制」與「暫停接受控制請求」、檢查每一批控制事件（授權、序號、按住的輸入）。N4（`e9-t06`、`e9-t07`）做到：真的移動滑鼠、按鍵與打字（Windows；macOS 寫了還沒在 Mac 上跑過），組合鍵的封鎖與提示、按下不送到代理自己的視窗、實體 Esc 連按三下中斷、鎖定即結束、開始時的系統通知與紅色托盤圖示、代理日誌（托盤「開啟日誌」）。N5（`e9-t08`、`e9-t09`）做到：Linux（X11）的注入、macOS 的權限引導、逐視窗檢查與 Esc×3（要「輸入監控」）、UAC 時讓控制端看到「等對方處理系統對話框」、對方在同意對話框勾了才能「貼到對方電腦」（只寫剪貼簿、從不讀）、分享中「換一個螢幕」與「你分享的是哪一個螢幕？」、三個平台的安裝檔。**macOS 與 Linux 只在 CI 編譯並跑單元測試，還沒在真的 Mac 或 Linux 桌面上跑過**（`DEPLOY.md` §5 第 40 步）。
 
 威脅模型與每個設計決定在 [`docs/PRD/f-remote-control-security.md`](../docs/PRD/f-remote-control-security.md)（§5.1 配對、§5.8 本機攻擊面、§5.9 更新）；通訊協定在 [`shared/control.ts`](../shared/control.ts)。
 
@@ -15,8 +15,10 @@
 | `src-tauri/src/tray.rs` | 托盤：狀態、「中斷控制」（控制中）、「打開 LongTalk 代理」「分享我的螢幕」「暫停接受控制請求」「離開房間」「結束」 |
 | `src-tauri/src/control.rs` | 遠端控制的狀態機（N3，T-04、T-05、T-06、T-12 的單元測試在這裡）：只有同意對話框按下的答案能開始控制、1 秒後才有效、60 秒自動拒絕；`controlStart` 的時長要和自己的回答一致；`allow10` 用自己的時鐘結束、「直到我中斷」每小時再問；每批事件照 `shared/control.ts` 的規則檢查、記住按住的輸入並在 1 秒沒批次、結束、對話框前放開 |
 | `src-tauri/src/control_windows.rs` | 控制時的視窗：同意對話框（`#consent`，只有它能回答，`capabilities/consent.json`）、浮動「中斷」鈕（`#stop`）、每個螢幕四條紅框（`#border`，滑鼠點得穿）；都關不掉 |
-| `src-tauri/src/inject/` | 注入（N4）：`mod.rs` 的 `plan`（純函式：組合鍵封鎖與提示、補按修飾鍵、座標換到被分享的螢幕、`pick_screen`）、`keymap.rs`（`KeyboardEvent.code` → Windows 掃描碼、macOS 鍵碼）、`windows.rs`（`SendInput`、代理自己的視窗不收按下、安全桌面、鎖定）、`macos.rs`（`CGEvent`，還沒在 Mac 上跑過） |
-| `src-tauri/src/escape.rs` | 實體 Esc 1 秒內三下就中斷（Windows 低階鍵盤 hook，只在授權期間、只看 Esc；T-17） |
+| `src-tauri/src/inject/` | 注入（N4、N5）：`mod.rs` 的 `plan`（純函式：組合鍵封鎖與提示、補按修飾鍵、座標換到被分享的螢幕、`candidates`／`pick_screen_chosen`）、`keymap.rs`（`KeyboardEvent.code` → Windows 掃描碼、macOS 鍵碼、X11 keycode）、`windows.rs`（`SendInput`、代理自己的視窗不收按下、安全桌面、鎖定）、`macos.rs`（`CGEvent`、逐視窗檢查、注入標記）、`linux.rs`（XTest，`x11rb`；Wayland 不注入）。macOS 與 Linux 還沒在真的機器上跑過 |
+| `src-tauri/src/escape.rs` | 實體 Esc 1 秒內三下就中斷（Windows 低階鍵盤 hook；macOS 只聽不改的 event tap，要「輸入監控」；只在授權期間、只看 Esc；T-17）。Linux 沒有（用浮動鈕與托盤） |
+| `src-tauri/src/permissions.rs` | N5：系統要允許什麼（macOS 螢幕錄製、輔助使用、輸入監控；Linux 有沒有 X11），主視窗的權限引導與「打開設定」 |
+| `src-tauri/src/clipboard.rs` | N5：把對方貼過來的文字放上剪貼簿（只寫、從不讀；文字不記，日誌只記字數） |
 | `src-tauri/src/agent_log.rs` | 代理日誌（§5.10、T-13）：一天一個檔、保留 30 天、不記任何打字內容 |
 | `src-tauri/src/updater.rs` | 自動更新（`updater` feature，預設關，見下面「擁有者要做的事」） |
 | `ui/` | 打包進代理的頁面（Vite ＋ React）：加入表單、連線中、本機確認、房間。擷取螢幕用 WebView 的 `getDisplayMedia`，發布用和網頁版同一個 `MediaTransport`（`src/media/CloudflareRealtimeTransport.ts`，CLAUDE.md 規則 2），它的 HTTP 經 Rust 的 `api_fetch` |
@@ -45,7 +47,7 @@ npx vitest run tests/agent
 
 ## 發布
 
-`.github/workflows/agent.yml`：推 `agent-v*` tag（或手動執行並填 tag）→ Windows 與 macOS（universal）建置 → 放到 **草稿** GitHub Release，附 `SHA256SUMS.txt` 並寫進說明。擁有者看過草稿再按發布。
+`.github/workflows/agent.yml`：推 `agent-v*` tag（或手動執行並填 tag）→ Windows、macOS（universal）與 Linux（Ubuntu 22.04 上建的 deb、rpm、AppImage）建置 → 放到 **草稿** GitHub Release，附 `SHA256SUMS.txt` 並寫進說明。擁有者看過草稿再按發布。PR 上的檢查是另一個 workflow `.github/workflows/agent-ci.yml`（三個平台的 `cargo fmt`、`clippy`、`cargo test`，不打包）。
 
 ```bash
 # 版本號在 agent/src-tauri/tauri.conf.json 與 Cargo.toml 的 version，兩個一起改
@@ -56,6 +58,9 @@ Windows 與 macOS 的安裝檔**沒有作業系統簽章**（§5.9：不買 Auth
 
 - Windows：`certutil -hashfile "LongTalk Agent_0.1.0_x64-setup.exe" SHA256`（另有 `.msi`）
 - macOS：`shasum -a 256 "LongTalk Agent_0.1.0_universal.dmg"`
+- Linux：`sha256sum "LongTalk Agent_0.1.0_amd64.deb"`（或 `.AppImage`、`.rpm`）
+
+macOS 第一次打開未簽章的 App：在 Finder 對它按右鍵 ›「打開」再按「打開」；之後主視窗的權限引導會列出要給的權限。Linux 要用 X11 工作階段（登入畫面選「Ubuntu on Xorg」之類）才能被控制，Wayland 只能分享螢幕。
 
 ## 擁有者要做的事：開啟自動更新
 
@@ -75,8 +80,8 @@ Windows 與 macOS 的安裝檔**沒有作業系統簽章**（§5.9：不買 Auth
 
 之後的 `agent-v*` 版本會用 `--features updater` 建置、簽章，Release 多一個 `latest.json`（代理從 `https://github.com/GeneCLee6/LongTalk/releases/latest/download/latest.json` 讀）。代理啟動 15 秒後檢查一次，**只在沒加入任何房間時**下載、安裝並重新啟動。私鑰遺失就無法再發更新給已安裝的代理（只能請大家手動重裝），請備份。
 
-## 接下來（N3–N5）
+## 批次紀錄（N2–N5）
 
 - **N3**（`e9-t04`、`e9-t05`）：控制請求與同意對話框（系統層級、預設焦點在拒絕、1 秒內不收點擊）、全員提示、紅框與「中斷」鈕；`controlForward` 經 RoomDO 轉送、序號與速率。
 - **N4**（`e9-t06`、`e9-t07`）：做完（見上）。實機在 `DEPLOY.md` §5 第 39 步。
-- **N5**（`e9-t08`）：macOS 權限引導（螢幕錄製、輔助使用、輸入監控）與 macOS 注入的實機、Esc×3 與逐視窗檢查的 macOS 版、Linux（XTest）、UAC 時讓控制端看到「等對方處理系統對話框」、安裝包與更新的實測（T-20）。
+- **N5**（`e9-t08`、`e9-t09`）：做完（見上）。實機在 `DEPLOY.md` §5 第 40 步（macOS、Linux、剪貼簿、多螢幕、UAC、真的發一版）。

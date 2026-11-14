@@ -53,6 +53,11 @@ export interface ShareControl {
   action: { label: string; title: string; danger?: boolean; onClick: () => void } | null
   /** We hold the grant: the tile sends our pointer and keys */
   capture: { grant: string; send: (message: ControlEventMessage) => void; label: string } | null
+  /**
+   * N5 (e9-t09): 「貼到對方電腦」, while we hold a grant whose person allowed pasting; absent or null:
+   * no such button
+   */
+  paste?: { label: string; title: string; ariaLabel: string; onClick: () => void } | null
 }
 
 /** The marks on this share (J2, e7-t04) */
@@ -210,7 +215,7 @@ export function ShareTile({
             <ControlLayer key={capture.grant} {...capture} />
           </Suspense>
         )}
-        {!onShowMain && control && (control.status || control.action) && (
+        {!onShowMain && control && (control.status || control.action || control.paste) && (
           <ControlBar>
             {control.status && (
               <ControlStatus role="status" $granted={control.status.granted}>
@@ -225,6 +230,16 @@ export function ShareTile({
                 onClick={control.action.onClick}
               >
                 {control.action.label}
+              </Button>
+            )}
+            {control.paste && (
+              <Button
+                variant="secondary"
+                title={control.paste.title}
+                aria-label={control.paste.ariaLabel}
+                onClick={control.paste.onClick}
+              >
+                {control.paste.label}
               </Button>
             )}
           </ControlBar>

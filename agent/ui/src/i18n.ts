@@ -53,6 +53,26 @@ const zhTW = {
     notSharing: '目前沒有分享螢幕',
     pickHint: '打開後選擇要分享的螢幕（有多個螢幕時可以挑一個）',
     leave: '離開房間',
+    // N5 (e9-t09): another screen while sharing; which one the controller's pointer aims at
+    switchScreen: '換一個螢幕',
+    whichScreen: '你分享的是哪一個螢幕？',
+    whichScreenHint:
+      '有幾個螢幕一樣大，選你分享的那一個，對方的滑鼠才會點在對的地方。控制中不能改。',
+    screenLabel: (n: number, width: number, height: number, primary: boolean) =>
+      `螢幕 ${n}（${width}×${height}${primary ? '，主螢幕' : ''}）`,
+  },
+  // N5 (e9-t08): what the system must allow before remote control works here
+  permissions: {
+    title: '遠端控制需要的系統權限',
+    intro: '這台電腦要先在系統設定裡允許下面幾項，別人請求控制時才有作用。',
+    screen: '螢幕錄製：讓會議室看到你的螢幕',
+    accessibility: '輔助使用：讓對方的滑鼠和鍵盤有作用（沒有的話什麼都不會發生）',
+    inputMonitoring: '輸入監控（選用）：連按三下 Esc 中斷控制；沒給也可以按「中斷」',
+    open: '打開設定',
+    granted: '已允許',
+    afterUpdate: '更新代理之後，系統可能要你重新允許一次。',
+    noX11:
+      '這台電腦用的是 Wayland，代理不能操作滑鼠和鍵盤；要遠端控制，請在登入畫面改用「X11」或「Xorg」工作階段。',
   },
   shareProblems: {
     denied: '系統不允許擷取螢幕，請到系統設定開放權限',
@@ -81,6 +101,12 @@ const zhTW = {
     controlling: (name: string) => `${name} 正在控制這台電腦`,
     pressed: (name: string, combo: string) => `${name} 按了 ${combo}`,
     failed: '沒有送出，請再按一次',
+    // N5 (e9-t09): pasting text from the controller, off unless ticked here
+    allowPaste: '也允許對方把文字貼到這台電腦的剪貼簿',
+    allowPasteNote: '只會從對方那邊放進來，不會讀你的剪貼簿。之後隨時可以關掉。',
+    pasteOn: '對方可以貼上文字',
+    pasteOff: '不允許貼上',
+    pasted: (name: string, chars: number) => `${name} 放了 ${chars} 個字到你的剪貼簿`,
   },
 }
 
@@ -138,6 +164,26 @@ const en: AgentStrings = {
     notSharing: 'Not sharing the screen',
     pickHint: 'Turn it on to pick the screen to share (one of several monitors, too)',
     leave: 'Leave the room',
+    switchScreen: 'Share another screen',
+    whichScreen: 'Which screen are you sharing?',
+    whichScreenHint:
+      'Some of your screens are the same size: pick the one you share, so their pointer lands in the right place. It can’t be changed while someone controls this computer.',
+    screenLabel: (n: number, width: number, height: number, primary: boolean) =>
+      `Screen ${n} (${width}×${height}${primary ? ', main' : ''})`,
+  },
+  permissions: {
+    title: 'System permissions for remote control',
+    intro: 'Allow these in the system settings first, so that a control request can work here.',
+    screen: 'Screen Recording: lets the room see your screen',
+    accessibility:
+      'Accessibility: lets their mouse and keyboard work (without it nothing happens at all)',
+    inputMonitoring:
+      'Input Monitoring (optional): press Esc three times to stop control; Stop works without it',
+    open: 'Open settings',
+    granted: 'Allowed',
+    afterUpdate: 'After an update, the system may ask you to allow these again.',
+    noX11:
+      'This computer uses Wayland, where the agent can’t use the mouse and keyboard. For remote control, choose an “X11” or “Xorg” session at the login screen.',
   },
   shareProblems: {
     denied: 'The system does not allow capturing the screen: allow it in the system settings',
@@ -168,6 +214,12 @@ const en: AgentStrings = {
     controlling: (name: string) => `${name} is controlling this computer`,
     pressed: (name: string, combo: string) => `${name} pressed ${combo}`,
     failed: 'That did not go through; press it again',
+    allowPaste: 'Also let them paste text to this computer’s clipboard',
+    allowPasteNote:
+      'Only from them to you: your clipboard is never read. You can turn it off at any time.',
+    pasteOn: 'They can paste text',
+    pasteOff: 'Stop pasting',
+    pasted: (name: string, chars: number) => `${name} put ${chars} characters on your clipboard`,
   },
 }
 

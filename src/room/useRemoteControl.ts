@@ -1,5 +1,10 @@
 import { useEffect } from 'react'
-import type { ControllerServerMessage, ControlErrorCode } from '../../shared/control.ts'
+import {
+  MAX_CLIPBOARD_CHARS,
+  normalizeClipboardText,
+  type ControllerServerMessage,
+  type ControlErrorCode,
+} from '../../shared/control.ts'
 import type { ClientMessage, ErrorCode, Member, RoomView } from '../../shared/protocol.ts'
 import { can, type Role } from '../../shared/roles.ts'
 import type { ShareControl } from '../components/ShareTile.tsx'
@@ -14,6 +19,7 @@ const CONTROL_ERRORS: readonly ControlErrorCode[] = [
   'control_cooldown',
   'control_muted',
   'control_off',
+  'control_clipboard_off',
 ]
 
 const isControlError = (code: ErrorCode): code is ControlErrorCode =>
@@ -29,6 +35,38 @@ export interface RemoteControlOptions {
   onControl: (listener: (message: ControllerServerMessage) => void) => () => void
   onError: (listener: (code: ErrorCode) => void) => () => void
   show: (text: string, tone?: ToastTone) => void
+  /** Reads our clipboard's text on a press (N5); tests pass their own */
+  readClipboard?: () => Promise<string>
+}
+
+const readSystemClipboard = (): Promise<string> => navigator.clipboard.readText()
+
+/**
+ * 「貼到對方電腦」 (N5, e9-t09): reads our clipboard on the press (the browser asks once), checks it as
+ * the room and the agent will (normalizeClipboardText) and sends it; what we read is used for this
+ * one message and kept nowhere
+ */
+export async function pasteToComputer(
+  grant: string,
+  read: () => Promise<string>,
+  send: (message: ClientMessage) => void,
+  show: (text: string, tone?: ToastTone) => void,
+): Promise<void> {
+  let raw: string
+  try {
+    raw = await read()
+  } catch {
+    show(strings.control.pasteUnreadable, 'warn')
+    return
+  }
+  if (raw === '') return show(strings.control.pasteEmpty, 'warn')
+  if (raw.length > MAX_CLIPBOARD_CHARS) {
+    return show(strings.control.pasteTooLong(MAX_CLIPBOARD_CHARS), 'warn')
+  }
+  const text = normalizeClipboardText(raw)
+  if (text === null) return show(strings.control.pasteBadText, 'warn')
+  // The room's `controlPasted` notice says it went (or `control_clipboard_off` that it did not)
+  send({ t: 'controlClipboard', grant, text })
 }
 
 /**
@@ -46,6 +84,7 @@ export function useRemoteControl({
   onControl,
   onError,
   show,
+  readClipboard = readSystemClipboard,
 }: RemoteControlOptions) {
   const nameOf = (id: string) => view?.members[id]?.name ?? ''
 
@@ -78,9 +117,11 @@ export function useRemoteControl({
     const status = session
       ? {
           text: granted
-            ? session.controller === you
-              ? strings.control.youControl
-              : strings.control.controlling(nameOf(session.controller))
+            ? session.blocked
+              ? strings.control.blocked
+              : session.controller === you
+                ? strings.control.youControl
+                : strings.control.controlling(nameOf(session.controller))
             : session.controller === you
               ? strings.control.waitingAnswer
               : strings.control.asking(nameOf(session.controller)),
@@ -119,7 +160,16 @@ export function useRemoteControl({
             label: strings.control.captureLabel(sharer.name),
           }
         : null
-    return { status, action, capture }
+    const paste =
+      capture && session?.clipboard
+        ? {
+            label: strings.control.paste,
+            title: strings.control.pasteHint(MAX_CLIPBOARD_CHARS),
+            ariaLabel: strings.control.pasteLabel(sharer.name),
+            onClick: () => void pasteToComputer(capture.grant, readClipboard, send, show),
+          }
+        : null
+    return { status, action, capture, paste }
   }
 
   /** The agents someone controls now (the participants list's 停止遠端控制) */

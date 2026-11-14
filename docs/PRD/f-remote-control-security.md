@@ -255,14 +255,14 @@ RoomDO 仍是授權的唯一來源：同意時多發一把 32 bytes 的隨機金
 ### 5.11 隱私
 
 - 控制事件只在 RoomDO 的記憶體裡經過，**不存、不錄、不記**；本機錄影（I4）只錄畫面與聲音，不錄控制事件。
-- 剪貼簿同步（`e9-t09`，選用）預設關閉；打開也只做「控制端 → 被控端」且要按「貼到對方電腦」，**永不自動讀被控端的剪貼簿**（常常放著剛複製的密碼）。
+- 剪貼簿同步（`e9-t09`，選用）預設關閉；打開也只做「控制端 → 被控端」且要按「貼到對方電腦」，**永不自動讀被控端的剪貼簿**（常常放著剛複製的密碼）。N5：打開的地方是同意對話框的勾選（預設不勾），控制期間只能關；全員看得到每一次貼上（不含內容）；見 §10 的 N5。
 - 被控端的畫面是分享軌，同組所有人都看得到（對話框明講）；要只給一個人看，用分組討論室。
 
 ### 5.12 作業系統
 
 - **Windows**：代理以一般（medium integrity）權限執行。UIPI 讓它無法對系統管理員權限的視窗注入（例如以系統管理員執行的工作管理員、安裝程式）；UAC 提示在安全桌面上，代理既擷取不到（畫面變黑）也注入不了。設計上**接受**這個限制：提權永遠要被控端的人自己按。代理偵測到安全桌面時暫停並讓控制端看到「等對方處理系統對話框」，不結束授權。不用 `uiAccess`（要簽章並裝在 Program Files，而且等於讓遠端操作者能控制 UAC）。
 - **macOS**：需要「螢幕錄製」與「輔助使用」（可能還有「輸入監控」，見 §5.4）權限，代理第一次啟動做權限引導（`e9-t08`）；沒權限時明說哪個沒給，不靜默失敗。密碼欄位的 secure input 對注入的影響由 N4 實測記錄。
-- **Linux**：X11 用 XTest，可用；Wayland 沒有通用的注入方式，走 xdg-desktop-portal 的 RemoteDesktop portal（它有自己的系統同意對話框，再加上我們的），盡力而為。
+- **Linux**：X11 用 XTest，可用；Wayland 沒有通用的注入方式，走 xdg-desktop-portal 的 RemoteDesktop portal（它有自己的系統同意對話框，再加上我們的），盡力而為。N5：X11 做了（`inject/linux.rs`）；Wayland 沒做，代理明說不能控制。
 
 ## 6. 威脅表（STRIDE）
 
@@ -377,6 +377,8 @@ S 冒充、T 竄改、R 否認、I 資訊外洩、D 阻斷服務、E 提權。�
       **A（已決定，N1 審查）：** 不要，已從協定拿掉。通行密鑰證明「有一個帳號」，但成員身上沒有被控端認得出來的穩定帳號代號，徽章只會讓人以為身分被驗證過。哪天協定有了可辨認的帳號代號（例如擁有者核發的固定名稱）再重新考慮。
 
 ## 10. 變更紀錄
+
+- 2026-11-14 N5（`e9-t08`、`e9-t09`）：多平台、剪貼簿、多螢幕，協定 v28（`controlClipboard`、`controlPaste`、`controlStatus`、`controlAnswer.clipboard`、`ControlSession.clipboard`／`blocked`、notice `controlPasted`、錯誤碼 `control_clipboard_off`；`AGENT_PROTOCOL_VERSION` 不變，新的欄位與訊息都是加上去的）。**做完的測試**：T-16 的「告訴控制端」部分（代理每 200 ms 看安全桌面，`controlStatus` → `RoomView.control[agent].blocked`，`tests/worker/room-n3.test.ts`、`control.rs`）；T-20 的 CI 部分（`agent.yml` 三個平台的安裝檔與 `SHA256SUMS.txt`，`agent-ci.yml` 在 PR 上編譯與測試）；T-22（預設關、只做控制端 → 被控端、不讀被控端剪貼簿：`tests/worker/room-n3.test.ts`、`tests/shared/control-n5.test.ts`、`tests/app/n3.test.tsx`、`tests/agent/consent.test.tsx`、`control.rs`；`clipboard.rs` 沒有任何讀的函式）；T-24 的程式部分（`permissions.rs`、`tests/agent/permissions.test.tsx`）。**實機待做**：T-04（macOS 逐視窗）、T-11（macOS、Linux）、T-14（macOS 的 Esc×3、Linux 鎖定）、T-16（UAC 實機）、T-20（真的發一版、更新簽章）、T-22、T-24（`DEPLOY.md` §5 第 40 步）。**實作時的決定**：(1) **剪貼簿的同意在同意對話框裡**（「也允許對方把文字貼到這台電腦的剪貼簿」，預設不勾），不放在控制期間的浮動條：控制期間代理的視窗在 macOS、Linux 不一定擋得住注入的點擊，浮動條與托盤因此只能**關掉**貼上（`controlStatus` 的 `clipboard` 在 RoomDO 只會由 true 變 false），打開只有同意對話框（那時本來就不注入）。(2) 一次最多 `MAX_CLIPBOARD_CHARS` 2000 個 UTF-16 單位、每個授權每 10 秒 3 次（`CONTROL_CLIPBOARD_RATE`）；只收文字，除了 Tab 與換行之外的控制字元、bidi 覆寫一律拒絕（Trojan Source）；代理收 `controlPaste` 的上限 `MAX_PASTE_FRAME_CHARS` 16 k。(3) 全員收到 `controlPasted`（誰放到哪台電腦，不含內容）；RoomDO 不存文字，代理日誌只記字數與有沒有寫進去。(4) **多螢幕**：同樣大小的螢幕不只一個時（例如兩台一樣的螢幕），代理主視窗問「你分享的是哪一個螢幕？」，只能從和分享畫面同大小的螢幕裡選（`inject::candidates`），**控制中不能改**（`choose_screen` 拒絕：避免控制端用注入的點擊把滑鼠導到沒有人看得到的螢幕）；分享中可以「換一個螢幕」（`replaceTrack`，同一個軌，滑鼠跟著新螢幕）。(5) **macOS**：逐視窗檢查用 `CGWindowListCopyWindowInfo`（只讀擁有者 pid、圖層與位置，不讀標題或畫面，不需要額外權限）：按鍵與滑鼠鍵按下時，游標下的視窗（滑鼠）或最前面的一般視窗（鍵盤）是代理自己的就不送；注入的事件帶 `kCGEventSourceUserData` 標記，Esc×3 用只聽不改的 event tap（要「輸入監控」，沒給就沒有 Esc×3，浮動鈕與托盤照常）。(6) **Linux**：X11 用 XTest（`x11rb`，純 Rust）；輸入法文字用「暫時把一個空的 keycode 對到那個字的 keysym」再按（xdotool 的做法）；X11 分不出事件是哪個程式送的，所以**沒有逐視窗檢查**，同 macOS 原本的退路（同意對話框期間不注入，其他代理視窗只能讓控制變少）；鎖定看 systemd-logind 的 `LockedHint`（每秒最多問一次）；Esc×3 不做（X11 要聽全域按鍵只能用 XRecord，等於讀所有視窗的每個鍵，超過需要），用浮動鈕與托盤。Wayland 沒有一般程式能用的注入，代理在主視窗明說不能控制，不做 portal（§5.12 的盡力而為，留到真的有人用 Wayland 再說）。(7) 安裝檔：Windows（NSIS、MSI）、macOS（universal DMG）、Linux（deb、rpm、AppImage，在 Ubuntu 22.04 上建）；照 D12 不買 OS 簽章。
 
 - 2026-11-13 N4（`e9-t06`、`e9-t07`）：注入（`agent/src-tauri/src/inject/`）、Esc×3（`escape.rs`）、鎖定即結束、開始時的系統通知、紅色托盤圖示、代理日誌（`agent_log.rs`）。**做完的測試**：T-04 的「注入的輸入對代理視窗無效」在 Windows 以「注入端不送」實作（見下）；T-06 的代理端注入時用「這批之前按住的」判斷；T-11 的規則層（`classify_key_combo` 與 TS 同一套、修飾鍵拆開送也封鎖、`mods` 補按）；T-13（日誌只有組合鍵名稱，餵打字內容的測試）；T-14 的 Esc 計數（1 秒內三下、按住不算）；T-17（hook 只在授權期間、只看 Esc、不吞任何鍵）。**實機待做**：T-04、T-11、T-14、T-16、T-23（`DEPLOY.md` §5 第 39 步）。**實作時的決定**：(1) §5.8「代理的視窗不接受注入的輸入」在 Windows 不用低階滑鼠 hook，改成**注入端自己不送**：按下（鍵、滑鼠鍵、滾輪、文字）前看目標是不是代理自己的行程的視窗（滑鼠看游標下的視窗、鍵盤看前景視窗），是就不送、記一次 `agentWindow`；放開一律送，免得卡住。理由：會注入的只有代理自己（其他會注入的本機程式本來就不在防禦範圍，§5.8 最後一點），在源頭擋比 hook 可靠（低階 hook 太慢會被 Windows 略過）。紅框是滑鼠點得穿的，點在螢幕最邊上 6 px 的按下可能被當成代理視窗而不送，接受。托盤圖示本身在 Windows 工作列（不是代理的視窗），點得開選單，但選單裡的項目點不了。(2) macOS 沒有逐視窗的檢查：同意對話框與每小時確認期間本來就不注入（`control.rs` 暫停），其他代理視窗只能讓控制變少（中斷、暫停請求、離開）；N5 有「輸入監控」權限後再補。macOS 的 Esc×3 也等 N5（Q12）。(3) 多螢幕：網頁告訴 Rust 擷取到的畫面大小（`shared_screen`），Rust 找同樣像素（或同樣長寬比、優先主螢幕）的螢幕；分享的是視窗或對不上時**滑鼠完全不動**（日誌 `noScreen`），鍵盤照常。這個指令只能決定瞄準哪裡，不能開始、延長或擴大控制。(4) UAC 的安全桌面：注入整批略過（記 `secureDesktop`），不結束授權；**控制端還看不到「等對方處理系統對話框」**（要動協定，留給 N5）。(5) 鎖定：每 200 ms 看一次工作階段是否鎖定或螢幕保護程式在跑（`WTSQuerySessionInformationW`、`SPI_GETSCREENSAVERRUNNING`；macOS `CGSSessionScreenIsLocked`），是就以 `locked` 結束。(6) 「提示」的組合鍵顯示在浮動中斷條上 8 秒（「B 按了 Win+R」）並記日誌，不另外跳通知。(7) 延遲：沒有加任何量測協定（AC-9.3 的量法改成實機用慢動作攝影，第 39 步）；控制通道照舊走 RoomDO WebSocket，量到不過才做 §5.5.3。
 - 2026-11-13 N1（`e9-t01`）：初版；協定 `shared/control.ts` 與測試 `tests/shared/control.test.ts`。

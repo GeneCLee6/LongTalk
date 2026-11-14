@@ -911,3 +911,159 @@ describe('every way control ends (T-15, §5.7)', () => {
     expect(bob.client.view!.control).toBeNull()
   })
 })
+
+// N5 (e9-t08, e9-t09): what the agent says about the grant, and pasting text (T-22, §5.11)
+describe('N5: the grant’s status and pasting (e9-t08, e9-t09)', () => {
+  /** `bob` controls `pc` (paired by alice); `clipboard`: the person ticked pasting in the dialog */
+  function controlled(clipboard: boolean | undefined) {
+    const t = setup()
+    const alice = t.join('Alice')
+    const bob = t.join('Bob')
+    const carol = t.join('Carol')
+    const pc = t.pair(alice)
+    const request = t.ask(bob, pc)
+    void t.send(pc, {
+      t: 'controlAnswer',
+      request,
+      decision: 'allow10',
+      ...(clipboard === undefined ? {} : { clipboard }),
+    })
+    const grant = bob.client.of('controlGranted').at(-1)!.grant
+    return { t, alice, bob, carol, pc, grant }
+  }
+  const paste = (grant: string, text: string) => ({ t: 'controlClipboard', grant, text })
+
+  it('takes no paste unless the person ticked it in the consent dialog (T-22: off by default)', () => {
+    for (const clipboard of [undefined, false]) {
+      const { t, bob, pc, grant } = controlled(clipboard)
+      expect(t.host.view().control?.[pc.id].clipboard).toBeUndefined()
+      void t.send(bob, paste(grant, 'https://example.com'))
+      expect(bob.client.errors).toContain('control_clipboard_off')
+      expect(pc.client.of('controlPaste')).toEqual([])
+    }
+  })
+
+  it('a deny allows nothing, whatever it says about the clipboard', () => {
+    const t = setup()
+    const alice = t.join('Alice')
+    const bob = t.join('Bob')
+    const pc = t.pair(alice)
+    const request = t.ask(bob, pc)
+    void t.send(pc, { t: 'controlAnswer', request, decision: 'deny', clipboard: true })
+    expect(t.host.view().control).toBeNull()
+  })
+
+  it('forwards a paste the grant allows to the agent and tells everyone, never the text', () => {
+    const { t, alice, bob, carol, pc, grant } = controlled(true)
+    for (const who of [alice, bob, carol]) {
+      expect(who.client.view!.control?.[pc.id]).toMatchObject({ phase: 'granted', clipboard: true })
+    }
+    void t.send(bob, paste(grant, '我的密碼 Hunter2\nsecond line'))
+    expect(pc.client.of('controlPaste')).toEqual([
+      { t: 'controlPaste', grant, text: '我的密碼 Hunter2\nsecond line' },
+    ])
+    for (const who of [alice, bob, carol]) {
+      expect(who.client.of('notice').at(-1)).toEqual({
+        t: 'notice',
+        notice: 'controlPasted',
+        by: bob.id,
+        agent: pc.id,
+      })
+      if (who !== bob) expect(JSON.stringify(who.client.received)).not.toContain('Hunter2')
+    }
+    // Not stored anywhere (D11)
+    expect(t.disk.writes.join('\n')).not.toContain('Hunter2')
+  })
+
+  it('takes a paste only from the socket holding the grant; others are dropped quietly', () => {
+    const { t, alice, carol, pc, grant } = controlled(true)
+    void t.send(carol, paste(grant, 'carol'))
+    void t.send(alice, paste(grant, 'alice'))
+    expect(pc.client.of('controlPaste')).toEqual([])
+    expect(carol.client.errors).toEqual([])
+  })
+
+  it('refuses a paste that is too long, empty or carries control characters (parse)', () => {
+    const { t, bob, pc, grant } = controlled(true)
+    void t.send(bob, paste(grant, 'x'.repeat(2_001)))
+    void t.send(bob, paste(grant, ''))
+    void t.send(bob, paste(grant, 'a\u0000b'))
+    void t.send(bob, paste(grant, 'evil\u202Etxt.exe'))
+    expect(pc.client.of('controlPaste')).toEqual([])
+    expect(bob.client.errors.filter((code) => code === 'bad_message')).toHaveLength(4)
+  })
+
+  it('takes at most CONTROL_CLIPBOARD_RATE pastes per grant', () => {
+    const { t, bob, pc, grant } = controlled(true)
+    for (let i = 0; i < 4; i++) void t.send(bob, paste(grant, `p${i}`))
+    expect(pc.client.of('controlPaste').map((m) => m.text)).toEqual(['p0', 'p1', 'p2'])
+    expect(bob.client.errors).toEqual(['control_clipboard_off'])
+    t.tick(10_000)
+    void t.send(bob, paste(grant, 'later'))
+    expect(pc.client.of('controlPaste').at(-1)?.text).toBe('later')
+  })
+
+  it('lets the agent turn pasting off, never on (on is the consent dialog’s alone)', () => {
+    const off = controlled(true)
+    void off.t.send(off.pc, {
+      t: 'controlStatus',
+      grant: off.grant,
+      blocked: null,
+      clipboard: false,
+    })
+    expect(off.t.host.view().control?.[off.pc.id].clipboard).toBeUndefined()
+    void off.t.send(off.pc, {
+      t: 'controlStatus',
+      grant: off.grant,
+      blocked: null,
+      clipboard: true,
+    })
+    expect(off.t.host.view().control?.[off.pc.id].clipboard).toBeUndefined()
+    void off.t.send(off.bob, paste(off.grant, 'no'))
+    expect(off.pc.client.of('controlPaste')).toEqual([])
+
+    const never = controlled(false)
+    void never.t.send(never.pc, {
+      t: 'controlStatus',
+      grant: never.grant,
+      blocked: null,
+      clipboard: true,
+    })
+    expect(never.t.host.view().control?.[never.pc.id].clipboard).toBeUndefined()
+  })
+
+  it('shows everyone that the computer waits for its person (the secure desktop, T-16)', () => {
+    const { t, alice, bob, pc, grant } = controlled(undefined)
+    void t.send(pc, { t: 'controlStatus', grant, blocked: 'secureDesktop', clipboard: false })
+    for (const who of [alice, bob]) {
+      expect(who.client.view!.control?.[pc.id]).toMatchObject({ blocked: 'secureDesktop' })
+    }
+    // The grant goes on: batches are still forwarded (the agent skips them while it is blocked)
+    void t.send(bob, batch(grant, 1))
+    expect(pc.client.of('controlForward')).toHaveLength(1)
+    void t.send(pc, { t: 'controlStatus', grant, blocked: null, clipboard: false })
+    expect(alice.client.view!.control?.[pc.id].blocked).toBeUndefined()
+  })
+
+  it('takes controlStatus only from the agent of that grant, and a browser cannot send it (T-02)', () => {
+    const { t, bob, pc, grant } = controlled(true)
+    void t.send(bob, { t: 'controlStatus', grant, blocked: 'secureDesktop', clipboard: true })
+    expect(bob.client.errors).toContain('bad_message')
+    const other = t.pair(t.join('Dave'))
+    void t.send(other, { t: 'controlStatus', grant, blocked: 'secureDesktop', clipboard: false })
+    expect(t.host.view().control?.[pc.id]).toMatchObject({ clipboard: true })
+    expect(t.host.view().control?.[pc.id].blocked).toBeUndefined()
+  })
+
+  it('keeps clipboard and blocked across an eviction, and drops them with the grant', () => {
+    const { t, bob, pc, grant } = controlled(true)
+    void t.send(pc, { t: 'controlStatus', grant, blocked: 'secureDesktop', clipboard: true })
+    t.evict()
+    expect(t.host.view().control?.[pc.id]).toMatchObject({
+      clipboard: true,
+      blocked: 'secureDesktop',
+    })
+    void t.send(bob, { t: 'controlStop', grant })
+    expect(t.host.view().control).toBeNull()
+  })
+})

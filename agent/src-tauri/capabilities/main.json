@@ -17,6 +17,11 @@
     "allow-control-state",
     "allow-control-stop",
     "allow-control-mute",
-    "allow-shared-screen"
+    "allow-shared-screen",
+    "allow-control-clipboard-off",
+    "allow-screens",
+    "allow-choose-screen",
+    "allow-permissions-state",
+    "allow-request-permission"
   ]
 }

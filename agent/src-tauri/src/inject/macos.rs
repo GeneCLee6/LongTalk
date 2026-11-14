@@ -1,39 +1,110 @@
 // macOS: CGEvent posted at the HID level (N4, e9-t06; f-remote-control-security.md §5.12).
-// NOT RUN YET: N4 was built and tested on Windows only; this file is compiled for macOS in the
-// release workflow (.github/workflows/agent.yml) and tried on a Mac in N5 (e9-t08), with the
-// 輔助使用 (Accessibility) permission guide. Without that permission macOS drops every posted
-// event silently; N5's guide asks for it before control can start.
+// NOT RUN ON A MAC YET: compiled and unit-tested on macOS in CI (.github/workflows/agent-ci.yml, N5)
+// and tried by hand in DEPLOY.md §5 step 40. Without the 輔助使用 (Accessibility) permission macOS
+// drops every posted event silently; the window's permission guide (permissions.rs, N5) says which
+// permission is missing and opens its page in System Settings.
 // - keys by virtual key code (keymap.rs), with the held modifiers as the event's flags (a posted
 //   key does not pick up modifiers posted before it on every macOS version);
 // - text (an input method's result) as a key event carrying the string, 20 UTF-16 units at a time;
 // - the pointer in global display points (CGDisplay bounds), dragged while a button is held, the
 //   wheel in pixels;
-// - the agent's own windows (§5.8): on a Mac, nothing is injected while the consent dialog or the
-//   hourly question is up (control.rs pauses), and the other agent windows can only stop control
-//   or pause requests. A per-window check like Windows' is N5's, with the 輸入監控 permission.
+// - the agent's own windows (§5.8, TH-30; N5): a press is not posted when the window under the
+//   pointer (a button, the wheel) or the frontmost ordinary window (a key, text) belongs to this
+//   process, from CGWindowListCopyWindowInfo (no extra permission: owner and bounds only, never
+//   titles or pictures). Releases always go. Nothing is injected while the consent dialog or the
+//   hourly question is up either (control.rs pauses).
+// - every posted event carries INJECTED_MARK in its user data, so the Escape ×3 watch (escape.rs)
+//   counts only the physical keyboard.
 
+use core_foundation::array::CFArray;
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use core_graphics::display::CGDisplay;
 use core_graphics::event::{
-    CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGMouseButton, ScrollEventUnit,
+    CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGMouseButton, EventField,
+    ScrollEventUnit,
 };
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::CGPoint;
+use core_graphics::geometry::CGRect;
+use core_graphics::window::{
+    kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
+    kCGWindowListOptionOnScreenOnly, kCGWindowOwnerPID,
+};
 
 use super::keymap::macos_key;
-use super::{skip, Action, Injector, Screen, Skipped};
+use super::{is_press, skip, Action, Injector, Screen, Skipped};
 use crate::control::MouseButton;
 
 /** At most this many UTF-16 units in one key event's string (CGEventKeyboardSetUnicodeString) */
 const TEXT_CHUNK: usize = 20;
 
+/**
+ * Written into kCGEventSourceUserData of every event the agent posts (N5): escape.rs's watch skips
+ * an Escape carrying it, so the controller's Escape never counts toward 中斷
+ */
+pub const INJECTED_MARK: i64 = 0x4c54_4147; // "LTAG"
+
+/** Marks an event as the agent's own and posts it */
+fn post(event: &CGEvent) {
+    event.set_integer_value_field(EventField::EVENT_SOURCE_USER_DATA, INJECTED_MARK);
+    event.post(CGEventTapLocation::HID);
+}
+
+/** One on-screen window: who owns it, where it is, at which level */
+struct WindowInfo {
+    pid: i64,
+    layer: i64,
+    bounds: CGRect,
+}
+
+/** The on-screen windows, front to back (owner, layer and bounds only) */
+fn windows_front_to_back() -> Vec<WindowInfo> {
+    let Some(list) = CGDisplay::window_list_info(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        None,
+    ) else {
+        return Vec::new();
+    };
+    let list: CFArray<CFDictionary<CFString, CFType>> =
+        unsafe { CFArray::wrap_under_get_rule(list.as_concrete_TypeRef()) };
+    let key = |raw| unsafe { CFString::wrap_under_get_rule(raw) };
+    let (pid_key, layer_key, bounds_key) = unsafe {
+        (
+            key(kCGWindowOwnerPID),
+            key(kCGWindowLayer),
+            key(kCGWindowBounds),
+        )
+    };
+    list.iter()
+        .filter_map(|window| {
+            let number = |k: &CFString| {
+                window
+                    .find(k)
+                    .and_then(|v| v.downcast::<CFNumber>())
+                    .and_then(|n| n.to_i64())
+            };
+            let bounds = window
+                .find(&bounds_key)
+                .and_then(|v| v.downcast::<CFDictionary>())
+                .and_then(|d| CGRect::from_dict_representation(&d))?;
+            Some(WindowInfo {
+                pid: number(&pid_key)?,
+                layer: number(&layer_key).unwrap_or(0),
+                bounds,
+            })
+        })
+        .collect()
+}
+
 pub struct MacInjector {
     pointer: CGPoint,
     held_buttons: [bool; 3],
     flags: CGEventFlags,
+    pid: i64,
 }
 
 impl MacInjector {
@@ -42,6 +113,27 @@ impl MacInjector {
             pointer: CGPoint::new(0.0, 0.0),
             held_buttons: [false; 3],
             flags: CGEventFlags::CGEventFlagNull,
+            pid: i64::from(std::process::id()),
+        }
+    }
+
+    /**
+     * Whether a press would land on one of the agent's own windows (§5.8): the topmost window under
+     * the pointer for a button or the wheel, the frontmost ordinary (layer 0) window for a key or
+     * text, or any of the agent's floating windows under the pointer (the 中斷 button, the border)
+     */
+    fn aimed_at_agent(&self, action: &Action) -> bool {
+        let windows = windows_front_to_back();
+        match action {
+            Action::Button { .. } | Action::Wheel { .. } => windows
+                .iter()
+                .find(|w| w.bounds.contains(&self.pointer))
+                .is_some_and(|w| w.pid == self.pid),
+            Action::Key { .. } | Action::Text(_) => windows
+                .iter()
+                .find(|w| w.layer == 0)
+                .is_some_and(|w| w.pid == self.pid),
+            Action::MoveTo { .. } => false,
         }
     }
 
@@ -66,7 +158,7 @@ impl MacInjector {
         match CGEvent::new_mouse_event(source, kind, self.pointer, button) {
             Ok(event) => {
                 event.set_flags(self.flags);
-                event.post(CGEventTapLocation::HID);
+                post(&event);
                 true
             }
             Err(_) => false,
@@ -120,7 +212,7 @@ impl MacInjector {
                 let event =
                     CGEvent::new_scroll_event(source, ScrollEventUnit::PIXEL, 2, -dy, -dx, 0)
                         .map_err(|_| Skipped::Refused)?;
-                event.post(CGEventTapLocation::HID);
+                post(&event);
                 Ok(())
             }
             Action::Key { code, down } => {
@@ -137,7 +229,7 @@ impl MacInjector {
                 let event = CGEvent::new_keyboard_event(source, key, *down)
                     .map_err(|_| Skipped::Refused)?;
                 event.set_flags(self.flags);
-                event.post(CGEventTapLocation::HID);
+                post(&event);
                 Ok(())
             }
             Action::Text(text) => {
@@ -149,7 +241,7 @@ impl MacInjector {
                         let event = CGEvent::new_keyboard_event(source, 0, down)
                             .map_err(|_| Skipped::Refused)?;
                         event.set_string(&chunk);
-                        event.post(CGEventTapLocation::HID);
+                        post(&event);
                     }
                 }
                 Ok(())
@@ -162,6 +254,10 @@ impl Injector for MacInjector {
     fn perform(&mut self, actions: &[Action]) -> Vec<Skipped> {
         let mut skipped = Vec::new();
         for action in actions {
+            if is_press(action) && self.aimed_at_agent(action) {
+                skip(&mut skipped, Skipped::AgentWindow);
+                continue;
+            }
             if let Err(kind) = self.perform_one(action) {
                 skip(&mut skipped, kind);
             }

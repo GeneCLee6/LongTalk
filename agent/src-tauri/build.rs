@@ -18,6 +18,12 @@ fn main() {
             "control_stop",
             "control_mute",
             "shared_screen",
+            // N5 (e9-t08, e9-t09)
+            "control_clipboard_off",
+            "screens",
+            "choose_screen",
+            "permissions_state",
+            "request_permission",
         ]),
     ))
     .expect("failed to run tauri-build");

@@ -1,0 +1,84 @@
+name: Desktop agent CI
+
+# The desktop agent (agent/, E9) checked on all three systems it is built for, on every pull request
+# and push that touches it (N5, e9-t08): `cargo fmt --check`, `cargo clippy -D warnings` (with and
+# without the `updater` feature) and `cargo test`. Windows is also built and tested by hand; macOS
+# and Linux are compiled and unit-tested only here, which is what tells a pull request that their
+# code (inject/macos.rs, inject/linux.rs, escape.rs, permissions.rs) still builds. Nothing is
+# signed, bundled or released: that is agent.yml, on an `agent-v*` tag only.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'shared/control.ts'
+      - '.github/workflows/agent-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'shared/control.ts'
+      - '.github/workflows/agent-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Linux libraries Tauri builds against (WebKitGTK, the tray)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install dependencies
+        run: npm ci
+
+      # tauri::generate_context! embeds the bundled page: it has to exist before Rust compiles
+      - name: Build the agent's page
+        run: npm run agent:ui:build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent/src-tauri -> target
+
+      - name: Format
+        if: runner.os == 'Linux'
+        working-directory: agent/src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: agent/src-tauri
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets --features updater -- -D warnings
+
+      - name: Unit tests
+        working-directory: agent/src-tauri
+        run: cargo test

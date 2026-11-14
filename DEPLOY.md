@@ -527,6 +527,16 @@ A2 的 `/dev/realtime` spike 在 B1 移除（代理不再接受匿名呼叫）�
     - **代理日誌**：托盤「開啟日誌」打開資料夾（`%LOCALAPPDATA%\app.longtalk.agent\logs`），`control-<日期>.log` 有 `asked`、`answered`、`started`、`blocked`、`warned`、`ended` 各行，**沒有** B 打的任何字、按了哪些一般鍵或座標。
     - **延遲**（AC-9.3、T-23，同區域）：用手機慢動作（240 fps）同時拍 B 的滑鼠（或按鍵）和代理電腦的螢幕，數從 B 按下到代理電腦畫面上游標或字出現的格數（每格約 4 ms），量 20 次取第 19 大的當 p95；這是「看到結果」的時間，包含代理電腦自己畫畫面的時間，所以會比 f-doc §5.5.2 的「輸入→注入」多一點。p95 超過 150 ms，或扣掉畫面的 16 ms 後超過 100 ms，就記下來：N5 之前要考慮 §5.5.3 的 DataChannel。
     - 結果寫進 issue。都過了就勾 AC-9.2、AC-9.3（Windows；macOS 在 N5 補），AC-9.4 等 N5 的 macOS 實機一起勾。
+40. **多平台、剪貼簿、多螢幕、系統對話框（N5，`e9-t08`、`e9-t09`，AC-9.1 的 macOS、AC-9.3 的 macOS、AC-9.4 的 macOS 部分、AC-9.5；自動化已經跑過：`tests/worker/room-n3.test.ts` 與 `tests/shared/control-n5.test.ts`（貼上與 `controlStatus`）、`tests/app/n3.test.tsx`（「貼到對方電腦」與「等對方處理系統對話框」）、`tests/agent/consent.test.tsx` 與 `tests/agent/permissions.test.tsx`、`cargo test`；macOS 與 Linux 只在 CI（`.github/workflows/agent-ci.yml`）編譯並跑單元測試，**這一步之前沒有在真的 Mac 或 Linux 桌面上跑過**）**。接第 37–39 步，用正式站：
+    - **安裝檔**：GitHub → Actions → Desktop agent release → Run workflow（填 `agent-v0.2.0` 這類 tag；版本號先在 `tauri.conf.json` 與 `Cargo.toml` 一起改），草稿 Release 有 Windows（`.exe`、`.msi`）、macOS（`.dmg`）、Linux（`.deb`、`.rpm`、`.AppImage`）與 `SHA256SUMS.txt`；各下載一個比對 SHA-256（`certutil`／`shasum -a 256`／`sha256sum`）。
+    - **macOS 權限引導**（T-24）：第一次打開代理，主視窗上方列出「螢幕錄製」「輔助使用」「輸入監控（選用）」，按「打開設定」：系統跳出自己的詢問、系統設定打開到那一頁；給了以後回到代理視窗，那一行變「已允許」，全部給完整塊消失。沒給「輔助使用」就讓 B 控制：什麼都不會發生（引導寫了原因）。更新代理後再打開，看系統有沒有要求重給（§5.9），結果記下來。
+    - **macOS 注入與 Esc**（T-11、T-14）：重做第 39 步的滑鼠、鍵盤、注音（用 macOS 的注音輸入法）、B 按 ⌘⌥Esc、Ctrl+⌘+Q（都應該照按並在浮動條提示）。給了「輸入監控」時，Mac 的人連按三下 Esc 會中斷，B 按的 Esc 不算；沒給時只有浮動「中斷」與選單列圖示能停。Mac 的人自己按 Ctrl+⌘+Q 鎖定：控制結束。
+    - **macOS 代理視窗不收注入的輸入**（T-04）：B 把游標移到浮動「中斷」條上按、點代理主視窗再打字：沒有反應（日誌 `agentWindow`）。
+    - **Linux（X11）**（T-11）：Ubuntu 用「Ubuntu on Xorg」登入，裝 `.deb` 或跑 `.AppImage`：滑鼠、鍵盤、中文輸入法選字（例如 fcitx5 注音）送出、滾輪；B 按 Ctrl+Alt+F2、Ctrl+Alt+Backspace：什麼都沒發生（封鎖）；`loginctl lock-session` 鎖定：控制結束。改用 Wayland 工作階段登入：主視窗寫「這台電腦用的是 Wayland…」，B 拿到授權也動不了（日誌 `refusedByOs`）。
+    - **剪貼簿**（T-22）：B 請求控制，代理的同意對話框裡「也允許對方把文字貼到這台電腦的剪貼簿」**預設沒勾**；不勾就允許：B 的分享格沒有「貼到對方電腦」。重來一次、勾起來：B 複製一段網址按「貼到對方電腦」（瀏覽器第一次會問能不能讀剪貼簿），所有人看到「B 把一段文字放到 … 的剪貼簿」，代理的浮動條寫「B 放了 N 個字到你的剪貼簿」，B 在代理電腦上按 Ctrl+V（或 ⌘V）貼出來的就是那段網址。代理浮動條按「不允許貼上」：B 的按鈕消失，再試會看到「對方沒有允許貼上文字…」。代理電腦先複製一段「密碼」：B 怎麼做都拿不到它（沒有任何讀的路徑）。日誌只有 `pasted chars=…`，沒有內容。
+    - **多螢幕**（AC-9.5）：代理電腦接兩個螢幕。分享中按「換一個螢幕」選另一個：B 的畫面換過去（同一個分享，不會斷），B 點的位置對得上新螢幕。兩個螢幕一樣大時，主視窗出現「你分享的是哪一個螢幕？」，選對的那個，B 的滑鼠就落在被分享的那個；控制中這個選單是灰的。
+    - **系統對話框**（T-16，Windows）：B 控制時，代理電腦跳出 UAC：所有人的分享格寫「對方電腦正在顯示系統對話框…」，代理電腦的人自己按完，字消失、B 繼續控制（日誌 `secureDesktop state=paused`／`resumed`）。
+    - 結果寫進 issue。都過了就勾 AC-9.5；AC-9.1、AC-9.3、AC-9.4 等第 37–40 步在 Windows 與 macOS 都過了再勾。
 
 常見狀況：「媒體伺服器尚未設定」＝ secret 沒設；「媒體伺服器不認得這個分頁」＝ session token 過期（房間把成員移除了），重新整理；一直沒有對方的畫面 ＝ 網路擋 UDP，檢查 TURN secret 有沒有設（`/api/turn` 的 `turn` 要是 `true`）。
 

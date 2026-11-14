@@ -28,6 +28,15 @@
 //   acceptSeq, nextHeld, releaseHeld, clampAskTtl, agentGrantMs and validateControlStart, the
 //   consent dialog, the red border and the 中斷 button; N4 (e9-t06, e9-t07) adds classifyKeyCombo
 //   and the injection itself. tests/shared/control.test.ts is the spec both sides follow.
+// - N5 (e9-t08, e9-t09; protocol.ts v28): the agent tells the room what the controller should know
+//   about the live grant (`controlStatus`: injection paused by a system dialog only its person can
+//   answer, the UAC secure desktop; whether pasting is still allowed), shown to everyone in
+//   `ControlSession.blocked` / `clipboard`. Pasting text (§5.11, TH-27): only controller → controlled
+//   computer, only when the person ticked it in the consent dialog (`controlAnswer.clipboard`), only
+//   the controller's own press of 「貼到對方電腦」 (`controlClipboard`), at most MAX_CLIPBOARD_CHARS
+//   and CONTROL_CLIPBOARD_RATE; the room forwards it as `controlPaste` and tells everyone (`notice`
+//   `controlPasted`, without the text). Nothing ever reads the controlled computer's clipboard, and
+//   the text is stored and logged nowhere (D11).
 //
 // The flow:
 // 1. A member asks: `controlRequest` naming an agent in the same room (and the same breakout room).
@@ -168,6 +177,18 @@ export const MAX_AGENT_MESSAGE_CHARS = 4_096
  * writes as two units each (astral characters, `"` and `\`), about 4.7 k; the test builds it.
  */
 export const MAX_FORWARD_CHARS = 8_192
+
+/**
+ * Most UTF-16 units one paste carries (N5, e9-t09): a link, a command, an address. The agent reads a
+ * `controlPaste` of up to MAX_PASTE_FRAME_CHARS: the worst text, every unit a control character
+ * JSON writes as six (only tab, newline and carriage return are allowed, two each; the rest is at
+ * most three bytes of UTF-8), stays under it.
+ */
+export const MAX_CLIPBOARD_CHARS = 2_000
+export const MAX_PASTE_FRAME_CHARS = 16_384
+
+/** Pastes per grant (N5): a person pasting by hand, never a stream */
+export const CONTROL_CLIPBOARD_RATE = { count: 3, windowMs: 10_000 } as const
 
 // ── Events ───────────────────────────────────────────────────────────────────────────────────
 
@@ -371,6 +392,22 @@ const isUnit = (value: unknown): value is number =>
 function wheelDelta(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null
   return Math.round(Math.max(-MAX_WHEEL_DELTA, Math.min(MAX_WHEEL_DELTA, value)))
+}
+
+// What a paste may carry besides text: tab, line feed, carriage return (no other control
+// character, no bidi override: pasted text must read as what it is, Trojan Source)
+const UNSAFE_PASTE_CHARS =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/
+
+/**
+ * A paste's text (N5, e9-t09), as the agent puts it on the clipboard: null when it is not a string,
+ * empty, longer than MAX_CLIPBOARD_CHARS UTF-16 units, or carries a control character other than
+ * tab and the line breaks, a bidi override or a lone surrogate. Refused, not cleaned.
+ */
+export function normalizeClipboardText(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw === '' || raw.length > MAX_CLIPBOARD_CHARS) return null
+  if (LONE_SURROGATE.test(raw) || UNSAFE_PASTE_CHARS.test(raw)) return null
+  return raw
 }
 
 /** One event, normalized; null when it is not one this version knows or any field does not fit */
@@ -733,6 +770,20 @@ export type ControlErrorCode =
   | 'control_muted'
   /** Remote control is off in this room (`RoomInfo.allowControl`, Q4) */
   | 'control_off'
+  /**
+   * A paste the grant does not take (N5): the person did not tick it in the consent dialog or
+   * turned it off since, or CONTROL_CLIPBOARD_RATE is used up
+   */
+  | 'control_clipboard_off'
+
+/**
+ * Why the agent cannot inject now although the grant goes on (N5, e9-t08; §5.12): Windows shows the
+ * secure desktop (a UAC prompt), which takes no injected input and which only the person at the
+ * computer can answer. The controller sees 「等對方處理系統對話框」 instead of clicking into nothing.
+ */
+export type ControlBlock = 'secureDesktop'
+
+export const CONTROL_BLOCKS: readonly ControlBlock[] = ['secureDesktop']
 
 // ── RoomView (N3: `RoomView.control`) ────────────────────────────────────────────────────────
 
@@ -750,6 +801,13 @@ export type ControlSession = {
   since: number
   /** asking: when the request expires; granted: when the grant ends (null: until stopped) */
   until: number | null
+  /**
+   * granted (N5): the person allowed pasting text to this computer in the consent dialog and has
+   * not turned it off; absent: no
+   */
+  clipboard?: true
+  /** granted (N5): injection is paused, what by (`controlStatus`); absent: not paused */
+  blocked?: ControlBlock
 }
 
 /** Requests and grants by agent member id (one each at most) */
@@ -770,9 +828,19 @@ export type ControlEventMessage = {
 }
 /** The controller ends its own grant */
 export type ControlStopMessage = { t: 'controlStop'; grant: string }
+/**
+ * 「貼到對方電腦」 (N5, e9-t09): text for the controlled computer's clipboard, read from the
+ * controller's own clipboard on that press (normalizeClipboardText). Taken only from the socket
+ * holding the grant, when the grant allows pasting, within CONTROL_CLIPBOARD_RATE.
+ */
+export type ControlClipboardMessage = { t: 'controlClipboard'; grant: string; text: string }
 
 export type ControlClientMessage =
-  ControlRequestMessage | ControlCancelMessage | ControlEventMessage | ControlStopMessage
+  | ControlRequestMessage
+  | ControlCancelMessage
+  | ControlEventMessage
+  | ControlStopMessage
+  | ControlClipboardMessage
 
 // ── Room → controller's browser (N3: part of ServerMessage) ──────────────────────────────────
 
@@ -819,6 +887,23 @@ export type ControlAnswerMessage = {
   t: 'controlAnswer'
   request: string
   decision: ControlDecision
+  /**
+   * N5 (e9-t09): the person also ticked 「允許對方貼上文字到這台電腦」 (off by default, §5.11). Only
+   * with an allow; absent or false: the grant takes no paste
+   */
+  clipboard?: boolean
+}
+/**
+ * N5 (e9-t08, e9-t09): what the controller should know about the live grant. `blocked`: injection
+ * is paused by something only the person here can answer (null: not paused); `clipboard`: whether
+ * pasting is still allowed. The room can only turn pasting off with it, never on: on is the consent
+ * dialog's alone (`controlAnswer.clipboard`).
+ */
+export type ControlStatusMessage = {
+  t: 'controlStatus'
+  grant: string
+  blocked: ControlBlock | null
+  clipboard: boolean
 }
 /** The person at the computer stopped control */
 export type AgentStopMessage = { t: 'controlStop'; grant: string; reason: AgentStopReason }
@@ -843,6 +928,7 @@ export type AgentMessage =
   | ControlAnswerMessage
   | AgentStopMessage
   | ControlMuteMessage
+  | ControlStatusMessage
   | AgentMediaMessage
 
 // ── Room → agent ─────────────────────────────────────────────────────────────────────────────
@@ -921,6 +1007,14 @@ export type ControlForwardMessage = {
   events: ControlEvent[]
 }
 
+/**
+ * A paste the room took from the controller holding `grant` (N5, e9-t09). The agent puts `text` on
+ * the clipboard only for its live grant, only when its own consent allowed pasting and it has not
+ * turned that off, and only after normalizeClipboardText's rules again (parseControlPaste); it
+ * never reads the clipboard, and logs the length, never the text.
+ */
+export type ControlPasteMessage = { t: 'controlPaste'; grant: string; text: string }
+
 export type AgentServerMessage =
   | AgentWelcomeMessage
   | ControlAskMessage
@@ -928,6 +1022,7 @@ export type AgentServerMessage =
   | ControlStartMessage
   | ControlForwardMessage
   | ControlEndMessage
+  | ControlPasteMessage
 
 // ── Parsing ──────────────────────────────────────────────────────────────────────────────────
 
@@ -955,16 +1050,43 @@ export function parseControlClientMessage(
       return parseControlEventMessage(value)
     case 'controlStop':
       return isControlId(value.grant) ? { t: 'controlStop', grant: value.grant } : null
+    case 'controlClipboard': {
+      if (!isControlId(value.grant)) return null
+      const text = normalizeClipboardText(value.text)
+      return text === null ? null : { t: 'controlClipboard', grant: value.grant, text }
+    }
     default:
       return null
   }
 }
 
-/** `controlAnswer`'s fields; null for an unknown decision or a malformed request id */
+/**
+ * `controlAnswer`'s fields; null for an unknown decision, a malformed request id or a `clipboard`
+ * that is not a boolean. `clipboard` is kept only with an allow (a deny allows nothing).
+ */
 export function parseControlAnswer(value: Record<string, unknown>): ControlAnswerMessage | null {
   if (!isControlId(value.request)) return null
   if (!CONTROL_DECISIONS.includes(value.decision as ControlDecision)) return null
-  return { t: 'controlAnswer', request: value.request, decision: value.decision as ControlDecision }
+  if (value.clipboard !== undefined && typeof value.clipboard !== 'boolean') return null
+  const decision = value.decision as ControlDecision
+  return {
+    t: 'controlAnswer',
+    request: value.request,
+    decision,
+    ...(value.clipboard === true && decision !== 'deny' ? { clipboard: true } : {}),
+  }
+}
+
+/** `controlStatus`'s fields (N5); null unless the grant id, `blocked` and `clipboard` fit */
+export function parseControlStatus(value: Record<string, unknown>): ControlStatusMessage | null {
+  if (!isControlId(value.grant) || typeof value.clipboard !== 'boolean') return null
+  if (value.blocked !== null && !CONTROL_BLOCKS.includes(value.blocked as ControlBlock)) return null
+  return {
+    t: 'controlStatus',
+    grant: value.grant,
+    blocked: value.blocked as ControlBlock | null,
+    clipboard: value.clipboard,
+  }
 }
 
 /**
@@ -1020,6 +1142,8 @@ export function parseAgentMessage(raw: string): AgentMessage | null {
       return typeof value.ms === 'number' && CONTROL_MUTE_OPTIONS_MS.includes(value.ms)
         ? { t: 'controlMute', ms: value.ms }
         : null
+    case 'controlStatus':
+      return parseControlStatus(value)
     case 'tracks':
     case 'share':
     case 'unshare':
@@ -1045,4 +1169,16 @@ export function parseControlForward(raw: string): ControlForwardMessage | null {
   if (value?.t !== 'controlForward') return null
   const batch = parseControlEventMessage(value)
   return batch === null ? null : { ...batch, t: 'controlForward' }
+}
+
+/**
+ * `controlPaste` as the agent checks it before touching the clipboard (N5; the Rust agent mirrors
+ * this): at most MAX_PASTE_FRAME_CHARS, a control id and normalizeClipboardText's text. The agent
+ * also requires `grant` to be its live grant and its own consent to allow pasting.
+ */
+export function parseControlPaste(raw: string): ControlPasteMessage | null {
+  const value = parseObject(raw, MAX_PASTE_FRAME_CHARS)
+  if (value?.t !== 'controlPaste' || !isControlId(value.grant)) return null
+  const text = normalizeClipboardText(value.text)
+  return text === null ? null : { t: 'controlPaste', grant: value.grant, text }
 }

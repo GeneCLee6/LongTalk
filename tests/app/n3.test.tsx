@@ -484,4 +484,96 @@ describe('remote control in the room page', () => {
     expect(within(share).queryByRole('button', { name: strings.control.stop })).toBeNull()
     expect(within(share).getByRole('button', { name: strings.control.request })).toBeTruthy()
   })
+
+  // N5 (e9-t08, e9-t09)
+  function granted(socket: RoomSocket, extra: object = {}) {
+    socket.receive({ t: 'controlGranted', grant: GRANT, agent: 'c', until: Date.now() + 600_000 })
+    socket.patch([
+      {
+        op: 'set',
+        path: ['control'],
+        value: {
+          c: {
+            agent: 'c',
+            controller: 'a',
+            phase: 'granted',
+            since: 1,
+            until: Date.now() + 600_000,
+            ...extra,
+          },
+        },
+      },
+    ])
+  }
+  const withClipboard = (readText: () => Promise<string>) =>
+    Object.defineProperty(navigator, 'clipboard', { value: { readText }, configurable: true })
+
+  it('N5: no 貼到對方電腦 unless the person allowed pasting', async () => {
+    const { socket, share } = await enter()
+    granted(socket)
+    expect(
+      within(share).queryByRole('button', { name: strings.control.pasteLabel('Bob 的電腦') }),
+    ).toBeNull()
+  })
+
+  it('N5: 貼到對方電腦 reads our clipboard on the press and sends it for the grant', async () => {
+    withClipboard(async () => 'git status\n')
+    const { socket, share } = await enter()
+    granted(socket, { clipboard: true })
+    await act(async () => {
+      fireEvent.click(
+        within(share).getByRole('button', { name: strings.control.pasteLabel('Bob 的電腦') }),
+      )
+    })
+    expect(socket.sent).toContainEqual({
+      t: 'controlClipboard',
+      grant: GRANT,
+      text: 'git status\n',
+    })
+    socket.receive({ t: 'notice', notice: 'controlPasted', by: 'a', agent: 'c' })
+    expect(screen.getByText(strings.control.pasted('Bob 的電腦'))).toBeTruthy()
+  })
+
+  it('N5: says why nothing went: empty, too long, hidden characters, no permission', async () => {
+    const { socket, share } = await enter()
+    granted(socket, { clipboard: true })
+    const button = () =>
+      within(share).getByRole('button', { name: strings.control.pasteLabel('Bob 的電腦') })
+    for (const [read, text] of [
+      [async () => '', strings.control.pasteEmpty],
+      [async () => 'x'.repeat(2_001), strings.control.pasteTooLong(2_000)],
+      [async () => 'a‮b', strings.control.pasteBadText],
+      [async () => Promise.reject(new Error('denied')), strings.control.pasteUnreadable],
+    ] as const) {
+      withClipboard(read)
+      await act(async () => {
+        fireEvent.click(button())
+      })
+      expect(screen.getAllByText(text).length).toBeGreaterThan(0)
+    }
+    expect(socket.sent.filter((m) => m.t === 'controlClipboard')).toEqual([])
+  })
+
+  it('N5: everyone sees that the computer waits for its person (a system dialog)', async () => {
+    const { socket, share } = await enter()
+    socket.patch([
+      {
+        op: 'set',
+        path: ['control'],
+        value: {
+          c: {
+            agent: 'c',
+            controller: 'b',
+            phase: 'granted',
+            since: 1,
+            until: null,
+            blocked: 'secureDesktop',
+          },
+        },
+      },
+    ])
+    expect(within(share).getByText(strings.control.blocked)).toBeTruthy()
+    socket.receive({ t: 'notice', notice: 'controlPasted', by: 'b', agent: 'c' })
+    expect(screen.getByText(strings.control.pastedNotice('Bob', 'Bob 的電腦'))).toBeTruthy()
+  })
 })

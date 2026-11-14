@@ -24,13 +24,22 @@
 // windows; while someone controls this computer a physical Escape ×3 stops it (Windows), so does a
 // locked session; it starts with a system notification and a red tray icon; every request,
 // answer, start, end and blocked or shown combination goes to the agent log, nothing typed ever.
+//
+// N5 (e9-t08, e9-t09; §5.11, §5.12): Linux injects with XTest (inject/linux.rs), macOS has its
+// per-window check and Escape ×3 with Input Monitoring; the window guides the person through what
+// the OS must allow (permissions.rs); a paste the person allowed in the consent dialog goes on the
+// clipboard (clipboard.rs, write only, never logged but its length); the secure desktop pauses
+// injection and the room is told (`controlStatus`); when several screens fit the share, the
+// person picks which one the pointer aims at (choose_screen, never while controlled).
 
 mod agent_log;
+mod clipboard;
 mod control;
 mod control_windows;
 mod escape;
 mod inject;
 mod origin;
+mod permissions;
 mod session;
 mod socket;
 mod tray;
@@ -70,6 +79,8 @@ pub struct AgentState {
     injector: Mutex<Box<dyn Injector>>,
     captured: Mutex<Option<(u32, u32)>>,
     screen: Mutex<Option<Screen>>,
+    /** N5: the screen the person picked when several fit the share (choose_screen) */
+    chosen: Mutex<Option<Screen>>,
     pub log: Mutex<AgentLog>,
     /** The physical Escape ×3 hook, only while someone controls this computer (escape.rs) */
     escape: Mutex<Option<escape::Watch>>,
@@ -90,6 +101,7 @@ impl AgentState {
             injector: Mutex::new(inject::injector()),
             captured: Mutex::new(None),
             screen: Mutex::new(None),
+            chosen: Mutex::new(None),
             log: Mutex::new(AgentLog::new(None)),
             escape: Mutex::new(None),
             logged_once: Mutex::new(HashSet::new()),
@@ -182,11 +194,15 @@ impl AgentState {
         plan.warned
     }
 
-    /** The screen the share shows, for the pointer (inject::pick_screen) */
+    /**
+     * The screen the share shows, for the pointer (inject::pick_screen_chosen): the person's choice
+     * while it fits the share, else the best fit
+     */
     fn pick_screen(&self) {
         let captured = *self.captured.lock().unwrap();
+        let chosen = *self.chosen.lock().unwrap();
         let screens = self.injector.lock().unwrap().screens();
-        *self.screen.lock().unwrap() = inject::pick_screen(&screens, captured);
+        *self.screen.lock().unwrap() = inject::pick_screen_chosen(&screens, captured, chosen);
     }
 
     fn room(&self) -> String {
@@ -282,7 +298,11 @@ fn on_grant_started(app: &AppHandle) {
         controller: &controller,
         minutes,
     });
-    let (title, body) = tray::notification(&controller, cfg!(target_os = "windows"));
+    // Escape ×3 works on Windows, and on a Mac that gave Input Monitoring (escape.rs, N5)
+    let escape = cfg!(target_os = "windows")
+        || (cfg!(target_os = "macos")
+            && permissions::current().input_monitoring == permissions::Access::Granted);
+    let (title, body) = tray::notification(&controller, escape);
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
@@ -348,10 +368,35 @@ pub fn on_control_frame(app: &AppHandle, kind: &str, value: &serde_json::Value, 
                         control::Dropped::Stale => state.log_once("staleBatch"),
                         control::Dropped::Invalid => state.log_once("invalidBatch"),
                         // After the end, or while the hourly question is up: expected
-                        control::Dropped::NotGranted | control::Dropped::Paused => {}
+                        control::Dropped::NotGranted
+                        | control::Dropped::Paused
+                        | control::Dropped::NoClipboard => {}
                     }
                     false
                 }
+            }
+        }
+        // N5 (e9-t09): onto the clipboard, then forgotten; the log gets the length only (T-22)
+        "controlPaste" => {
+            let pasted = state.control.lock().unwrap().on_paste(raw, now);
+            match pasted {
+                Ok(text) => {
+                    let written = clipboard::write_text(&text);
+                    state.log.lock().unwrap().write(&Entry::Pasted {
+                        chars: text.encode_utf16().count(),
+                        written,
+                    });
+                    true
+                }
+                Err(control::Dropped::NoClipboard) => {
+                    state.log_once("pasteNotAllowed");
+                    false
+                }
+                Err(control::Dropped::Malformed) => {
+                    state.log_once("malformedPaste");
+                    false
+                }
+                Err(_) => false,
             }
         }
         _ => false,
@@ -378,6 +423,21 @@ fn start_control_clock(app: &AppHandle) {
             if granted && inject::session_locked() {
                 stop_control(&app, StopReason::Locked);
                 continue;
+            }
+            // N5 (§5.12, T-16): the secure desktop pauses injection; the controller is told, and
+            // told again when it is gone
+            if granted {
+                let secure = inject::secure_desktop();
+                let effects = state.control.lock().unwrap().set_blocked(secure);
+                if effects.changed {
+                    state
+                        .log
+                        .lock()
+                        .unwrap()
+                        .write(&Entry::SecureDesktop { on: secure });
+                    state.apply(&effects);
+                    notify_control(&app);
+                }
             }
             let effects = state.control.lock().unwrap().tick(state.now());
             state.apply(&effects);
@@ -690,13 +750,16 @@ fn control_answer(
     request: String,
     decision: String,
     mute_ms: Option<u64>,
+    clipboard: Option<bool>,
 ) -> Result<(), String> {
     let decision = Decision::parse(&decision).ok_or("bad_decision")?;
+    // N5: 「也允許對方貼上文字到這台電腦」, off unless ticked; it counts only with an allow
+    let clipboard = clipboard == Some(true) && decision != Decision::Deny;
     let effects = state
         .control
         .lock()
         .unwrap()
-        .answer(&request, decision, mute_ms, state.now())
+        .answer_with(&request, decision, mute_ms, clipboard, state.now())
         .map_err(control_refusal);
     notify_control(&app);
     let effects = effects?;
@@ -704,6 +767,7 @@ fn control_answer(
         request: &request,
         decision: decision.wire(),
         mute_ms,
+        clipboard,
     });
     state.apply(&effects);
     Ok(())
@@ -764,6 +828,114 @@ fn shared_screen(
     state.pick_screen();
 }
 
+/**
+ * 「不允許貼上」 (N5): the 中斷 window, the main window or the tray turn pasting off for the rest of
+ * this grant. Only ever off: turning it on is the consent dialog's alone, so even a press the
+ * controller managed to inject here could only take pasting away.
+ */
+#[tauri::command]
+fn control_clipboard_off(app: AppHandle, state: State<'_, AgentState>) {
+    clipboard_off(&app, &state);
+}
+
+fn clipboard_off(app: &AppHandle, state: &AgentState) {
+    let effects = state.control.lock().unwrap().clipboard_off();
+    if effects.changed {
+        state.log.lock().unwrap().write(&Entry::ClipboardOff);
+        state.apply(&effects);
+        notify_control(app);
+    }
+}
+
+/** 「不允許貼上」 in the tray (N5) */
+pub fn clipboard_off_from_tray(app: &AppHandle) {
+    let state = app.state::<AgentState>();
+    clipboard_off(app, &state);
+}
+
+/** One screen for the main window's 「你分享的是哪一個螢幕？」 (N5) */
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenChoice {
+    /** Its place in `screens`' answer, for choose_screen */
+    index: usize,
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    primary: bool,
+    /** The pointer aims at this one now */
+    aimed: bool,
+}
+
+/**
+ * The screens that fit the share (inject::candidates), when there is a choice to make: two or more
+ * screens of the captured size. Empty otherwise (nothing to choose).
+ */
+#[tauri::command]
+fn screens(state: State<'_, AgentState>) -> Vec<ScreenChoice> {
+    let captured = *state.captured.lock().unwrap();
+    let all = state.injector.lock().unwrap().screens();
+    let fitting = inject::candidates(&all, captured);
+    if fitting.len() < 2 {
+        return Vec::new();
+    }
+    let aimed = *state.screen.lock().unwrap();
+    fitting
+        .iter()
+        .enumerate()
+        .map(|(index, s)| ScreenChoice {
+            index,
+            width: s.pixel_width,
+            height: s.pixel_height,
+            x: s.x,
+            y: s.y,
+            primary: s.primary,
+            aimed: aimed == Some(*s),
+        })
+        .collect()
+}
+
+/**
+ * 「你分享的是哪一個螢幕？」 (N5, e9-t09): which of the screens that fit the share the pointer aims at
+ * (`index` into `screens`' answer; None: let the agent guess). Refused while someone controls this
+ * computer: the controller's own clicks could otherwise point the pointer at a screen nobody sees.
+ */
+#[tauri::command]
+fn choose_screen(state: State<'_, AgentState>, index: Option<usize>) -> Result<(), String> {
+    if state.control.lock().unwrap().granted() {
+        return Err("controlled".into());
+    }
+    let chosen = match index {
+        None => None,
+        Some(index) => {
+            let captured = *state.captured.lock().unwrap();
+            let all = state.injector.lock().unwrap().screens();
+            Some(
+                *inject::candidates(&all, captured)
+                    .get(index)
+                    .ok_or("bad_screen")?,
+            )
+        }
+    };
+    *state.chosen.lock().unwrap() = chosen;
+    state.pick_screen();
+    Ok(())
+}
+
+/** What the OS must allow for control to work here (N5, the window's guide) */
+#[tauri::command]
+fn permissions_state() -> permissions::Permissions {
+    permissions::current()
+}
+
+/** The guide's 「打開設定」 for one macOS permission (the person's own press; macOS decides) */
+#[tauri::command]
+fn request_permission(kind: String) -> Result<bool, String> {
+    let kind = permissions::Kind::parse(&kind).ok_or("bad_permission")?;
+    Ok(permissions::request(kind))
+}
+
 /** 「開啟日誌」 in the tray: the agent log's folder */
 pub fn open_log(app: &AppHandle) {
     let state = app.state::<AgentState>();
@@ -796,6 +968,11 @@ pub fn run() {
             control_stop,
             control_mute,
             shared_screen,
+            control_clipboard_off,
+            screens,
+            choose_screen,
+            permissions_state,
+            request_permission,
         ])
         .setup(|app| {
             let handle = app.handle();

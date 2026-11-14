@@ -27,6 +27,11 @@
 // inject/ (which judges each key against the held keys and performs them); every step that ends a
 // grant says so in `Effects::ended` (the agent log), and Escape x3 and a locked session stop it
 // (StopReason::Escape, StopReason::Locked).
+// N5 (e9-t08, e9-t09): the consent dialog's 「也允許對方貼上文字」 (off unless ticked) rides on the
+// answer and stays with the grant; `on_paste` takes a `controlPaste` only for the live grant whose
+// person allowed it and has not turned it off (T-22), and gives back the text for the clipboard,
+// never kept here; `clipboard_off` and `set_blocked` (the secure desktop pauses injection) tell the
+// room in `controlStatus`, which can only ever turn pasting off.
 
 use std::collections::BTreeSet;
 
@@ -51,6 +56,9 @@ pub const MAX_CONTROL_BATCH: usize = 30;
 pub const MAX_CONTROL_SEQ_GAP: u64 = 256;
 pub const MAX_TEXT_CHARS: usize = 64;
 pub const MAX_WHEEL_DELTA: f64 = 1_200.0;
+/** shared/control.ts MAX_CLIPBOARD_CHARS (UTF-16 units), MAX_PASTE_FRAME_CHARS (bytes here) */
+pub const MAX_CLIPBOARD_CHARS: usize = 2_000;
+pub const MAX_PASTE_FRAME_CHARS: usize = 16_384;
 /** shared/control.ts CONTROL_MUTE_OPTIONS_MS */
 pub const CONTROL_MUTE_OPTIONS_MS: [u64; 4] = [0, 10 * 60_000, 30 * 60_000, 60 * 60_000];
 
@@ -277,6 +285,40 @@ fn control_text(text: &str) -> Option<String> {
     Some(text.to_owned())
 }
 
+/**
+ * shared/control.ts normalizeClipboardText: a paste's text, refused (never cleaned) when empty,
+ * longer than MAX_CLIPBOARD_CHARS UTF-16 units, or carrying a control character other than tab and
+ * the line breaks, or a bidi override (JSON has already refused lone surrogates for us)
+ */
+pub fn clipboard_text(text: &str) -> Option<&str> {
+    if text.is_empty() || text.encode_utf16().count() > MAX_CLIPBOARD_CHARS {
+        return None;
+    }
+    let unsafe_char = |c: char| {
+        (c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+            || ('\u{202A}'..='\u{202E}').contains(&c)
+            || ('\u{2066}'..='\u{2069}').contains(&c)
+    };
+    (!text.chars().any(unsafe_char)).then_some(text)
+}
+
+/** shared/control.ts parseControlPaste: the grant id and the text, or None */
+pub fn parse_paste(raw: &str) -> Option<(String, String)> {
+    if raw.len() > MAX_PASTE_FRAME_CHARS {
+        return None;
+    }
+    let value: Value = serde_json::from_str(raw).ok()?;
+    if value.get("t")?.as_str()? != "controlPaste" {
+        return None;
+    }
+    let grant = value.get("grant")?.as_str()?;
+    if !is_control_id(grant) {
+        return None;
+    }
+    let text = clipboard_text(value.get("text")?.as_str()?)?;
+    Some((grant.to_owned(), text.to_owned()))
+}
+
 fn unit(value: Option<&Value>) -> Option<f64> {
     value
         .and_then(Value::as_f64)
@@ -464,6 +506,12 @@ pub struct Grant {
     pub reconfirming: Option<(u64, u64)>,
     /** A combination the controller pressed that the person is told about (N4): name, since when */
     pub hint: Option<(String, u64)>,
+    /** N5: the person ticked pasting in the consent dialog and has not turned it off since */
+    pub clipboard: bool,
+    /** N5: injection is paused by the secure desktop (the room was told) */
+    pub blocked: bool,
+    /** N5: the last paste, for the 中斷 window: how many characters, since when */
+    pub pasted: Option<(usize, u64)>,
 }
 
 /** How long 「Bob 按了 Win+R」 stays on the 中斷 window */
@@ -478,6 +526,8 @@ enum Phase {
         request: String,
         decision: Decision,
         controller_name: String,
+        /** N5: pasting was ticked too */
+        clipboard: bool,
     },
     Granted(Grant),
 }
@@ -506,6 +556,10 @@ pub enum ControlView {
         reconfirm: Option<(u64, u64)>,
         /** 「Bob 按了 Win+R」: the combination's name, for HINT_MS (N4) */
         hint: Option<String>,
+        /** N5: pasting is allowed; the last paste's length, for HINT_MS; paused by a system dialog */
+        clipboard: bool,
+        pasted: Option<usize>,
+        blocked: bool,
     },
 }
 
@@ -548,6 +602,8 @@ pub enum Dropped {
     Paused,
     Stale,
     Invalid,
+    /** N5: a paste the person did not allow, or turned off */
+    NoClipboard,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize)]
@@ -606,6 +662,12 @@ impl Control {
                     .as_ref()
                     .filter(|(_, at)| now.saturating_sub(*at) < HINT_MS)
                     .map(|(name, _)| name.clone()),
+                clipboard: grant.clipboard,
+                pasted: grant
+                    .pasted
+                    .filter(|(_, at)| now.saturating_sub(*at) < HINT_MS)
+                    .map(|(chars, _)| chars),
+                blocked: grant.blocked,
             },
         }
     }
@@ -710,6 +772,21 @@ impl Control {
         mute_ms: Option<u64>,
         now: u64,
     ) -> Result<Effects, ControlRefusal> {
+        self.answer_with(request, decision, mute_ms, false, now)
+    }
+
+    /**
+     * `answer` with the dialog's 「也允許對方貼上文字到這台電腦」 (N5, e9-t09): `clipboard` counts only
+     * with an allow, and is said to the room in the answer (`controlAnswer.clipboard`)
+     */
+    pub fn answer_with(
+        &mut self,
+        request: &str,
+        decision: Decision,
+        mute_ms: Option<u64>,
+        clipboard: bool,
+        now: u64,
+    ) -> Result<Effects, ControlRefusal> {
         if let Some(ms) = mute_ms {
             if decision != Decision::Deny || !CONTROL_MUTE_OPTIONS_MS.contains(&ms) || ms == 0 {
                 return Err(ControlRefusal::BadMute);
@@ -732,10 +809,13 @@ impl Control {
             changed: true,
             ..Effects::default()
         };
-        effects.send.push(
-            json!({ "t": "controlAnswer", "request": request, "decision": decision.wire() })
-                .to_string(),
-        );
+        let clipboard = clipboard && decision != Decision::Deny;
+        let mut frame =
+            json!({ "t": "controlAnswer", "request": request, "decision": decision.wire() });
+        if clipboard {
+            frame["clipboard"] = Value::Bool(true);
+        }
+        effects.send.push(frame.to_string());
         if let Some(ms) = mute_ms {
             effects
                 .send
@@ -747,6 +827,7 @@ impl Control {
                 request: ask.request.clone(),
                 decision,
                 controller_name: ask.from_name.clone(),
+                clipboard,
             },
         };
         Ok(effects)
@@ -762,6 +843,7 @@ impl Control {
             request,
             decision,
             controller_name,
+            clipboard,
         } = &self.phase
         else {
             return false;
@@ -807,8 +889,89 @@ impl Control {
             reconfirm_at: expected.is_none().then_some(now + CONTROL_RECONFIRM_MS),
             reconfirming: None,
             hint: None,
+            clipboard: *clipboard,
+            blocked: false,
+            pasted: None,
         });
         true
+    }
+
+    /**
+     * `controlPaste` (N5, e9-t09, T-22): the text to put on the clipboard, only for the live grant,
+     * only when this person allowed pasting in the consent dialog and has not turned it off, not
+     * while the hourly question is up, and only text normalizeClipboardText's rules take. The text
+     * is handed back for the clipboard and not kept; the 中斷 window shows its length.
+     */
+    pub fn on_paste(&mut self, raw: &str, now: u64) -> Result<String, Dropped> {
+        let Phase::Granted(grant) = &mut self.phase else {
+            return Err(Dropped::NotGranted);
+        };
+        let (id, text) = parse_paste(raw).ok_or(Dropped::Malformed)?;
+        if id != grant.grant {
+            return Err(Dropped::OtherGrant);
+        }
+        if !grant.clipboard {
+            return Err(Dropped::NoClipboard);
+        }
+        if grant.reconfirming.is_some() {
+            return Err(Dropped::Paused);
+        }
+        grant.pasted = Some((text.encode_utf16().count(), now));
+        Ok(text)
+    }
+
+    /** The grant's `controlStatus` for the room (N5) */
+    fn status_frame(grant: &Grant) -> String {
+        json!({
+            "t": "controlStatus",
+            "grant": grant.grant,
+            "blocked": if grant.blocked { Value::from("secureDesktop") } else { Value::Null },
+            "clipboard": grant.clipboard,
+        })
+        .to_string()
+    }
+
+    /**
+     * 「不允許貼上」 on the 中斷 window or the main window (N5): pasting is off for the rest of this
+     * grant, and the room is told. There is no way back on but a new consent.
+     */
+    pub fn clipboard_off(&mut self) -> Effects {
+        let Phase::Granted(grant) = &mut self.phase else {
+            return Effects::default();
+        };
+        if !grant.clipboard {
+            return Effects::default();
+        }
+        grant.clipboard = false;
+        Effects {
+            send: vec![Self::status_frame(grant)],
+            changed: true,
+            ..Effects::default()
+        }
+    }
+
+    /**
+     * The injector met the secure desktop (`true`) or it went away (`false`) (N5, §5.12, T-16): the
+     * grant goes on, and the room shows the controller 「等對方處理系統對話框」
+     */
+    pub fn set_blocked(&mut self, blocked: bool) -> Effects {
+        let Phase::Granted(grant) = &mut self.phase else {
+            return Effects::default();
+        };
+        if grant.blocked == blocked {
+            return Effects::default();
+        }
+        grant.blocked = blocked;
+        Effects {
+            send: vec![Self::status_frame(grant)],
+            changed: true,
+            ..Effects::default()
+        }
+    }
+
+    /** Whether the live grant is paused by the secure desktop (the clock checks when it ends) */
+    pub fn blocked(&self) -> bool {
+        matches!(&self.phase, Phase::Granted(grant) if grant.blocked)
     }
 
     /**
@@ -1015,6 +1178,16 @@ impl Control {
                         ..Effects::default()
                     };
                 }
+                if grant
+                    .pasted
+                    .is_some_and(|(_, at)| now.saturating_sub(at) >= HINT_MS)
+                {
+                    grant.pasted = None;
+                    return Effects {
+                        changed: true,
+                        ..Effects::default()
+                    };
+                }
                 Effects::default()
             }
             _ => Effects::default(),
@@ -1052,7 +1225,7 @@ impl Control {
 pub fn control_kind(value: &Value) -> Option<&str> {
     match value.get("t")?.as_str()? {
         kind @ ("controlAsk" | "controlAskEnd" | "controlStart" | "controlForward"
-        | "controlEnd") => Some(kind),
+        | "controlEnd" | "controlPaste") => Some(kind),
         _ => None,
     }
 }
@@ -1527,5 +1700,143 @@ mod tests {
             Some("controlForward")
         );
         assert_eq!(control_kind(&json!({ "t": "patch" })), None);
+    }
+
+    // ── N5 (e9-t08, e9-t09): pasting (T-22) and the secure desktop (T-16) ────────────────────
+
+    fn granted_with(clipboard: bool) -> Control {
+        let mut control = asking(0);
+        let effects = control
+            .answer_with(REQUEST, Decision::Allow10, None, clipboard, 1_000)
+            .unwrap();
+        let answer: Value = serde_json::from_str(&effects.send[0]).unwrap();
+        assert_eq!(
+            answer.get("clipboard"),
+            clipboard.then_some(&Value::Bool(true))
+        );
+        assert!(control.on_start(&start(json!(ALLOW10_MS)), 1_100));
+        control
+    }
+
+    fn paste(grant: &str, text: &str) -> String {
+        json!({ "t": "controlPaste", "grant": grant, "text": text }).to_string()
+    }
+
+    #[test]
+    fn pasting_is_off_unless_ticked_in_the_dialog() {
+        let mut control = granted_with(false);
+        assert_eq!(
+            control.on_paste(&paste(GRANT, "hello"), 2_000),
+            Err(Dropped::NoClipboard)
+        );
+        // A deny says nothing about the clipboard, whatever was ticked
+        let mut denied = asking(0);
+        let effects = denied
+            .answer_with(REQUEST, Decision::Deny, None, true, 1_000)
+            .unwrap();
+        assert!(!effects.send[0].contains("clipboard"));
+    }
+
+    #[test]
+    fn a_ticked_grant_takes_its_own_pastes_only() {
+        let mut control = granted_with(true);
+        assert_eq!(
+            control.on_paste(&paste(GRANT, "git status\n"), 2_000),
+            Ok("git status\n".to_owned())
+        );
+        match control.view(2_100) {
+            ControlView::Granted {
+                clipboard, pasted, ..
+            } => {
+                assert!(clipboard);
+                assert_eq!(pasted, Some(11));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            control.on_paste(&paste("XXXXXXXXXXXXXXXXXXXXXX", "x"), 2_000),
+            Err(Dropped::OtherGrant)
+        );
+        assert_eq!(
+            control.on_paste(&paste(GRANT, "a\u{0007}b"), 2_000),
+            Err(Dropped::Malformed)
+        );
+        assert_eq!(
+            control.on_paste(&paste(GRANT, "evil\u{202E}txt"), 2_000),
+            Err(Dropped::Malformed)
+        );
+        assert_eq!(
+            control.on_paste(&paste(GRANT, &"x".repeat(MAX_CLIPBOARD_CHARS + 1)), 2_000),
+            Err(Dropped::Malformed)
+        );
+        // UTF-16 units, as the room counts: 1000 emoji are 2000 units
+        assert!(control
+            .on_paste(&paste(GRANT, &"👍".repeat(1_000)), 2_000)
+            .is_ok());
+        assert_eq!(
+            control.on_paste(&paste(GRANT, &"👍".repeat(1_001)), 2_000),
+            Err(Dropped::Malformed)
+        );
+        // The hint goes after HINT_MS
+        assert!(control.tick(2_000 + HINT_MS).changed);
+    }
+
+    #[test]
+    fn the_person_turns_pasting_off_and_the_room_is_told() {
+        let mut control = granted_with(true);
+        let effects = control.clipboard_off();
+        let status: Value = serde_json::from_str(&effects.send[0]).unwrap();
+        assert_eq!(
+            status,
+            json!({ "t": "controlStatus", "grant": GRANT, "blocked": null, "clipboard": false })
+        );
+        assert_eq!(
+            control.on_paste(&paste(GRANT, "x"), 2_000),
+            Err(Dropped::NoClipboard)
+        );
+        // Off stays off; nothing turns it back on
+        assert!(control.clipboard_off().send.is_empty());
+    }
+
+    #[test]
+    fn no_paste_while_the_hourly_question_is_up() {
+        let mut control = asking(0);
+        control
+            .answer_with(REQUEST, Decision::AllowUntilStop, None, true, 1_000)
+            .unwrap();
+        assert!(control.on_start(&start(Value::Null), 1_000));
+        control.tick(1_000 + CONTROL_RECONFIRM_MS);
+        assert_eq!(
+            control.on_paste(&paste(GRANT, "x"), 1_001 + CONTROL_RECONFIRM_MS),
+            Err(Dropped::Paused)
+        );
+    }
+
+    #[test]
+    fn the_secure_desktop_pauses_and_says_so_once() {
+        let mut control = granted_with(false);
+        let on = control.set_blocked(true);
+        assert!(on.changed);
+        assert!(on.send[0].contains("\"blocked\":\"secureDesktop\""));
+        assert!(control.blocked());
+        assert!(control.set_blocked(true).send.is_empty());
+        let off = control.set_blocked(false);
+        assert!(off.send[0].contains("\"blocked\":null"));
+        assert!(!control.blocked());
+        // Without a grant there is nothing to say
+        assert!(Control::new().set_blocked(true).send.is_empty());
+    }
+
+    #[test]
+    fn the_paste_frame_limit_is_the_rooms() {
+        let worst = paste(GRANT, &"中".repeat(MAX_CLIPBOARD_CHARS));
+        assert!(worst.len() <= MAX_PASTE_FRAME_CHARS);
+        assert!(parse_paste(&worst).is_some());
+        let padded = json!({ "t": "controlPaste", "grant": GRANT, "text": "x", "pad": "x".repeat(MAX_PASTE_FRAME_CHARS) }).to_string();
+        assert!(parse_paste(&padded).is_none());
+        assert_eq!(
+            control_kind(&json!({ "t": "controlPaste" })),
+            Some("controlPaste")
+        );
     }
 }

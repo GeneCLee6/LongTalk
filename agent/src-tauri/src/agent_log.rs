@@ -29,11 +29,12 @@ pub enum Entry<'a> {
         from_name: &'a str,
         from_id: &'a str,
     },
-    /** The person answered in the consent dialog */
+    /** The person answered in the consent dialog (N5: `clipboard`, pasting ticked too) */
     Answered {
         request: &'a str,
         decision: &'a str,
         mute_ms: Option<u64>,
+        clipboard: bool,
     },
     /** Control started (a valid controlStart): who, for how long (None: until stopped) */
     Started {
@@ -63,6 +64,20 @@ pub enum Entry<'a> {
     /** An update was installed */
     Updated {
         version: &'a str,
+    },
+    /**
+     * N5 (e9-t09): text was put on the clipboard (`written`: the OS took it); how long it was, never
+     * what it said (D11, T-13)
+     */
+    Pasted {
+        chars: usize,
+        written: bool,
+    },
+    /** N5: the person turned pasting off for this grant */
+    ClipboardOff,
+    /** N5: injection paused for the secure desktop (UAC), or going on again */
+    SecureDesktop {
+        on: bool,
     },
 }
 
@@ -96,10 +111,14 @@ impl Entry<'_> {
                 request,
                 decision,
                 mute_ms,
+                clipboard,
             } => {
                 let mut fields = vec![("request", field(request)), ("decision", field(decision))];
                 if let Some(ms) = mute_ms {
                     fields.push(("muteMinutes", (ms / 60_000).to_string()));
+                }
+                if *clipboard {
+                    fields.push(("clipboard", "allowed".to_owned()));
                 }
                 ("answered", fields)
             }
@@ -129,6 +148,18 @@ impl Entry<'_> {
             Entry::Warned { combo } => ("warned", vec![("combo", field(combo))]),
             Entry::Skipped { what } => ("skipped", vec![("what", field(what))]),
             Entry::Updated { version } => ("updated", vec![("version", field(version))]),
+            Entry::Pasted { chars, written } => (
+                "pasted",
+                vec![
+                    ("chars", chars.to_string()),
+                    ("written", written.to_string()),
+                ],
+            ),
+            Entry::ClipboardOff => ("clipboardOff", Vec::new()),
+            Entry::SecureDesktop { on } => (
+                "secureDesktop",
+                vec![("state", if *on { "paused" } else { "resumed" }.to_owned())],
+            ),
         }
     }
 }
@@ -379,9 +410,35 @@ mod tests {
                 request: "RRRR",
                 decision: "deny",
                 mute_ms: Some(1_800_000),
+                clipboard: false,
             },
         );
         assert!(answered.ends_with("decision=deny\tmuteMinutes=30"));
+        let allowed = line(
+            AT,
+            &Entry::Answered {
+                request: "RRRR",
+                decision: "allow10",
+                mute_ms: None,
+                clipboard: true,
+            },
+        );
+        assert!(allowed.ends_with("decision=allow10\tclipboard=allowed"));
+        // A paste: its length only (T-22, D11)
+        assert_eq!(
+            line(
+                AT,
+                &Entry::Pasted {
+                    chars: 11,
+                    written: true
+                }
+            ),
+            "2026-11-13T05:12:33.123Z\tpasted\tchars=11\twritten=true"
+        );
+        assert_eq!(
+            line(AT, &Entry::SecureDesktop { on: true }),
+            "2026-11-13T05:12:33.123Z\tsecureDesktop\tstate=paused"
+        );
         // A name cannot make a second line or run on
         let long = "x".repeat(500);
         let asked = line(

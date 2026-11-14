@@ -54,7 +54,35 @@ export type ControlView =
       reconfirm: [number, number] | null
       /** A combination the controller just pressed, by name (「Win+R」, N4), for a few seconds */
       hint: string | null
+      /** N5: pasting is allowed; how long the last paste was, for a few seconds; a system dialog */
+      clipboard: boolean
+      pasted: number | null
+      blocked: boolean
     }
+
+/** permissions.rs Access (N5) */
+export type Access = 'granted' | 'missing' | 'notNeeded'
+
+/** permissions.rs Permissions (N5): what the OS must allow before control works */
+export interface Permissions {
+  screen: Access
+  accessibility: Access
+  inputMonitoring: Access
+  x11: Access
+}
+
+export type PermissionKind = 'screen' | 'accessibility' | 'inputMonitoring'
+
+/** lib.rs ScreenChoice (N5): one of the screens that fit the share */
+export interface ScreenChoice {
+  index: number
+  width: number
+  height: number
+  x: number
+  y: number
+  primary: boolean
+  aimed: boolean
+}
 
 /** What the tray asks the window to do (tray.rs TRAY_EVENT) */
 export type TrayAction = 'share' | 'unshare' | 'leave'
@@ -83,8 +111,15 @@ export const native = {
   // Remote control (N3): each window may call only what its capability grants (the consent window
   // alone answers, capabilities/consent.json)
   controlState: () => invoke<ControlView>('control_state'),
-  controlAnswer: (request: string, decision: string, muteMs: number | null) =>
-    invoke<void>('control_answer', { request, decision, muteMs }),
+  controlAnswer: (request: string, decision: string, muteMs: number | null, clipboard = false) =>
+    invoke<void>('control_answer', { request, decision, muteMs, clipboard }),
+  /** N5: 「不允許貼上」 (only ever off; on is the consent dialog's) */
+  controlClipboardOff: () => invoke<void>('control_clipboard_off'),
+  /** N5: the screens that fit the share, when there is a choice (else empty) */
+  screens: () => invoke<ScreenChoice[]>('screens'),
+  chooseScreen: (index: number | null) => invoke<void>('choose_screen', { index }),
+  permissions: () => invoke<Permissions>('permissions_state'),
+  requestPermission: (kind: PermissionKind) => invoke<boolean>('request_permission', { kind }),
   controlKeepGoing: () => invoke<void>('control_keep_going'),
   controlStop: () => invoke<void>('control_stop'),
   onControl: (handler: (view: ControlView) => void): Promise<UnlistenFn> =>

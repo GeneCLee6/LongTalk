@@ -16,6 +16,8 @@ use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, Webv
 
 pub const CONSENT: &str = "consent";
 pub const STOP: &str = "control-stop";
+/** The floating 中斷 window's width, logical pixels */
+const STOP_WIDTH: f64 = 400.0;
 const BORDER_PREFIX: &str = "border-";
 /** The red border's width, in logical pixels */
 const BORDER_LOGICAL: f64 = 6.0;
@@ -46,7 +48,7 @@ fn set_consent(app: &AppHandle, open: bool) {
                 WebviewUrl::App("index.html#consent".into()),
             )
             .title("LongTalk")
-            .inner_size(460.0, 520.0)
+            .inner_size(460.0, 600.0)
             .resizable(false)
             .minimizable(false)
             .maximizable(false)
@@ -73,7 +75,8 @@ fn set_stop(app: &AppHandle, open: bool) {
             let mut builder =
                 WebviewWindowBuilder::new(app, STOP, WebviewUrl::App("index.html#stop".into()))
                     .title("LongTalk")
-                    .inner_size(300.0, 64.0)
+                    // Wide enough for 「不允許貼上」 next to 中斷 (N5)
+                    .inner_size(STOP_WIDTH, 64.0)
                     .decorations(false)
                     .resizable(false)
                     .closable(false)
@@ -84,8 +87,10 @@ fn set_stop(app: &AppHandle, open: bool) {
                 let scale = monitor.scale_factor();
                 let position = monitor.position().to_logical::<f64>(scale);
                 let size = monitor.size().to_logical::<f64>(scale);
-                builder =
-                    builder.position(position.x + (size.width - 300.0) / 2.0, position.y + 12.0);
+                builder = builder.position(
+                    position.x + (size.width - STOP_WIDTH) / 2.0,
+                    position.y + 12.0,
+                );
             }
             let _ = builder.build();
         }

@@ -1586,6 +1586,18 @@ export const zhTWRoom = {
     captureHint: '你的滑鼠、鍵盤和選字會送到對方的電腦。按「停止控制」結束。',
     captureLabel: (computer: string) => `控制 ${computer}：滑鼠和鍵盤會送到對方的電腦`,
     stopTheirs: '停止遠端控制',
+    // N5 (e9-t08, e9-t09): a system dialog on their computer; pasting text to it
+    blocked: '對方電腦正在顯示系統對話框（例如「使用者帳戶控制」），要對方自己按',
+    paste: '貼到對方電腦',
+    pasteHint: (max: number) =>
+      `把你剪貼簿裡的文字（最多 ${max} 字）放到對方電腦的剪貼簿，對方或你再按貼上`,
+    pasteLabel: (computer: string) => `把剪貼簿的文字放到 ${computer}`,
+    pasted: (computer: string) => `已放到 ${computer} 的剪貼簿，在那台電腦按貼上就會出現`,
+    pasteEmpty: '你的剪貼簿裡沒有文字',
+    pasteTooLong: (max: number) => `文字太長，最多 ${max} 字`,
+    pasteBadText: '這段文字有看不見的控制字元，不能貼過去',
+    pasteUnreadable: '瀏覽器沒有讓這個網頁讀剪貼簿，允許之後再按一次',
+    pastedNotice: (who: string, computer: string) => `${who} 把一段文字放到 ${computer} 的剪貼簿`,
     started: (who: string, computer: string) => `${who} 開始控制 ${computer}`,
     youStarted: (computer: string) => `你開始控制 ${computer}，對方隨時可以中斷`,
     ended: (computer: string, reason: string) => `${computer} 的遠端控制已結束（${reason}）`,
@@ -1619,6 +1631,7 @@ export const zhTWRoom = {
       control_cooldown: '請稍等一下再請求',
       control_muted: '對方暫時不接受控制請求',
       control_off: '這間會議室不允許遠端控制',
+      control_clipboard_off: '對方沒有允許貼上文字，或你貼得太快，請稍等',
     },
   },
   errors: {

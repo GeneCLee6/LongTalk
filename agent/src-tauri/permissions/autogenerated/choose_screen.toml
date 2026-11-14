@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-choose-screen"
+description = "Enables the choose_screen command without any pre-configured scope."
+commands.allow = ["choose_screen"]
+
+[[permission]]
+identifier = "deny-choose-screen"
+description = "Denies the choose_screen command without any pre-configured scope."
+commands.deny = ["choose_screen"]

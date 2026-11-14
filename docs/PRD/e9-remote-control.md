@@ -56,6 +56,7 @@ depends_on: [E2, E3, E11]
       _N4（2026-11-13）：代理日誌（T-13）、注入的按下不送到代理自己的視窗（T-04 的 Windows 部分，`inject/windows.rs`）、Esc hook 只在授權期間（T-17）做了；T-04、T-14、T-16 的實機部分與 macOS 還沒，所以不勾。_
       _N3（2026-11-13）：事件綁定授權（伺服器判斷）、序號、速率、時限都做了並有測試（T-03、T-05、T-06、T-07、T-08、T-09、T-15、T-18、T-21 在 `tests/worker/room-n3.test.ts`；T-04、T-05、T-06、T-12 的代理端在 `control.rs` 的 `cargo test`）。還差代理日誌（N4 `e9-t07`）與注入的輸入被代理視窗拒絕（T-04 的實機部分），所以不勾。_
 - [ ] AC-9.5 — macOS 權限引導；Linux X11 可用；多螢幕切換。
+      _N5（2026-11-14）：三項都做了：macOS 的權限引導（`permissions.rs`：螢幕錄製、輔助使用、選用的輸入監控，缺哪個就有「打開設定」）、Linux 的 XTest 注入（`inject/linux.rs`，Wayland 明說不能控制）、多螢幕（分享中「換一個螢幕」、幾個一樣大的螢幕時選「你分享的是哪一個」，控制中不能改）。macOS 與 Linux 只在 CI（`agent-ci.yml`）編譯並跑單元測試，**沒有在真的 Mac 或 Linux 桌面上跑過**，要實機（`DEPLOY.md` §5 第 40 步）才勾。_
 
 ## Task 拆分（M3；動工前再細拆）
 
@@ -66,8 +67,8 @@ depends_on: [E2, E3, E11]
 - [x] `e9-t05` 控制事件通道：~~DataChannel／WebSocket、簽章~~、序號、速率（N1 決定：RoomDO WebSocket 轉送＋授權綁連線，見 f-doc §5.5、Q2） · AC-9.3, AC-9.4 · M · ← e9-t04（N3，#58：先解析再計數、`CONTROL_FRAME_RATE`、`acceptSeq`、超速只轉放開事件；控制端的 `ControlSender`；代理端驗證與按住的輸入，注入是 N4）
 - [x] `e9-t06` 滑鼠鍵盤注入（Windows、macOS）、輸入法文字 · AC-9.3 · M · ← e9-t05（N4，#60：`agent/src-tauri/src/inject/`：`plan` 判斷組合鍵（封鎖、提示）、補按宣稱的修飾鍵、座標換到被分享的那個螢幕；Windows 用 `SendInput`（掃描碼、`KEYEVENTF_UNICODE` 送輸入法文字），macOS 用 `CGEvent`（寫了、在 Windows 上做過型別檢查，**沒在 Mac 上跑過**，N5）；按下對著代理自己的視窗時不送）
 - [x] `e9-t07` 中斷機制（Esc 連按、托盤、超時）與代理日誌 · AC-9.2, AC-9.4 · S · ← e9-t06（N4，#60：`escape.rs` 實體 Esc×3（Windows 低階鍵盤 hook，只在授權期間、只看 Esc）、鎖定或螢幕保護程式就結束、開始時系統通知、紅色托盤圖示、`agent_log.rs` 代理日誌與托盤「開啟日誌」；macOS 的 Esc×3 要「輸入監控」權限，留給 N5）
-- [ ] `e9-t08` 多平台：macOS 權限引導、Linux、安裝包與簽章 · AC-9.5 · M · ← e9-t06
-- [ ] `e9-t09` 剪貼簿同步與多螢幕切換（選用） · S · ← e9-t08
+- [x] `e9-t08` 多平台：macOS 權限引導、Linux、安裝包與簽章 · AC-9.5 · M · ← e9-t06（N5：`permissions.rs` 權限引導、`inject/linux.rs` XTest、macOS 的逐視窗檢查與輸入監控下的 Esc×3（`inject/macos.rs`、`escape.rs`）、UAC 安全桌面時讓控制端看到「等對方處理系統對話框」（`controlStatus`，協定 v28）、`agent.yml` 加 Linux 安裝檔、`agent-ci.yml` 在 PR 上三個平台編譯與測試；**不買 OS 簽章**（D12），更新簽章金鑰要擁有者產生，見 `agent/README.md`）
+- [x] `e9-t09` 剪貼簿同步與多螢幕切換（選用） · S · ← e9-t08（N5：只有「控制端 → 被控端」、被控端在同意對話框勾了才有（預設不勾）、控制端按「貼到對方電腦」才讀自己的剪貼簿、最多 2000 字、每 10 秒 3 次、全員看到「誰放了一段文字到哪台電腦的剪貼簿」（不含內容）、伺服器檢查授權、代理只寫不讀、不存不記（日誌只有字數）；多螢幕見 `e9-t08`）
 
 ## 風險與對策
 

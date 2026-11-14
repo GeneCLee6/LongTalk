@@ -1613,6 +1613,18 @@ function Room({
         )
         return
       }
+      // N5 (e9-t09): to everyone, never the text (rule 4)
+      case 'controlPasted':
+        show(
+          notice.by === state.you
+            ? strings.control.pasted(anyMembers?.[notice.agent ?? '']?.name ?? '')
+            : strings.control.pastedNotice(
+                anyMembers?.[notice.by]?.name ?? '',
+                anyMembers?.[notice.agent ?? '']?.name ?? '',
+              ),
+          notice.by === state.you ? 'neutral' : 'warn',
+        )
+        return
       case 'controlEnded':
         show(
           strings.control.ended(

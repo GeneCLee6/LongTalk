@@ -8,8 +8,14 @@
 //   other key is passed on at once and never stored, counted, logged or sent anywhere;
 // - an injected Escape (the controller's, LLKHF_INJECTED) does not count, nor does a held Escape
 //   repeating: only a press after a release.
-// macOS (threat model Q12): a global monitor needs the 輸入監控 permission, asked for in N5's guide
-// (e9-t08); until then a Mac stops with the floating 中斷 button and the tray. Linux: N5.
+// macOS (N5, threat model Q12): a listen-only event tap on key down and up, which needs the 輸入監控
+// (Input Monitoring) permission; the window's permission guide asks for it, as optional. Without it
+// the tap cannot be made, `start` returns None, and a Mac stops with the floating 中斷 button and the
+// tray. The agent's own posted events carry inject/macos.rs INJECTED_MARK and do not count. The tap
+// is listen-only: it cannot hold, change or drop any key.
+// Linux (N5): X11 has no listen-only global hook an ordinary client may use without reading every
+// key of every window (XRecord), which is more than this needs; Linux stops with the floating 中斷
+// button and the tray, as the threat model allows (§5.4).
 
 /** shared/control.ts ESCAPE_STOP_PRESSES, ESCAPE_STOP_MS */
 pub const ESCAPE_STOP_PRESSES: usize = 3;
@@ -47,14 +53,95 @@ impl EscapeCounter {
 #[cfg(target_os = "windows")]
 pub use windows::Watch;
 
-/** Where there is no hook yet (macOS, Linux: N5), watching does nothing */
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub use macos::Watch;
+
+/** Where there is no hook (Linux: see above), watching does nothing */
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub struct Watch;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 impl Watch {
     pub fn start(_on_escape: impl Fn() + Send + 'static) -> Option<Self> {
         None
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::cell::RefCell;
+    use std::time::Instant;
+
+    use core_foundation::runloop::CFRunLoop;
+    use core_graphics::event::{
+        CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
+        CallbackResult, EventField,
+    };
+
+    use super::EscapeCounter;
+    use crate::inject::macos::INJECTED_MARK;
+
+    /** kVK_Escape */
+    const ESCAPE_KEYCODE: i64 = 0x35;
+
+    /** The tap's thread runs its run loop until the grant ends (Drop stops the loop) */
+    pub struct Watch {
+        run_loop: CFRunLoop,
+    }
+
+    impl Watch {
+        pub fn start(on_escape: impl Fn() + Send + 'static) -> Option<Self> {
+            let (tx, rx) = std::sync::mpsc::channel::<Option<CFRunLoop>>();
+            std::thread::spawn(move || {
+                let counter = RefCell::new(EscapeCounter::default());
+                let clock = Instant::now();
+                let ready = tx.clone();
+                let made = CGEventTap::with_enabled(
+                    CGEventTapLocation::HID,
+                    CGEventTapPlacement::HeadInsertEventTap,
+                    CGEventTapOptions::ListenOnly,
+                    vec![CGEventType::KeyDown, CGEventType::KeyUp],
+                    move |_proxy, kind, event| {
+                        // Escape and nothing else; one the agent posted is the controller's
+                        if event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
+                            == ESCAPE_KEYCODE
+                            && event.get_integer_value_field(EventField::EVENT_SOURCE_USER_DATA)
+                                != INJECTED_MARK
+                        {
+                            let mut counter = counter.borrow_mut();
+                            match kind {
+                                CGEventType::KeyDown => {
+                                    let now = clock.elapsed().as_millis() as u64;
+                                    if counter.down(now) {
+                                        on_escape();
+                                    }
+                                }
+                                CGEventType::KeyUp => counter.up(),
+                                _ => {}
+                            }
+                        }
+                        // Listen-only: the key goes on unchanged whatever is returned
+                        CallbackResult::Keep
+                    },
+                    move || {
+                        let _ = ready.send(Some(CFRunLoop::get_current()));
+                        CFRunLoop::run_current();
+                    },
+                );
+                if made.is_err() {
+                    // No 輸入監控 permission: no tap (the 中斷 button and the tray still stop it)
+                    let _ = tx.send(None);
+                }
+            });
+            rx.recv().ok().flatten().map(|run_loop| Self { run_loop })
+        }
+    }
+
+    impl Drop for Watch {
+        /** The grant ended: the run loop stops, the tap is removed with its thread */
+        fn drop(&mut self) {
+            self.run_loop.stop();
+        }
     }
 }
 

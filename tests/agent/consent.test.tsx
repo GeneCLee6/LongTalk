@@ -23,6 +23,7 @@ vi.mock('../../agent/ui/src/native.ts', () => ({
     controlAnswer: async (...args: unknown[]) => void calls.push({ cmd: 'answer', args }),
     controlKeepGoing: async () => void calls.push({ cmd: 'keepGoing', args: [] }),
     controlStop: async () => void calls.push({ cmd: 'stop', args: [] }),
+    controlClipboardOff: async () => void calls.push({ cmd: 'clipboardOff', args: [] }),
   },
 }))
 
@@ -82,7 +83,7 @@ describe('the consent dialog (T-10)', () => {
     expect((allow as HTMLButtonElement).disabled).toBe(false)
     expect(document.activeElement?.textContent).toBe(text.control.deny)
     fireEvent.click(allow)
-    expect(calls).toEqual([{ cmd: 'answer', args: ['R'.repeat(22), 'allow10', null] }])
+    expect(calls).toEqual([{ cmd: 'answer', args: ['R'.repeat(22), 'allow10', null, false] }])
   })
 
   it('sends 「不再接受請求」 only with 拒絕', async () => {
@@ -90,15 +91,15 @@ describe('the consent dialog (T-10)', () => {
     await act(async () => {
       vi.advanceTimersByTime(CONSENT_DIALOG_ARM_MS + 500)
     })
-    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`^${text.control.mute}`) }))
     fireEvent.change(screen.getByRole('combobox', { name: text.control.muteFor }), {
       target: { value: String(30 * 60_000) },
     })
     fireEvent.click(screen.getByRole('button', { name: text.control.allowUntilStop }))
     fireEvent.click(screen.getByRole('button', { name: text.control.deny }))
     expect(calls).toEqual([
-      { cmd: 'answer', args: ['R'.repeat(22), 'allowUntilStop', null] },
-      { cmd: 'answer', args: ['R'.repeat(22), 'deny', 30 * 60_000] },
+      { cmd: 'answer', args: ['R'.repeat(22), 'allowUntilStop', null, false] },
+      { cmd: 'answer', args: ['R'.repeat(22), 'deny', 30 * 60_000, false] },
     ])
   })
 
@@ -116,6 +117,9 @@ describe('the consent dialog (T-10)', () => {
       leftMs: null,
       reconfirm: [60_000, CONSENT_DIALOG_ARM_MS],
       hint: null,
+      clipboard: false,
+      pasted: null,
+      blocked: false,
     }
     await open()
     expect(screen.getByRole('heading', { name: text.control.reconfirm('Bob') })).toBeTruthy()
@@ -138,6 +142,9 @@ describe('the floating 中斷 button', () => {
       leftMs: 9 * 60_000 + 41_000,
       reconfirm: null,
       hint: null,
+      clipboard: false,
+      pasted: null,
+      blocked: false,
     }
     render(<StopWindow />)
     await act(async () => {
@@ -157,6 +164,9 @@ describe('the floating 中斷 button', () => {
       leftMs: null,
       reconfirm: null,
       hint: 'Win+R',
+      clipboard: false,
+      pasted: null,
+      blocked: false,
     }
     render(<StopWindow />)
     await act(async () => {
@@ -164,5 +174,72 @@ describe('the floating 中斷 button', () => {
     })
     expect(screen.getByRole('status').textContent).toBe(text.control.pressed('Bob', 'Win+R'))
     expect(text.control.pressed('Bob', 'Win+R')).toBe('Bob 按了 Win+R')
+  })
+})
+
+// N5 (e9-t09, f-remote-control-security.md §5.11, T-22): pasting is the person's own tick, off by
+// default, sent only with an allow; the 中斷 window can only turn it off
+describe('pasting (N5)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    calls.length = 0
+    current = ASKING
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    push = null
+  })
+
+  async function armed() {
+    render(<ConsentWindow />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(CONSENT_DIALOG_ARM_MS + 500)
+    })
+  }
+
+  it('is not ticked, and goes with an allow only when ticked', async () => {
+    await armed()
+    const paste = screen.getByRole('checkbox', { name: text.control.allowPaste })
+    expect((paste as HTMLInputElement).checked).toBe(false)
+    expect(screen.getByText(text.control.allowPasteNote)).toBeTruthy()
+    fireEvent.click(paste)
+    fireEvent.click(screen.getByRole('button', { name: text.control.allow10 }))
+    expect(calls).toEqual([{ cmd: 'answer', args: ['R'.repeat(22), 'allow10', null, true] }])
+  })
+
+  it('never goes with a deny', async () => {
+    await armed()
+    fireEvent.click(screen.getByRole('checkbox', { name: text.control.allowPaste }))
+    fireEvent.click(screen.getByRole('button', { name: text.control.deny }))
+    expect(calls).toEqual([{ cmd: 'answer', args: ['R'.repeat(22), 'deny', null, false] }])
+  })
+
+  it('the 中斷 window shows a paste and turns pasting off', async () => {
+    vi.useRealTimers()
+    current = {
+      phase: 'granted',
+      controllerName: 'Bob',
+      untilStopped: false,
+      leftMs: 60_000,
+      reconfirm: null,
+      hint: null,
+      clipboard: true,
+      pasted: 12,
+      blocked: false,
+    }
+    render(<StopWindow />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('status').textContent).toBe(text.control.pasted('Bob', 12))
+    fireEvent.click(screen.getByRole('button', { name: text.control.pasteOff }))
+    expect(calls).toEqual([{ cmd: 'clipboardOff', args: [] }])
+    act(() =>
+      push?.({ ...(current as Extract<ControlView, { phase: 'granted' }>), clipboard: false }),
+    )
+    expect(screen.queryByRole('button', { name: text.control.pasteOff })).toBeNull()
   })
 })

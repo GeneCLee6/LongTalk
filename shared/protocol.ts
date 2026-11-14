@@ -243,6 +243,14 @@
 //    co-host, `memberId`: the agent) anyone's; every other ending (the socket closing, a breakout
 //    move, the time, the room setting `RoomInfo.allowControl`…) is the room's. The controller gets
 //    `controlEnd` with the reason and everyone `notice` `controlEnded` (`reason`).
+// 34. Remote control, N5 (e9-t08, e9-t09; shared/control.ts): `RoomView.control` entries of a grant
+//    carry `blocked` (the agent's injection is paused by a system dialog only its person can
+//    answer: `secureDesktop`) and `clipboard` (the person allowed pasting in the consent dialog and
+//    has not turned it off), both from the agent. The controller sends `controlClipboard` (grant,
+//    text) on its own press of 「貼到對方電腦」; the room takes it only from the socket holding the
+//    grant, when the grant allows pasting and within CONTROL_CLIPBOARD_RATE (else
+//    `control_clipboard_off`), forwards it to the agent and tells everyone `notice` `controlPasted`
+//    (`by`: the controller, `agent`), never the text.
 //
 // v1 → v2 (A4): `join`, `leave`, `welcome.token`, `Member.name` / `reconnecting`.
 // v2 → v3 (B1): `tracks`, `stats`, `Member.tracks`, `RoomView.usage`.
@@ -302,6 +310,9 @@
 //   `RoomInfo.allowControl`, `host` action `stopControl`, notices `controlStarted`,
 //   `controlEnded` (`NoticeMessage.agent`, `reason`), the ControlErrorCode errors. A v26 browser
 //   would not show that someone controls a computer in the room.
+// v27 → v28 (N5): `controlClipboard`, `ControlSession.clipboard` / `blocked`, notice
+//   `controlPasted`, error code `control_clipboard_off`. A v27 browser would not show that text was
+//   pasted to a computer in the room.
 // A browser of an older version is refused at the upgrade with CloseCode.versionMismatch and told
 // to reload.
 //
@@ -345,7 +356,7 @@ import {
 } from './control.ts'
 
 /** Bumped on any change a browser of the previous version could not understand */
-export const PROTOCOL_VERSION = 27
+export const PROTOCOL_VERSION = 28
 
 export const HEARTBEAT_PING = 'ping'
 export const HEARTBEAT_PONG = 'pong'
@@ -760,6 +771,8 @@ export type NoticeKind =
   // control started, or ended (`reason`)
   | 'controlStarted'
   | 'controlEnded'
+  // N5 (e9-t09): to everyone, `by` the controller pasted text to `agent` (never the text)
+  | 'controlPasted'
 
 export type NoticeMessage = {
   t: 'notice'
@@ -768,7 +781,7 @@ export type NoticeMessage = {
   all?: true
   policy?: AnnotationPolicy
   layer?: string
-  /** `controlStarted`, `controlEnded`: the agent's member id */
+  /** `controlStarted`, `controlEnded`, `controlPasted`: the agent's member id */
   agent?: string
   /** `controlEnded`: why */
   reason?: ControlEndReason
@@ -1361,6 +1374,7 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     case 'controlCancel':
     case 'controlEvent':
     case 'controlStop':
+    case 'controlClipboard':
       return parseControlClientMessage(value)
     case 'host': {
       const action = value.action

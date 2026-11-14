@@ -10,6 +10,10 @@ name: Desktop agent release
 # updater. Without it the installers are built unsigned for updates and the agent never checks for
 # one (agent/README.md has the owner's steps). The OS builds are not code-signed (no Authenticode,
 # no notarization: §5.9), so the SHA-256 list is how a friend checks a download.
+#
+# N5 (e9-t08): Windows (NSIS .exe and .msi), macOS (universal .dmg and .app) and Linux (.deb,
+# .rpm and .AppImage, built on Ubuntu 22.04 so the AppImage runs on older distributions too).
+# Pull requests check the Rust code on all three in agent-ci.yml; this workflow only releases.
 on:
   push:
     tags: ['agent-v*']
@@ -45,6 +49,9 @@ jobs:
           - platform: macos-latest
             args: '--target universal-apple-darwin'
             rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - platform: ubuntu-22.04
+            args: ''
+            rust-targets: ''
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
     env:
@@ -57,6 +64,12 @@ jobs:
           node-version: '22'
           cache: npm
 
+      - name: Linux libraries Tauri builds against (WebKitGTK, the tray)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
       - name: Install dependencies
         run: npm ci
 
@@ -68,7 +81,7 @@ jobs:
         with:
           workspaces: agent/src-tauri -> target
 
-      - name: Rust unit tests (the local confirmation, T-01a)
+      - name: Rust unit tests (T-01a and the rest of agent/src-tauri)
         working-directory: agent/src-tauri
         run: cargo test
 
@@ -113,7 +126,7 @@ jobs:
           sha256sum -- * | tee ../SHA256SUMS.txt
           cd ..
           {
-            echo '安裝檔的 SHA-256（下載後比對：Windows `certutil -hashfile <檔案> SHA256`，macOS `shasum -a 256 <檔案>`）：'
+            echo '安裝檔的 SHA-256（下載後比對：Windows `certutil -hashfile <檔案> SHA256`，macOS `shasum -a 256 <檔案>`，Linux `sha256sum <檔案>`）：'
             echo
             echo '```'
             cat SHA256SUMS.txt
