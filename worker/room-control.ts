@@ -13,8 +13,15 @@
 //
 // Nothing of what is typed or clicked is stored (D11, T-18): the stored state is ids, who, when and
 // the last seq forwarded; the events only pass through `event` on their way to the agent.
+//
+// N5 (e9-t08, e9-t09): a grant also carries what the agent says about it (`status`: injection paused
+// by the secure desktop; pasting turned off) and whether the person allowed pasting in the consent
+// dialog. `paste` forwards the controller's 「貼到對方電腦」 text to the agent only when the grant
+// allows it, from the socket holding it, within CONTROL_CLIPBOARD_RATE; the text is never stored
+// (T-22), and everyone is told that it happened (`controlPasted`), not what it was.
 import {
   CONTROL_AGENT_DENY_LIMIT,
+  CONTROL_CLIPBOARD_RATE,
   CONTROL_AGENT_MUTE_MS,
   CONTROL_DENY_COOLDOWN_MS,
   CONTROL_EVENT_RATE,
@@ -28,11 +35,14 @@ import {
   upEventsOnly,
   type AgentServerMessage,
   type ControlAnswerMessage,
+  type ControlBlock,
+  type ControlClipboardMessage,
   type ControlDecision,
   type ControlEndReason,
   type ControlErrorCode,
   type ControlEventMessage,
   type ControlRequestEndReason,
+  type ControlStatusMessage,
   type ControlView,
   type EventWindow,
 } from '../shared/control.ts'
@@ -73,6 +83,13 @@ export type ControlGrantRecord = {
   until: number | null
   /** The last seq forwarded to the agent (acceptSeq's `last`) */
   last: number
+  /**
+   * N5: pasting is allowed (the person ticked it in the consent dialog and has not turned it off
+   * since); absent in what an earlier version stored: no
+   */
+  clipboard?: boolean
+  /** N5: what pauses the agent's injection now, as it says (`controlStatus`); absent: nothing */
+  blocked?: ControlBlock | null
 }
 
 /** What survives the object being evicted (one storage key; null when there is nothing) */
@@ -126,6 +143,8 @@ export class RoomControl {
   private mutes = new Map<string, number>()
   /** The events forwarded lately per grant id (CONTROL_EVENT_RATE); memory only */
   private readonly windows = new Map<string, EventWindow>()
+  /** The pastes forwarded lately per grant id (CONTROL_CLIPBOARD_RATE, N5); memory only */
+  private readonly pastes = new Map<string, EventWindow>()
   private seqDirty = false
 
   private readonly room: ControlRoom
@@ -143,6 +162,7 @@ export class RoomControl {
     this.denies = new Map(Object.entries(stored?.denies ?? {}).map(([k, v]) => [k, [...v]]))
     this.mutes = new Map(Object.entries(stored?.mutes ?? {}))
     this.windows.clear()
+    this.pastes.clear()
     this.seqDirty = false
   }
 
@@ -187,6 +207,8 @@ export class RoomControl {
         phase: 'granted',
         since: grant.since,
         until: grant.until,
+        ...(grant.clipboard ? { clipboard: true as const } : {}),
+        ...(grant.blocked ? { blocked: grant.blocked } : {}),
       }
     }
     return view
@@ -311,6 +333,8 @@ export class RoomControl {
       since: now,
       until: grantUntil(message.decision, now),
       last: 0,
+      clipboard: message.clipboard === true,
+      blocked: null,
     }
     this.grants.push(grant)
     this.save()
@@ -366,6 +390,59 @@ export class RoomControl {
     })
     this.seqChanged()
     return false
+  }
+
+  /**
+   * `controlStatus` from the agent's own socket (N5): what pauses its injection now, and whether
+   * pasting is still allowed. Pasting can only be turned off here, never on (on is the consent
+   * dialog's, `controlAnswer.clipboard`). Returns whether the view changed.
+   */
+  status(conn: string, agent: string, message: ControlStatusMessage): boolean {
+    const grant = this.grants.find(
+      (entry) => entry.id === message.grant && entry.agent === agent && entry.agentConn === conn,
+    )
+    if (!grant) return false
+    const clipboard = grant.clipboard === true && message.clipboard
+    const blocked = message.blocked
+    if (clipboard === (grant.clipboard === true) && blocked === (grant.blocked ?? null))
+      return false
+    grant.clipboard = clipboard
+    grant.blocked = blocked
+    this.save()
+    return true
+  }
+
+  /**
+   * `controlClipboard` from `member` on `conn` (N5, e9-t09): forwarded to the agent as
+   * `controlPaste` only from the socket holding the named grant, when it allows pasting and within
+   * CONTROL_CLIPBOARD_RATE; everyone is told (`controlPasted`), never the text, and nothing of it is
+   * stored. `ignored` for a grant this socket does not hold (dropped quietly, as `controlEvent`);
+   * `control_clipboard_off` when the grant takes no paste now; null when it went.
+   */
+  paste(
+    conn: string,
+    member: string,
+    message: ControlClipboardMessage,
+  ): 'ignored' | 'control_clipboard_off' | null {
+    const grant = this.grants.find((entry) => entry.id === message.grant)
+    if (!grant || grant.conn !== conn || grant.controller !== member) return 'ignored'
+    if (grant.clipboard !== true) return 'control_clipboard_off'
+    const take = takeControlEvents(
+      this.pastes.get(grant.id) ?? [],
+      1,
+      this.room.now(),
+      CONTROL_CLIPBOARD_RATE,
+    )
+    this.pastes.set(grant.id, take.window)
+    if (!take.ok) return 'control_clipboard_off'
+    this.room.post(grant.agentConn, { t: 'controlPaste', grant: grant.id, text: message.text })
+    this.room.tellEveryone({
+      t: 'notice',
+      notice: 'controlPasted',
+      by: grant.controller,
+      agent: grant.agent,
+    })
+    return null
   }
 
   /** `controlStop` from the controller: its own grant only. Returns whether anything changed */
@@ -560,6 +637,7 @@ export class RoomControl {
   private endGrant(grant: ControlGrantRecord, reason: ControlEndReason, save = true): void {
     this.grants = this.grants.filter((entry) => entry !== grant)
     this.windows.delete(grant.id)
+    this.pastes.delete(grant.id)
     if (save) this.save()
     const end = { t: 'controlEnd', grant: grant.id, reason } as const
     if (this.room.connOf(grant.controller) === grant.conn) this.room.send(grant.conn, end)

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-control-clipboard-off"
+description = "Enables the control_clipboard_off command without any pre-configured scope."
+commands.allow = ["control_clipboard_off"]
+
+[[permission]]
+identifier = "deny-control-clipboard-off"
+description = "Denies the control_clipboard_off command without any pre-configured scope."
+commands.deny = ["control_clipboard_off"]

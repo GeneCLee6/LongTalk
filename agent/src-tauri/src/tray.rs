@@ -38,6 +38,8 @@ struct Labels {
     sharing: &'static str,
     tooltip: &'static str,
     stop_control: &'static str,
+    /** N5: turns pasting off for the rest of this grant (only ever off) */
+    clipboard_off: &'static str,
     controlled: fn(&str) -> String,
     mute: &'static str,
     mute_for: [&'static str; 3],
@@ -60,6 +62,7 @@ const ZH_TW: Labels = Labels {
     sharing: "正在分享你的螢幕",
     tooltip: "LongTalk 代理",
     stop_control: "中斷控制",
+    clipboard_off: "不允許對方貼上文字",
     controlled: |name| format!("{name} 正在控制這台電腦"),
     mute: "暫停接受控制請求",
     mute_for: ["10 分鐘", "30 分鐘", "60 分鐘"],
@@ -84,6 +87,7 @@ const EN: Labels = Labels {
     sharing: "Sharing your screen",
     tooltip: "LongTalk agent",
     stop_control: "Stop control",
+    clipboard_off: "Stop them pasting text",
     controlled: |name| format!("{name} is controlling this computer"),
     mute: "Pause control requests",
     mute_for: ["10 minutes", "30 minutes", "60 minutes"],
@@ -145,6 +149,7 @@ pub struct Tray {
     share: CheckMenuItem<Wry>,
     leave: MenuItem<Wry>,
     stop_control: MenuItem<Wry>,
+    clipboard_off: MenuItem<Wry>,
     mute: Submenu<Wry>,
     /** Who controls this computer now: the status line says so over the session's (N3) */
     controlled: Mutex<Option<String>>,
@@ -160,6 +165,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Tray> {
     let open_log = MenuItem::with_id(app, "open-log", text.open_log, true, None::<&str>)?;
     let stop_control =
         MenuItem::with_id(app, "stop-control", text.stop_control, false, None::<&str>)?;
+    let clipboard_off = MenuItem::with_id(
+        app,
+        "clipboard-off",
+        text.clipboard_off,
+        false,
+        None::<&str>,
+    )?;
     let mute = Submenu::with_items(
         app,
         text.mute,
@@ -176,6 +188,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Tray> {
         app,
         &[
             &stop_control,
+            &clipboard_off,
             &status,
             &PredefinedMenuItem::separator(app)?,
             &open,
@@ -220,6 +233,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Tray> {
         share,
         leave,
         stop_control,
+        clipboard_off,
         mute,
         controlled: Mutex::new(None),
     })
@@ -228,13 +242,16 @@ pub fn build(app: &AppHandle) -> tauri::Result<Tray> {
 /** The menu follows remote control (N3): 中斷控制 and who controls, while someone does */
 pub fn sync_control(tray: &Tray, view: &ControlView) {
     let text = labels();
-    let controller = match view {
+    let (controller, clipboard) = match view {
         ControlView::Granted {
-            controller_name, ..
-        } => Some(controller_name.clone()),
-        _ => None,
+            controller_name,
+            clipboard,
+            ..
+        } => (Some(controller_name.clone()), *clipboard),
+        _ => (None, false),
     };
     let _ = tray.stop_control.set_enabled(controller.is_some());
+    let _ = tray.clipboard_off.set_enabled(clipboard);
     if let Some(name) = &controller {
         let _ = tray.status.set_text((text.controlled)(name));
     }
@@ -304,6 +321,7 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
         "quit" => crate::quit(app),
         "open-log" => crate::open_log(app),
         "stop-control" => crate::stop_control_from(app, StopReason::Tray),
+        "clipboard-off" => crate::clipboard_off_from_tray(app),
         id => {
             if let Some(ms) = id
                 .strip_prefix("mute-")

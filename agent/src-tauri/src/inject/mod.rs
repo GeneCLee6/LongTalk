@@ -6,15 +6,24 @@
 //   `mods`; a modifier in `mods` that is not held is pressed just before the key and let go right
 //   after it, so what was judged is what the OS sees), normalized coordinates to the shared screen,
 //   browser wheel pixels to the OS's units;
-// - an `Injector` per OS that performs the plan (windows.rs: SendInput; macos.rs: CGEvent; other
-//   systems: nothing yet, N5). Each one refuses a press (a key, a button or the wheel going down)
-//   aimed at one of the agent's own windows (§5.8, TH-30): the controller cannot press 允許, drag
-//   the 中斷 button away or change a setting. Releases always go through, so nothing stays held.
+// - an `Injector` per OS that performs the plan (windows.rs: SendInput; macos.rs: CGEvent; linux.rs:
+//   XTest on X11, N5; Wayland: nothing, it has no injection a program may use without its own
+//   portal). Windows and macOS refuse a press (a key, a button or the wheel going down) aimed at one
+//   of the agent's own windows (§5.8, TH-30): the controller cannot press 允許, drag the 中斷 button
+//   away or change a setting. Releases always go through, so nothing stays held. On Linux the agent's
+//   windows only ever make control smaller (中斷, 不允許貼上, 暫停接受請求, 離開), and nothing is
+//   injected while the consent dialog or the hourly question is up (control.rs pauses).
+// - which screen the pointer aims at (N5, e9-t09): `candidates` are the screens that fit the
+//   captured share; when several do (two identical monitors), the person picks one in the main
+//   window (lib.rs choose_screen, not while controlled) and `pick_screen` takes it only if it is
+//   still one of them: the pointer never aims at a screen nobody is shown.
 // Nothing here is logged or kept but the NAME of a blocked or warned combination (§5.10, D11).
 
 pub mod keymap;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
-mod macos;
+pub(crate) mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -201,29 +210,60 @@ pub struct Screen {
  * is not a whole screen or nothing fits: the mouse is then not moved at all (a click at a guessed
  * place is worse than none), keys still go.
  */
+#[cfg(test)]
 pub fn pick_screen(screens: &[Screen], captured: Option<(u32, u32)>) -> Option<Screen> {
-    let (width, height) = captured?;
-    if width == 0 || height == 0 {
-        return None;
-    }
-    let best = |fits: &dyn Fn(&Screen) -> bool| {
-        let mut fitting = screens.iter().filter(|s| fits(s));
-        let first = fitting.next().copied()?;
-        Some(
-            std::iter::once(first)
-                .chain(fitting.copied())
-                .find(|s| s.primary)
-                .unwrap_or(first),
-        )
+    pick_screen_chosen(screens, captured, None)
+}
+
+/**
+ * The screens the share may show (N5): those with exactly the captured size, else those with its
+ * shape; the primary screen first. Empty when the share is not a whole screen or nothing fits.
+ */
+pub fn candidates(screens: &[Screen], captured: Option<(u32, u32)>) -> Vec<Screen> {
+    let Some((width, height)) = captured else {
+        return Vec::new();
     };
-    let exact = best(&|s: &Screen| s.pixel_width == width && s.pixel_height == height);
-    exact.or_else(|| {
-        let shape = width as f64 / height as f64;
-        best(&|s: &Screen| {
-            s.pixel_height > 0
-                && ((s.pixel_width as f64 / s.pixel_height as f64) - shape).abs() / shape < 0.01
-        })
-    })
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+    let primary_first = |mut fitting: Vec<Screen>| {
+        fitting.sort_by_key(|s| !s.primary);
+        fitting
+    };
+    let exact: Vec<Screen> = screens
+        .iter()
+        .filter(|s| s.pixel_width == width && s.pixel_height == height)
+        .copied()
+        .collect();
+    if !exact.is_empty() {
+        return primary_first(exact);
+    }
+    let shape = width as f64 / height as f64;
+    primary_first(
+        screens
+            .iter()
+            .filter(|s| {
+                s.pixel_height > 0
+                    && ((s.pixel_width as f64 / s.pixel_height as f64) - shape).abs() / shape < 0.01
+            })
+            .copied()
+            .collect(),
+    )
+}
+
+/**
+ * `pick_screen` with the person's choice (N5, lib.rs choose_screen): `chosen` wins only while it is
+ * one of the candidates; otherwise the first candidate (the primary screen when it fits)
+ */
+pub fn pick_screen_chosen(
+    screens: &[Screen],
+    captured: Option<(u32, u32)>,
+    chosen: Option<Screen>,
+) -> Option<Screen> {
+    let fitting = candidates(screens, captured);
+    chosen
+        .filter(|choice| fitting.contains(choice))
+        .or_else(|| fitting.first().copied())
 }
 
 /** One thing the OS is asked to do */
@@ -384,6 +424,8 @@ pub fn is_press(action: &Action) -> bool {
 }
 
 /** Why an injector did not perform part of a plan (for the log; never what it was) */
+// AgentWindow is Windows and macOS only, SecureDesktop Windows only
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Skipped {
     /** A press aimed at one of the agent's own windows (§5.8) */
@@ -409,6 +451,20 @@ pub fn session_locked() -> bool {
     return windows::session_locked();
     #[cfg(target_os = "macos")]
     return macos::session_locked();
+    #[cfg(target_os = "linux")]
+    return linux::session_locked();
+    #[allow(unreachable_code)]
+    false
+}
+
+/**
+ * Whether the secure desktop is up (Windows: a UAC prompt), where no injected input arrives and only
+ * the person here can answer (N5, §5.12): the grant goes on, the controller is told. Never on
+ * macOS and Linux (their password prompts are ordinary windows, or refuse injection on their own).
+ */
+pub fn secure_desktop() -> bool {
+    #[cfg(target_os = "windows")]
+    return windows::secure_desktop();
     #[allow(unreachable_code)]
     false
 }
@@ -419,11 +475,18 @@ pub fn injector() -> Box<dyn Injector> {
     return Box::new(windows::WindowsInjector::new());
     #[cfg(target_os = "macos")]
     return Box::new(macos::MacInjector::new());
+    #[cfg(target_os = "linux")]
+    if let Some(injector) = linux::X11Injector::connect() {
+        return Box::new(injector);
+    }
     #[allow(unreachable_code)]
     Box::new(Unsupported)
 }
 
-/** Linux (N5, e9-t08): nothing is injected yet; every press is reported refused */
+/**
+ * No injection here: Linux without an X11 display (a Wayland session, f-doc §5.12: best effort, not
+ * built) or any other system. Every press is reported refused, so the log says why nothing happened.
+ */
 #[allow(dead_code)]
 struct Unsupported;
 
@@ -777,5 +840,48 @@ mod tests {
         assert!(!is_press(&Action::MoveTo { x: 0, y: 0 }));
         assert!(is_press(&Action::Text("a".into())));
         assert!(is_press(&Action::Wheel { dx: 0, dy: 1 }));
+    }
+
+    // ── N5: which screen, when several fit (e9-t09) ──────────────────────────────────────────
+
+    fn screen(x: i32, primary: bool) -> Screen {
+        Screen {
+            x,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            pixel_width: 1920,
+            pixel_height: 1080,
+            primary,
+        }
+    }
+
+    #[test]
+    fn two_identical_screens_are_both_candidates_primary_first() {
+        let left = screen(-1920, false);
+        let main = screen(0, true);
+        let screens = [left, main];
+        assert_eq!(candidates(&screens, Some((1920, 1080))), vec![main, left]);
+        assert_eq!(pick_screen(&screens, Some((1920, 1080))), Some(main));
+        // The person's choice wins while it fits the share
+        assert_eq!(
+            pick_screen_chosen(&screens, Some((1920, 1080)), Some(left)),
+            Some(left)
+        );
+        // Never a screen that does not fit what is shown
+        let other = Screen {
+            pixel_width: 2560,
+            pixel_height: 1440,
+            width: 2560,
+            height: 1440,
+            ..screen(1920, false)
+        };
+        assert_eq!(
+            pick_screen_chosen(&[left, main, other], Some((1920, 1080)), Some(other)),
+            Some(main)
+        );
+        // Nothing shown, nothing aimed at, whatever was chosen
+        assert_eq!(pick_screen_chosen(&screens, None, Some(left)), None);
+        assert!(candidates(&screens, Some((0, 0))).is_empty());
     }
 }

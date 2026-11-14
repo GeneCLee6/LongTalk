@@ -1587,6 +1587,20 @@ export const enRoom: RoomStrings = {
     captureLabel: (computer: string) =>
       `Controlling ${computer}: your mouse and keyboard go to their computer`,
     stopTheirs: 'Stop remote control',
+    // N5 (e9-t08, e9-t09): a system dialog on their computer; pasting text to it
+    blocked:
+      'Their computer is showing a system dialog (such as User Account Control) that only they can answer',
+    paste: 'Paste to their computer',
+    pasteHint: (max: number) =>
+      `Puts the text on your clipboard (up to ${max} characters) on their computer’s clipboard, ready to paste`,
+    pasteLabel: (computer: string) => `Put your clipboard text on ${computer}`,
+    pasted: (computer: string) => `Put on ${computer}’s clipboard: paste there to use it`,
+    pasteEmpty: 'There’s no text on your clipboard',
+    pasteTooLong: (max: number) => `That’s too long: up to ${max} characters`,
+    pasteBadText: 'That text has invisible control characters and can’t be sent',
+    pasteUnreadable: 'Your browser didn’t let this page read the clipboard. Allow it and try again',
+    pastedNotice: (who: string, computer: string) =>
+      `${who} put some text on ${computer}’s clipboard`,
     started: (who: string, computer: string) => `${who} started controlling ${computer}`,
     youStarted: (computer: string) =>
       `You’re now controlling ${computer}; they can stop it at any time`,
@@ -1622,6 +1636,7 @@ export const enRoom: RoomStrings = {
       control_cooldown: 'Please wait a moment before asking again',
       control_muted: 'They aren’t taking control requests for now',
       control_off: 'This room doesn’t allow remote control',
+      control_clipboard_off: 'They didn’t allow pasting, or you pasted too quickly. Wait a moment',
     },
   },
   errors: {

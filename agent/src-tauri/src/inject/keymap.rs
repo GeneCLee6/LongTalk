@@ -5,12 +5,14 @@
 // ui/events/keycodes/dom/dom_code_data.inc, the same source the browser's `code` comes from.
 
 /** A Windows scan code; `extended` sends KEYEVENTF_EXTENDEDKEY (the E0 prefix) */
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WinKey {
     pub scan: u16,
     pub extended: bool,
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const fn k(scan: u16) -> Option<WinKey> {
     Some(WinKey {
         scan,
@@ -18,6 +20,7 @@ const fn k(scan: u16) -> Option<WinKey> {
     })
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const fn e(scan: u16) -> Option<WinKey> {
     Some(WinKey {
         scan,
@@ -26,6 +29,7 @@ const fn e(scan: u16) -> Option<WinKey> {
 }
 
 /** The Windows scan code of a control key code; None for a code it does not know */
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn windows_key(code: &str) -> Option<WinKey> {
     if let Some(letter) = code.strip_prefix("Key") {
         const LETTERS: [u16; 26] = [
@@ -218,6 +222,110 @@ pub fn macos_key(code: &str) -> Option<u16> {
     }
 }
 
+/**
+ * The X11 keycode (N5, e9-t08: XTest on Linux) of a control key code: the Linux evdev code
+ * (linux/input-event-codes.h KEY_*) plus 8, which is what every X server with the evdev or libinput
+ * driver uses. Physical keys, as on Windows and macOS: what a key types follows this computer's own
+ * keyboard layout.
+ */
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn linux_key(code: &str) -> Option<u8> {
+    let evdev: u8 = if let Some(letter) = code.strip_prefix("Key") {
+        // KEY_A … KEY_Z in keyboard order
+        const LETTERS: [u8; 26] = [
+            30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47,
+            17, 45, 21, 44,
+        ];
+        let byte = *letter.as_bytes().first()?;
+        if letter.len() != 1 || !byte.is_ascii_uppercase() {
+            return None;
+        }
+        LETTERS[(byte - b'A') as usize]
+    } else if let Some(digit) = code.strip_prefix("Digit") {
+        let n = digit.parse::<u8>().ok().filter(|_| digit.len() == 1)?;
+        // KEY_1 is 2 … KEY_9 is 10, KEY_0 is 11
+        if n == 0 {
+            11
+        } else {
+            n + 1
+        }
+    } else if let Some(n) = code
+        .strip_prefix("Numpad")
+        .filter(|n| n.len() == 1)
+        .and_then(|n| n.parse::<usize>().ok())
+    {
+        const PAD: [u8; 10] = [82, 79, 80, 81, 75, 76, 77, 71, 72, 73];
+        PAD[n]
+    } else if let Some(n) = code
+        .strip_prefix('F')
+        .filter(|n| n.len() <= 2 && !n.starts_with('0'))
+        .and_then(|n| n.parse::<usize>().ok())
+    {
+        const FN: [u8; 12] = [59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88];
+        *FN.get(n.checked_sub(1)?)?
+    } else {
+        match code {
+            "NumpadAdd" => 78,
+            "NumpadSubtract" => 74,
+            "NumpadMultiply" => 55,
+            "NumpadDivide" => 98,
+            "NumpadDecimal" => 83,
+            "NumpadEnter" => 96,
+            "NumLock" => 69,
+            "Backquote" => 41,
+            "Minus" => 12,
+            "Equal" => 13,
+            "BracketLeft" => 26,
+            "BracketRight" => 27,
+            "Backslash" => 43,
+            "Semicolon" => 39,
+            "Quote" => 40,
+            "Comma" => 51,
+            "Period" => 52,
+            "Slash" => 53,
+            "IntlBackslash" => 86,
+            "IntlRo" => 89,
+            "IntlYen" => 124,
+            "Space" => 57,
+            "Enter" => 28,
+            "Tab" => 15,
+            "Backspace" => 14,
+            "Escape" => 1,
+            "CapsLock" => 58,
+            // KEY_COMPOSE: the menu key
+            "ContextMenu" => 127,
+            "ArrowUp" => 103,
+            "ArrowDown" => 108,
+            "ArrowLeft" => 105,
+            "ArrowRight" => 106,
+            "Insert" => 110,
+            "Delete" => 111,
+            "Home" => 102,
+            "End" => 107,
+            "PageUp" => 104,
+            "PageDown" => 109,
+            // KEY_SYSRQ: inject/ blocks it while Alt is held (Magic SysRq, TH-31)
+            "PrintScreen" => 99,
+            // KEY_HENKAN, KEY_MUHENKAN, KEY_KATAKANAHIRAGANA, KEY_HANGEUL, KEY_HANJA
+            "Convert" => 92,
+            "NonConvert" => 94,
+            "KanaMode" => 93,
+            "Lang1" => 122,
+            "Lang2" => 123,
+            "ShiftLeft" => 42,
+            "ShiftRight" => 54,
+            "ControlLeft" => 29,
+            "ControlRight" => 97,
+            "AltLeft" => 56,
+            "AltRight" => 100,
+            "MetaLeft" => 125,
+            "MetaRight" => 126,
+            _ => return None,
+        }
+    };
+    Some(evdev + 8)
+}
+
 /** Every code shared/control.ts CONTROL_KEY_CODES has (the tests check both tables against it) */
 #[cfg(test)]
 pub fn all_control_codes() -> Vec<String> {
@@ -343,5 +451,32 @@ mod tests {
         assert_eq!(macos_key("F1"), Some(0x7a));
         assert_eq!(macos_key("Escape"), Some(0x35));
         assert_eq!(macos_key("F13"), None);
+    }
+
+    #[test]
+    fn linux_presses_every_control_key_and_each_its_own() {
+        let mut seen = HashSet::new();
+        for code in all_control_codes() {
+            let key = linux_key(&code).unwrap_or_else(|| panic!("{code} has no keycode"));
+            assert!(seen.insert(key), "{code} shares a key");
+        }
+        // X keycodes: evdev + 8 (KEY_ESC 1 → 9, KEY_A 30 → 38, KEY_Q 16 → 24, KEY_0 11 → 19)
+        assert_eq!(linux_key("Escape"), Some(9));
+        assert_eq!(linux_key("KeyA"), Some(38));
+        assert_eq!(linux_key("KeyQ"), Some(24));
+        assert_eq!(linux_key("KeyZ"), Some(52));
+        assert_eq!(linux_key("Digit1"), Some(10));
+        assert_eq!(linux_key("Digit0"), Some(19));
+        assert_eq!(linux_key("Numpad0"), Some(90));
+        assert_eq!(linux_key("Numpad7"), Some(79));
+        assert_eq!(linux_key("F1"), Some(67));
+        assert_eq!(linux_key("F12"), Some(96));
+        assert_eq!(linux_key("Space"), Some(65));
+        assert_eq!(linux_key("MetaLeft"), Some(133));
+        for bad in [
+            "F13", "F0", "F01", "Keya", "KeyAB", "Digit10", "Numpad10", "Power", "",
+        ] {
+            assert_eq!(linux_key(bad), None, "{bad}");
+        }
     }
 }

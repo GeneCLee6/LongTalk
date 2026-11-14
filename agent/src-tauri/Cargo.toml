@@ -29,6 +29,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 gethostname = "1"
 sys-locale = "0.3"
 tauri-plugin-notification = "2"
+# A paste the person allowed goes on the clipboard (N5, e9-t09, src/clipboard.rs): text only, write only
+arboard = { version = "3", default-features = false }
 
 # Injecting input, the Escape hook, the lock and secure-desktop checks (N4, src/inject, src/escape.rs)
 [target.'cfg(windows)'.dependencies]
@@ -42,6 +44,10 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+# Linux (N5, e9-t08, src/inject/linux.rs): XTest and RandR over the X11 protocol, in Rust (no libXtst)
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["xtest", "randr"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { version = "0.25", features = ["highsierra"] }

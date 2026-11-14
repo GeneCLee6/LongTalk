@@ -1312,6 +1312,14 @@ export class RoomHost {
       case 'controlStop':
         if (this.remote.stop(connId, conn.member!, message.grant)) this.publish()
         return
+      case 'controlClipboard': {
+        // N5 (e9-t09): a grant this socket does not hold is dropped quietly, as `controlEvent`
+        const refused = this.remote.paste(connId, conn.member!, message)
+        if (refused === 'control_clipboard_off') {
+          this.deps.sockets.send(connId, { t: 'error', code: refused })
+        }
+        return
+      }
     }
   }
 
@@ -1439,6 +1447,10 @@ export class RoomHost {
       case 'controlMute':
         if (this.remote.mute(connId, conn.member!, message.ms)) this.publish()
         else this.reschedule()
+        return
+      // N5 (e9-t08, e9-t09): paused by the secure desktop, pasting turned off
+      case 'controlStatus':
+        if (this.remote.status(connId, conn.member!, message)) this.publish()
         return
     }
   }
